@@ -11,6 +11,12 @@ project=$(basename "$project_dir" 2>/dev/null)
 SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)
 CACHE="${HOME}/.claude/statusline-domi-cache.json"
 
+# Plan-limit readings for agents (they never see the stdin payload). Atomic write; skipped when absent.
+if [ -n "$cl5_raw$cl7_raw" ]; then
+  RL_FILE="${HOME}/.claude/statusline-rate-limits.json"
+  printf '%s' "$input" | jq -c --argjson at "$(date +%s)" --arg sid "$sid" '{written_at:$at,session_id:$sid,five_hour:.rate_limits.five_hour,seven_day:.rate_limits.seven_day}' >"$RL_FILE.$$" 2>/dev/null && mv -f "$RL_FILE.$$" "$RL_FILE" || rm -f "$RL_FILE.$$"
+fi
+
 # Epoch mtime, portable + arithmetic-safe.
 # GNU coreutils `stat -f %m` does NOT fail: -f selects *filesystem* status, %m
 # is not one of its directives, so GNU echoes the literal "%m" and exits 0 —
