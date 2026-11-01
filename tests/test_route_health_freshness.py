@@ -86,6 +86,7 @@ class _FakeHome(unittest.TestCase):
         (self.shim / "curl").chmod(0o755)
         self.env = {
             "HOME": str(self.home),
+            "TMPDIR": str(self.home),
             "PATH": f"{self.shim}:{os.environ.get('PATH', '/usr/bin:/bin')}",
             "PYTHONPATH": f"{self.shim}:{REPO}",
             "CODEX_BRIDGE_MODE": "standard",

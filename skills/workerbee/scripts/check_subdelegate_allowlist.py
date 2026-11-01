@@ -36,7 +36,7 @@ ALLOWLIST = [
 # Substrings that mark a forbidden (paid/full-tier) model slug.
 FORBIDDEN = [
     "opus", "sonnet", "haiku", "fable",
-    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.1-terra", "gpt-5.6-luna",
     "astra", "sol", "terra", "luna",
 ]
 

@@ -207,6 +207,7 @@ class AtRouteCodexRouteTest(unittest.TestCase):
 
     def _route(self, *argv, stdin=""):
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.root),
+               "TMPDIR": str(self.root),
                "AT_ROUTE_AGENTS_INC": str(self.fake), "AT_ROUTE_LOG": str(self.root / "at_route.log"),
                "AT_ROUTE_COLOR": "0"}
         return subprocess.run(["bash", str(REAL_HOOK), *argv], input=stdin, capture_output=True, text=True,

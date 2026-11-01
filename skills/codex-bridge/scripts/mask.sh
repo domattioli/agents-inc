@@ -55,7 +55,7 @@ mask_report_trap() {
   [[ -n "$message" ]] && message_arg=(--message "$message")
   PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" python3 -m agents_inc.free_health report \
     --provider mistral --model "${MODEL:-unknown}" --outcome "$outcome" "${retry_arg[@]+${retry_arg[@]}}" "${message_arg[@]+${message_arg[@]}}" \
-    >/dev/null 2>/tmp/mask_report_err.$$ || echo "mask: health report failed" >&2
+    >/dev/null 2>"${TMPDIR:-/tmp}/mask_report_err.$$" || echo "mask: health report failed" >&2
   if [[ "$MASK_ATTEMPTED" == true ]] && [[ "$outcome" != "withdrawn" ]] && [[ "$outcome" != "zdr" ]]; then
     local result="ok"
     [[ "$outcome" != "ok" ]] && result="transient"
@@ -65,7 +65,7 @@ mask_report_trap() {
     [[ -z "$msg" ]] && msg="$outcome"
     CODEX_BRIDGE_MODE=standard bash "$SCRIPT_DIR/route.sh" report mistral "$result" "$msg" >/dev/null 2>&1 || true
   fi
-  rm -f /tmp/mask_report_err.$$ "$MASK_STATUS_FILE" "$MASK_BODY_FILE" 2>/dev/null
+  rm -f "${TMPDIR:-/tmp}/mask_report_err.$$" "$MASK_STATUS_FILE" "$MASK_BODY_FILE" 2>/dev/null
   exit $ec
 }
 trap mask_report_trap EXIT
