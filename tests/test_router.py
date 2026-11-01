@@ -52,7 +52,7 @@ class RouterTest(unittest.TestCase):
         # fixes. workhorse/codex now correctly resolves to just terra
         # (sonnet<->terra, D27), with no cross-rung fallback mixing.
         chain = pick_model_chain("review", "workhorse", {"codex"}, False)
-        self.assertEqual([r.model for r in chain], ["gpt-5.6-terra"])
+        self.assertEqual([r.model for r in chain], ["gpt-6.1-terra"])
 
     def test_routing_top_level_keys_unchanged(self):
         self.assertEqual(sorted(_TABLE), ["daily_caps", "free_order", "local", "optional", "optional_allowed_tasks",
