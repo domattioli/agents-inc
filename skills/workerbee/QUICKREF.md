@@ -51,6 +51,8 @@ MUST lines that are easy to drop:
 
 Lint (mandatory, D41): `agents-inc dispatch` lints every prompt it renders; by hand, from any directory: `python3 ~/.claude/skills/workerbee/scripts/check_dispatch_prompt.py <prompt_file> [--with-handoff-lint]`. Save the prompt to a file first. Reports: same script with `--profile report`, which checks report elements. Render prompts with `agents-inc dispatch --slots <json> --model <alias> --dry-run` (or `~/.claude/skills/workerbee/scripts/render_dispatch.py --slots <json>`); worked example in `slots.md`.
 
+Bulk findings travel by file path; the hand-back carries counts only. See speckit-pipeline Step 6 (Findings handoff).
+
 ## Reporting a bug or feature in agents-inc
 
 `agents-inc report bug|feature --title <t> --body <text or ->` prints a draft; nothing is filed. Show the draft to the user. File only after the user approves, with `--submit` (uses the user's `gh` login). Never put secrets, tokens or private repo content in the body; the command refuses likely secrets and replaces home paths with `~`.

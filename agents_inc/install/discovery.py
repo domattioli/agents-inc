@@ -30,7 +30,7 @@ def install_skill_links(paths: InstallPaths, release: Path, receipt: InstallRece
             if target not in {item.path for item in owned}: owned.append(OwnedPath(target, "symlink", None, desired_raw))
     return InstallReceipt(receipt.release_hash, receipt.python_path, receipt.codex_path, tuple(owned), receipt.prior_release)
 
-def restore_skill_links(paths: InstallPaths, receipt: InstallReceipt, journal=None) -> set[Path]:
+def restore_skill_links(paths: InstallPaths, receipt: InstallReceipt, journal=None, restored: set[Path] | None = None) -> set[Path]:
     retained: set[Path] = set()
     for item in receipt.owned_paths:
         if item.kind != "symlink": continue
@@ -45,4 +45,5 @@ def restore_skill_links(paths: InstallPaths, receipt: InstallReceipt, journal=No
         if item.predecessor is not None:
             if journal: journal.apply("symlink", path, None, item.predecessor, lambda: path.symlink_to(item.predecessor))
             else: path.parent.mkdir(parents=True, exist_ok=True); path.symlink_to(item.predecessor)
+            if restored is not None: restored.add(path)
     return retained

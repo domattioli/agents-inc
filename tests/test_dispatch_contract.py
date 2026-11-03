@@ -284,6 +284,25 @@ class TestReportingChain(unittest.TestCase):
         self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
         self.assertIn("reporting-chain-inverted", res.stdout)
 
+    def test_issue45_literal_flagged(self):
+        text = "MODEL: opus\n" + self._p("you report to Sonnet supervisor, who reports to operator domattioli.")
+        self.assertIn("reporting-chain-inverted", cdp.check(text))
+
+    def test_you_unresolved_skips(self):
+        self.assertEqual(cdp.check(self._p("you report to Sonnet supervisor, who reports to operator domattioli.")), [])
+
+    def test_who_continuation_flagged(self):
+        text = "MODEL: haiku\n" + self._p("you report to opus, who reports to sonnet")
+        self.assertIn("reporting-chain-inverted", cdp.check(text))
+
+    def test_role_alias_resolves_you(self):
+        text = "ROLE: fable builder\n" + self._p("you report to sonnet supervisor")
+        self.assertIn("reporting-chain-inverted", cdp.check(text))
+
+    def test_upward_you_chain_passes(self):
+        text = "MODEL: haiku\n" + self._p("you report to sonnet supervisor, who reports to operator")
+        self.assertEqual(cdp.check(text), [])
+
     def test_rendered_fixed_form_passes(self):
         text = self._p("haiku reports to sonnet; sonnet reports to fable; fable reports to the operator")
         self.assertEqual(cdp.check(text), [])

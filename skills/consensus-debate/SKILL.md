@@ -25,6 +25,8 @@ Evidence base: 1 run (ollama in agents_Inc, fable vs astra @ medium, 2026-09-22)
 | debater B | other vendor preferred (Codex astra/sol) | same |
 | operator | human | settles deadlock |
 
+Debater briefs: the moderator leaves the SUPERVISOR/EXECUTIVE slots blank for any debater and puts the debater's own alias first in ROLE (or adds a `MODEL:` line), with the relay named after it. The moderator relays and does not supervise, and the dispatch lint would refuse the inverted chain.
+
 Vendor gate: non-Claude debater needs `workerbee` Step 0.5 gate line (normally (a) operator asked). Effort default medium for every debater, every vendor (opus included), unless operator names level for this debate.
 
 ## Transport — resume, never re-brief
