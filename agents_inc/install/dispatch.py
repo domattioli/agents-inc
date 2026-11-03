@@ -1186,6 +1186,7 @@ def _finish(spec: dict, run_dir: Path, out_path: Path, result: dict, home_repo: 
         spec["reason_detail"] = detail
     else:
         spec.pop("reason_detail", None)
+    _record_ledger_return(spec)
     _write_json(run_dir / "run.json", spec)
     print(_status(spec, report, snap, out_path))
     _mirror_and_note(spec, run_dir, home_repo, prompt)
@@ -1199,6 +1200,7 @@ def _red_before_run(spec: dict, run_dir: Path, reason: str, detail: str, home_re
     _wtext(out_path, "")
     spec.update(rc=-1, outcome="red", reason=reason,
                 reason_detail=re.sub(r"\s+", "_", screen_text(detail, 200).strip()))
+    _record_ledger_return(spec)
     _write_json(run_dir / "run.json", spec)
     print(_status(spec, "none", snap, out_path))
     _mirror_and_note(spec, run_dir, home_repo, None)
@@ -1223,6 +1225,19 @@ def _record_ledger_node(spec: dict, slots: dict) -> None:
             spec["ledger_error"] = "ledger write failed"
     except Exception as exc:
         spec["ledger_error"] = f"{type(exc).__name__}: {exc}"
+
+
+def _record_ledger_return(spec: dict) -> None:
+    """Add a `returned` ledger row for this run. A failure goes to run.json, never the outcome."""
+    if not spec.get("run_id") or not spec.get("outcome"):
+        return
+    try:
+        from .. import host_ledger  # lazy, like cli.py
+        from .cli import _paths
+        if not host_ledger.record_dispatch_return(_paths().state, spec):
+            spec["ledger_return_error"] = "ledger write failed"
+    except Exception as exc:
+        spec["ledger_return_error"] = f"{type(exc).__name__}: {exc}"
 
 
 def _grants_from_slots(slots: dict, cwd: Path, scripts: Path = SCRIPTS) -> tuple[list | None, list, tuple | None]:

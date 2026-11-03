@@ -295,6 +295,39 @@ class DispatchRunNodeTest(_Home):
         self.paths.state.write_text("not a directory")
         self.assertFalse(host_ledger.record_dispatch_run(self.paths.state, self.SPEC, "t"))
 
+    RET = {"run_id": "20261009T000000Z-haiku-abc123", "kind": "claude", "model": "haiku", "effort": "medium",
+           "cwd": "/x", "outcome": "green", "reason": None,
+           "usage": {"input_tokens": 10, "output_tokens": 20, "cache_read": 30, "cache_write": 40}}
+
+    def test_return_row_green_passes_with_tokens(self):
+        self.assertTrue(host_ledger.record_dispatch_return(self.paths.state, self.RET))
+        row = self.rows()[-1]
+        self.assertEqual((row["id"], row["run_id"], row["status"], row["verdict"], row["source"]),
+                         (self.RET["run_id"], self.RET["run_id"], "green", "pass", "dispatch"))
+        self.assertEqual((row["input_tokens"], row["output_tokens"], row["cache_read"], row["cache_write"]),
+                         (10, 20, 30, 40))
+        self.assertEqual((row["model"], row["provider"], row["tier"], row["effort"], row["cwd"]),
+                         ("haiku", "claude", "grunt", "medium", "/x"))
+        self.assertIsNone(row["files_created"])
+
+    def test_return_row_red_fails_with_gate_reason(self):
+        row = host_ledger.dispatch_return_row({**self.RET, "outcome": "red", "reason": "gate-failed"})
+        self.assertEqual((row["verdict"], row["status"], row["gate_reason"]), ("fail", "red", "gate-failed"))
+
+    def test_return_row_unverified_has_null_verdict(self):
+        row = host_ledger.dispatch_return_row({**self.RET, "outcome": "unverified"})
+        self.assertIsNone(row["verdict"])
+
+    def test_return_row_missing_usage_is_null_not_zero(self):
+        spec = {k: v for k, v in self.RET.items() if k != "usage"}
+        row = host_ledger.dispatch_return_row(spec)
+        self.assertEqual([row[k] for k in ("input_tokens", "output_tokens", "cache_read", "cache_write")], [None] * 4)
+
+    def test_return_write_failure_returns_false(self):
+        self.paths.state.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.state.write_text("not a directory")
+        self.assertFalse(host_ledger.record_dispatch_return(self.paths.state, self.RET))
+
     def test_append_by_run_id_closes_node(self):
         host_ledger.record_dispatch_run(self.paths.state, self.SPEC, "t")
         rc, out, _ = self.run_cli("pending")
