@@ -1,0 +1,34 @@
+#!/bin/bash
+# Fake codex for spec 031 tests. Records argv to $FAKE_CODEX_LOG (one arg per line, then ---).
+# FAKE_CODEX_MODE: ok | empty | auth | fail | sleep | resume-mismatch
+if [[ -n "${FAKE_CODEX_LOG:-}" ]]; then
+    { printf '%s\n' "$@"; echo '---'; } >> "$FAKE_CODEX_LOG"
+fi
+mode="${FAKE_CODEX_MODE:-ok}"
+out=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "-o" ]]; then out="${args[$((i + 1))]}"; fi
+done
+tid="T-NEW"
+if [[ "${args[0]:-}" == "exec" && "${args[1]:-}" == "resume" ]]; then
+    tid="${args[2]}"
+    [[ "$mode" == "resume-mismatch" ]] && tid="T-OTHER"
+fi
+case "$mode" in
+    ok|resume-mismatch)
+        echo "{\"type\":\"thread.started\",\"thread_id\":\"$tid\"}"
+        [[ -n "$out" ]] && echo "answer" > "$out"
+        exit 0 ;;
+    empty|auth)
+        echo "{\"type\":\"thread.started\",\"thread_id\":\"$tid\"}"
+        echo "ERROR codex_login::auth::manager: Failed to refresh token" >&2
+        [[ "$mode" == "auth" ]] && exit 1
+        exit 0 ;;
+    fail)
+        echo "boom" >&2
+        exit 2 ;;
+    sleep)
+        sleep "${FAKE_CODEX_SLEEP:-1}"
+        exit 0 ;;
+esac

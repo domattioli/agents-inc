@@ -79,11 +79,46 @@ class ModInstallTest(unittest.TestCase):
         self.assertIn("/mods/agents-inc", calls[0])
         self.assertEqual(calls[1], f"plugin install {PLUGIN}")
 
-    def test_repair_leaves_an_installed_plugin_alone(self):
+    def test_repair_refreshes_an_installed_plugin(self):
+        """Spec 031 FR-014: an installed plugin gets a marketplace update and a plugin update, nothing else."""
         self._install()
         self.log.unlink()
         self.assertEqual(self._install("repair").returncode, 0)
-        self.assertEqual([c for c in self._calls() if not c.startswith("plugin list")], [])
+        self.assertEqual([c for c in self._calls() if not c.startswith("plugin list")],
+                         ["plugin marketplace update agents-inc-local", f"plugin update {PLUGIN}"])
+
+    def test_failed_refresh_is_a_warning_only(self):
+        self._install()
+        r = self._install("repair", FAKE_CLAUDE_FAIL="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_bundled_manifest_declares_the_delegate_agent_server(self):
+        """Spec 031 FR-013: the plugin manifest ships the DelegateAgent MCP server through a shim."""
+        manifest = json.loads((ROOT / "mods/agents-inc/.claude-plugin/plugin.json").read_text())
+        server = manifest["mcpServers"]["delegate-agent"]
+        self.assertEqual(server["command"], "sh")
+        self.assertEqual(server["args"], ["${CLAUDE_PLUGIN_ROOT}/mcp/delegate_agent.sh"])
+        self.assertTrue((ROOT / "mods/agents-inc/mcp/delegate_agent.sh").is_file())
+        self.assertGreater(tuple(int(x) for x in manifest["version"].split(".")), (0, 1, 0))
+
+    def test_shim_without_a_release_exits_1_with_a_message(self):
+        r = subprocess.run(["sh", str(ROOT / "mods/agents-inc/mcp/delegate_agent.sh")], capture_output=True, text=True,
+                           env={"HOME": str(self.home), "PATH": "/usr/bin:/bin"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("agents-inc release not installed", r.stderr)
+
+    def _doctor_out(self, mcp_list):
+        shutil.copy(ROOT / "tests/fixtures/fake_claude/claude", self.bin / "claude")
+        self._install("install", "--no-mod")
+        return self._cli("doctor", FAKE_CLAUDE_PLUGIN_LIST=PLUGIN, FAKE_CLAUDE_MCP_LIST=mcp_list).stdout
+
+    def test_doctor_warns_on_a_user_scope_delegate_agent(self):
+        out = self._doctor_out("delegate-agent: python3 /x/codex_agent_mcp.py - Connected")
+        self.assertIn("claude mcp remove --scope user delegate-agent", out)
+
+    def test_doctor_is_quiet_for_the_plugin_server_only(self):
+        out = self._doctor_out("plugin:agents-inc:delegate-agent: sh /x/delegate_agent.sh - Connected")
+        self.assertNotIn("claude mcp remove", out)
 
     def test_no_mod_skips_every_claude_call(self):
         self.assertEqual(self._install("install", "--no-mod").returncode, 0)
