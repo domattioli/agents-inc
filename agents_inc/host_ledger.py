@@ -141,6 +141,30 @@ def dispatch_run_row(spec: dict, task: str | None) -> dict:
     }
 
 
+def _token_counter(usage):
+    """count(key): usage[key] when a non-negative int, else None (never 0 for a missing count)."""
+    def count(key):
+        value = usage.get(key) if isinstance(usage, dict) else None
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+    return count
+
+
+def dispatch_return_row(spec: dict) -> dict:
+    """The return row of a finished `agents-inc dispatch` run (return shape of ledger.record_return). verdict: green
+    pass, red fail, anything else null. Tokens come from spec["usage"]; a missing count stays null."""
+    provider, model, outcome = spec["kind"], spec["model"], spec["outcome"]
+    count = _token_counter(spec.get("usage"))
+    return {
+        "id": spec["run_id"], "run_id": spec["run_id"], "model": model, "tier": _tier(provider, model), "task": None,
+        "provider": provider, "parent_id": None, "edge_type": None, "status": outcome, "seconds": None,
+        "subscription_calls": None, "gate_reason": spec.get("reason"), "artifact_hash": None,
+        "effort": spec.get("effort"), "input_tokens": count("input_tokens"), "output_tokens": count("output_tokens"),
+        "cache_read": count("cache_read"), "cache_write": count("cache_write"), "files_created": None,
+        "verdict": {"green": "pass", "red": "fail"}.get(outcome), "cwd": spec.get("cwd"), "source": "dispatch",
+        "timestamp": ledger._now_iso(),
+    }
+
+
 def native_luna_dispatch_row(agent_id: str, session: str, slug: str, task: str | None, cwd: str | None,
                              snapshot: str) -> dict:
     """Spec 028 D6: the dispatch row of one agents-inc:luna agent. id is the agent id, run_id the session id; snapshot is
@@ -153,9 +177,7 @@ def native_luna_return_row(agent_id: str, session: str, outcome: str, usage: dic
                            changed: list[str]) -> dict:
     """The return row of one hand-back (return shape of ledger.record_return). verdict stays null: the parent verifies.
     snapshot is 'unchanged', 'changed:<n>', 'no-repo' or 'unverified'; files_created holds the first 20 changed paths."""
-    def count(key):
-        value = usage.get(key) if isinstance(usage, dict) else None
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+    count = _token_counter(usage)
     return {
         "id": agent_id, "run_id": session, "model": None, "tier": None, "task": None, "provider": None,
         "parent_id": None, "edge_type": None, "status": outcome, "seconds": None, "subscription_calls": None,
@@ -212,6 +234,15 @@ def record_dispatch_run(state, spec: dict, task: str | None) -> bool:
     """Append one dispatch row for a launched `agents-inc dispatch` run. Never raises; JSONL only."""
     try:
         _append_row(state, dispatch_run_row(spec, task))
+        return True
+    except Exception:
+        return False
+
+
+def record_dispatch_return(state, spec: dict) -> bool:
+    """Append one return row for a finished `agents-inc dispatch` run. Never raises; JSONL only."""
+    try:
+        _append_row(state, dispatch_return_row(spec))
         return True
     except Exception:
         return False

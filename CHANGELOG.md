@@ -17,6 +17,7 @@ All notable changes to this project are recorded here. The format follows
 ### Fixed
 
 - An empty or failed Codex result from DelegateAgent is an error that quotes the last stderr line, with a `codex login` hint on auth failures (spec 031)
+- `agents-inc dispatch` writes a `returned` ledger row at the end of every run, so the outcome reaches the ledger and not only `run.json` (#131).
 - The Zenodo deposit script runs without `PYTHONPATH`.
 
 ## [0.5.0] — 2026-10-26
