@@ -45,6 +45,7 @@ ROLE: Grunt scout (haiku, Agent tool), dispatched by Supervisor (opus) in /path/
 REPORTING CHAIN: haiku reports to sonnet; sonnet reports to fable; fable reports to the operator
 TASK: Read-only scout. 1. Read agents_inc/policy.py. 2. List every function name that contains the word route, with file:line. 3. Return the list; write nothing.
 CONSTRAINTS: read-only; no file writes; no network; at most 10 tool calls. Stop-on-block: if a hook or permission classifier blocks a tool call, stop and hand back to the dispatcher; never switch tool to route around it.
+STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call, stop and hand back to the dispatcher; never switch to another tool to route around the block.
 OUT OF SCOPE: editing any file; judging routing design; running unittest suites.
 FILES IN SCOPE:
 none (read-only scout)
@@ -64,35 +65,37 @@ PLAN CONTRACT: not applicable -- deliverable is not a plan.
 
 ## Slots
 
+Schema (`dispatch_record.v1`, #131, D70): `scripts/dispatch_schema.py` validates the slots JSON before render. Structured forms: `FILES_IN_SCOPE` and `ALLOWLIST` as arrays of strings, `FAN_OUT` as `{"width": n, "total": n, "depth": n}`; the old string forms are converted by `normalize()` and named on stderr (`normalized: <fields>`). `schema_version` is optional (1); another value, a wrong type or a bad enum exits 2 with the field named. The renderer always adds a `STOP ON BLOCK:` line after CONSTRAINTS.
+
 Defaults: when ALLOWLIST, CLASSIFICATION, EFFORT, SECOND_OPINION or PLAN_CONTRACT is absent or blank, `render_dispatch.py` fills the Worker default (`none -- do all work yourself`, `internal (repo source, non-secret)`, transport effort, `not applicable` with the reason) and prints `defaults filled: ...` to stderr. A Lead, a confidential input or a plan deliverable sets the slot explicitly. A blank PRE_EXISTING_CHANGES is filled with `snapshot <snapshot>; verify with ...` and one `--allow` per bare path line in FILES_IN_SCOPE; dispatch then replaces `<snapshot>` with the captured path. A hand-written slot keeps the `<snapshot>` placeholder for the same reason.
 
-| slot | element | content |
-|---|---|---|
-| ROLE | context | rung, model, and who dispatched the delegate |
-| TASK | context | exact work, files to read first, numbered steps |
-| CONSTRAINTS | H4 | hard limits the work must respect; rendered line-start `CONSTRAINTS:` |
-| OUT_OF_SCOPE | 12, H4 | work the delegate must not do; rendered line-start `OUT OF SCOPE:` |
-| FILES_IN_SCOPE | 7 | one path per line; the only paths the delegate may write |
-| STOP_RULE | Grunt | a number of failed attempts, then report RED |
-| SUCCESS_GATE | 2 | commands in backticks with the expected output; optional when GATES is set, and the renderer appends one sentence naming each GATES command |
-| FAILURE_GATE | 3 | conditions that make the task RED; at least one must be a command in backticks, or `check_dispatch_prompt.py` rejects the prompt as element 3 missing |
-| PRE_EXISTING_CHANGES | 7 | optional: blank means the renderer writes the default text above. `<snapshot>` placeholder: the dispatch wrapper (`agents_inc/install/dispatch.py`) fills it with the snapshot path after capture; hand-written prompts put the path from `pre_dispatch_snapshot.py capture <out.json>` plus the verify command `pre_dispatch_snapshot.py verify <out.json> --allow <path>...` |
-| ALLOWLIST | 7 | models the delegate may spawn, or `none — do all work yourself`. With a FAN_OUT total and depth above 0, a Codex delegate (astra, sol, terra) or a Claude delegate (fable, opus, sonnet) runs as a broker Lead with the rung-allowed models from this list (D57, D60). A Worker's FAN_OUT must be zero |
-| FAN_OUT | D48 | `width <n>, total <n>, depth <n>`; optional: the renderer fills the rung default from a `RUNG` or `MODEL` slot, else Orchestrator (`width 3, total 6, depth 2`); Workhorse `2, 4, 1`; Grunt `0, 0, 0` |
-| CLASSIFICATION | 8 | public, internal, or confidential, with the reason |
-| EFFORT | 9 | intended effort level, and whether the transport can set it |
-| SECOND_OPINION | 10 | why this rung, or `not applicable` with the reason |
-| PLAN_CONTRACT | 11 | plan deliverable rules, or `not applicable — deliverable is not a plan.` |
-| PERMISSION_MODE | optional | `default`, `acceptEdits` (default), `plan`, `bypassPermissions` or `auto`; passed to `claude -p --permission-mode`, and Codex write access follows it. Headless `claude -p` with `auto` behaved like `acceptEdits` for grants in the 2026-10-15 probe: unlisted Bash is still denied. Broker-owned: a broker request may not set it |
-| GATES | optional | commands dispatch runs itself after the delegate exits, with no shell: a JSON list (or a JSON string of one) of `{argv, cwd, timeout_s, expect_rc}` objects, or plain command strings that shlex splits into `argv`. Example: `[{"argv": ["python3", "-m", "unittest", "tests.test_x"], "timeout_s": 300}]`. `argv` required; `cwd` relative to `--cwd` (default `.`, no `..`); `timeout_s` above 0 and at most 3600 (default 600); `expect_rc` default 0. Each argv is also granted to a Claude delegate as an exact Bash rule. Refused: push, commit, sudo, recursive rm, curl, ssh, credential paths |
-| BASH_ALLOW | optional | extra Bash command prefixes granted to a Claude delegate: a list of strings, or one string with a prefix per line. No `*`, parentheses or backticks; same refusals as GATES. Broker-owned: a broker request may not set it |
-| CODEX_WRITE | optional | a Codex delegate matches a Claude subagent by default: tools on and write access to `--cwd` whenever PERMISSION_MODE allows edits (`acceptEdits`, the default, or `bypassPermissions`); read-only under `plan` or `default`. `no` opts out, `yes` forces it on. Built-in `image_gen` saves under `~/.codex/generated_images` (readable); the delegate copies the file into cwd. Writes outside `--cwd` are refused (D49): to edit another repository, dispatch with `--cwd <that repo>`. Claude delegates ignore it |
-| CODEX_NETWORK | optional | `yes` gives a Codex delegate's tool commands outbound network access (for example DOI lookups). Off by default. Needs CODEX_WRITE on; ignored otherwise. Claude delegates ignore it |
-| EXECUTIVE | optional | model alias or role word for the top seat of the REPORTING CHAIN line; precedence: explicit slot, then setting `chain.executive`, then the executive-rung alias of the delegate's vendor (equal to SUPERVISOR when that alias is the delegate or the supervisor) |
-| SUPERVISOR | optional | seat the delegate reports to; precedence: explicit slot, then setting `chain.supervisor`, then the alias one rung above the delegate on the grunt, workhorse, orchestrator, executive ladder for the same vendor, else `operator` for an executive delegate (fable, astra) and `CoS` for an unknown model |
-| DELEGATE | optional | the delegate's alias; precedence: explicit slot, then the `--model` flag, then the `MODEL` slot, then the first model alias named in `ROLE`, else the word `delegate` |
-| NOTES | optional | default `none`; a path must sit under the dispatch scratchpad, never the repo or home |
-| STYLE | optional | empty by default; see below |
+| slot | element | type | content |
+|---|---|---|---|
+| ROLE | context | text | rung, model, and who dispatched the delegate |
+| TASK | context | text | exact work, files to read first, numbered steps |
+| CONSTRAINTS | H4 | text | hard limits the work must respect; rendered line-start `CONSTRAINTS:` |
+| OUT_OF_SCOPE | 12, H4 | text | work the delegate must not do; rendered line-start `OUT OF SCOPE:` |
+| FILES_IN_SCOPE | 7 | array of string, or text | one path per line; the only paths the delegate may write |
+| STOP_RULE | Grunt | text | a number of failed attempts, then report RED |
+| SUCCESS_GATE | 2 | text | commands in backticks with the expected output; optional when GATES is set, and the renderer appends one sentence naming each GATES command |
+| FAILURE_GATE | 3 | text | conditions that make the task RED; at least one must be a command in backticks, or `check_dispatch_prompt.py` rejects the prompt as element 3 missing |
+| PRE_EXISTING_CHANGES | 7 | text | optional: blank means the renderer writes the default text above. `<snapshot>` placeholder: the dispatch wrapper (`agents_inc/install/dispatch.py`) fills it with the snapshot path after capture; hand-written prompts put the path from `pre_dispatch_snapshot.py capture <out.json>` plus the verify command `pre_dispatch_snapshot.py verify <out.json> --allow <path>...` |
+| ALLOWLIST | 7 | array of string, or text | models the delegate may spawn, or `none — do all work yourself`. With a FAN_OUT total and depth above 0, a Codex delegate (astra, sol, terra) or a Claude delegate (fable, opus, sonnet) runs as a broker Lead with the rung-allowed models from this list (D57, D60). A Worker's FAN_OUT must be zero |
+| FAN_OUT | D48 | `{width,total,depth}` ints, or text | `width <n>, total <n>, depth <n>`; optional: the renderer fills the rung default from a `RUNG` or `MODEL` slot, else Orchestrator (`width 3, total 6, depth 2`); Workhorse `2, 4, 1`; Grunt `0, 0, 0` |
+| CLASSIFICATION | 8 | text, first word public, internal or confidential | public, internal, or confidential, with the reason |
+| EFFORT | 9 | text naming low, medium, high, xhigh or max (ultra: Codex only) | intended effort level, and whether the transport can set it |
+| SECOND_OPINION | 10 | text | why this rung, or `not applicable` with the reason |
+| PLAN_CONTRACT | 11 | text | plan deliverable rules, or `not applicable — deliverable is not a plan.` |
+| PERMISSION_MODE | optional | text | `default`, `acceptEdits` (default), `plan`, `bypassPermissions` or `auto`; passed to `claude -p --permission-mode`, and Codex write access follows it. Headless `claude -p` with `auto` behaved like `acceptEdits` for grants in the 2026-10-15 probe: unlisted Bash is still denied. Broker-owned: a broker request may not set it |
+| GATES | optional | array | commands dispatch runs itself after the delegate exits, with no shell: a JSON list (or a JSON string of one) of `{argv, cwd, timeout_s, expect_rc}` objects, or plain command strings that shlex splits into `argv`. Example: `[{"argv": ["python3", "-m", "unittest", "tests.test_x"], "timeout_s": 300}]`. `argv` required; `cwd` relative to `--cwd` (default `.`, no `..`); `timeout_s` above 0 and at most 3600 (default 600); `expect_rc` default 0. Each argv is also granted to a Claude delegate as an exact Bash rule. Refused: push, commit, sudo, recursive rm, curl, ssh, credential paths |
+| BASH_ALLOW | optional | array of string, or text | extra Bash command prefixes granted to a Claude delegate: a list of strings, or one string with a prefix per line. No `*`, parentheses or backticks; same refusals as GATES. Broker-owned: a broker request may not set it |
+| CODEX_WRITE | optional | text | a Codex delegate matches a Claude subagent by default: tools on and write access to `--cwd` whenever PERMISSION_MODE allows edits (`acceptEdits`, the default, or `bypassPermissions`); read-only under `plan` or `default`. `no` opts out, `yes` forces it on. Built-in `image_gen` saves under `~/.codex/generated_images` (readable); the delegate copies the file into cwd. Writes outside `--cwd` are refused (D49): to edit another repository, dispatch with `--cwd <that repo>`. Claude delegates ignore it |
+| CODEX_NETWORK | optional | text | `yes` gives a Codex delegate's tool commands outbound network access (for example DOI lookups). Off by default. Needs CODEX_WRITE on; ignored otherwise. Claude delegates ignore it |
+| EXECUTIVE | optional | text | model alias or role word for the top seat of the REPORTING CHAIN line; precedence: explicit slot, then setting `chain.executive`, then the executive-rung alias of the delegate's vendor (equal to SUPERVISOR when that alias is the delegate or the supervisor) |
+| SUPERVISOR | optional | text | seat the delegate reports to; precedence: explicit slot, then setting `chain.supervisor`, then the alias one rung above the delegate on the grunt, workhorse, orchestrator, executive ladder for the same vendor, else `operator` for an executive delegate (fable, astra) and `CoS` for an unknown model |
+| DELEGATE | optional | text | the delegate's alias; precedence: explicit slot, then the `--model` flag, then the `MODEL` slot, then the first model alias named in `ROLE`, else the word `delegate` |
+| NOTES | optional | text | default `none`; a path must sit under the dispatch scratchpad, never the repo or home |
+| STYLE | optional | text | empty by default; see below |
 
 The REPORTING CHAIN line is rendered from the three optional slots and always has the fixed form shown in the template. The settings file is `~/.config/agents-inc/settings.json`, key `chain` (`supervisor`, `executive`); set it with `agents-inc models chain supervisor=opus executive=fable`, never by hand. The renderer prints one `chain:` line on stderr that shows what it derived. `check_dispatch_prompt.py` fails a chain whose seat ranks above the seat it reports to.
 

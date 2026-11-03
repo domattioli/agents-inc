@@ -669,7 +669,7 @@ SENTINEL_PATCH = ("\n_check_report_025 = check_report\n\n\ndef check_report(text
                   "    return list(_check_report_025(text)) + ['sentinel-025']\n")
 PROBES = ("agents_inc/install/dispatch.py", "skills/workerbee/scripts/check_dispatch_prompt.py",
           "skills/workerbee/scripts/render_dispatch.py", "skills/workerbee/scripts/dispatch_rungs.py",
-          "skills/workerbee/scripts/pre_dispatch_snapshot.py")
+          "skills/workerbee/scripts/pre_dispatch_snapshot.py", "skills/workerbee/scripts/dispatch_schema.py")
 
 
 class ScriptsSourceTest(CliBase):

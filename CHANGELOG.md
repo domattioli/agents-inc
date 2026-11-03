@@ -6,6 +6,10 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `dispatch_record.v1`: `render_dispatch.py` validates every `--slots` file with a stdlib schema (`dispatch_schema.py`, pinned per run), accepts structured `FILES_IN_SCOPE`, `ALLOWLIST` and `FAN_OUT`, always emits a `STOP ON BLOCK:` line, and `run.json` and the `dispatched` ledger row carry `slots_sha256` (#131, D70).
+
 ### Fixed
 
 - `agents-inc dispatch` writes a `returned` ledger row at the end of every run, so the outcome reaches the ledger and not only `run.json` (#131).

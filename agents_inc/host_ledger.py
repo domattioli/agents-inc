@@ -114,7 +114,7 @@ def dispatch_run_row(spec: dict, task: str | None) -> dict:
     provider = spec["kind"]
     model = spec["model"]
     first = task.strip().splitlines()[0][:_TASK_CAP] if isinstance(task, str) and task.strip() else None
-    return {
+    row = {
         "id": spec["run_id"],
         "run_id": spec["run_id"],
         "model": model,
@@ -139,6 +139,10 @@ def dispatch_run_row(spec: dict, task: str | None) -> dict:
         "source": "dispatch",
         "timestamp": ledger._now_iso(),
     }
+    if spec.get("slots_sha256"):  # #131: link the row to the slots file the run was rendered from
+        row["slots_sha256"] = spec["slots_sha256"]
+        row["slots_path"] = spec.get("slots_path")
+    return row
 
 
 def _token_counter(usage):

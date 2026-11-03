@@ -67,7 +67,8 @@ def _load(name: str, scripts: Path = SCRIPTS):
 
 
 # 025 (#104): a dispatch from an agents_Inc checkout is judged by the checkout's workerbee scripts, pinned at launch.
-PINNED_SCRIPTS = ("check_dispatch_prompt.py", "render_dispatch.py", "dispatch_rungs.py", "pre_dispatch_snapshot.py")
+PINNED_SCRIPTS = ("check_dispatch_prompt.py", "render_dispatch.py", "dispatch_rungs.py", "pre_dispatch_snapshot.py",
+                  "dispatch_schema.py")
 PINNED_TEMPLATES = ("header.md", "slots.md")  # render_dispatch.py reads these from the directory above its own
 
 
@@ -85,6 +86,15 @@ def scripts_dir(cwd: Path) -> tuple[Path, str]:
             and all(p.is_file() and not p.is_symlink() for p in probes)):
         return scripts, "checkout"
     return SCRIPTS, "installed"
+
+
+def _slot_str(name: str, value) -> str:
+    """#131: the string form of a slot that may be structured (FILES_IN_SCOPE and ALLOWLIST arrays, FAN_OUT object)."""
+    if isinstance(value, list):
+        return "\n".join(str(v) for v in value) if name == "FILES_IN_SCOPE" else ", ".join(str(v) for v in value)
+    if isinstance(value, dict):
+        return f"width {value.get('width')}, total {value.get('total')}, depth {value.get('depth')}"
+    return str(value)
 
 
 def _pin_scripts(src: Path, run_id: str) -> Path:
@@ -575,7 +585,7 @@ def lead_roster(model: str, slots: dict, fan_out: dict | None, scripts: Path = S
     if _kind(model) == "claude" and fan_out.get("depth", 0) <= 0:
         return []
     rungs = _load("dispatch_rungs", scripts)
-    text = str(slots.get("ALLOWLIST", "")).lower()
+    text = _slot_str("ALLOWLIST", slots.get("ALLOWLIST", "")).lower()
     mine = rungs.LADDER.index(rungs.MODEL_RUNG[model])
     named = [m for m in (*CODEX_SLUGS, *CLAUDE_MODELS) if re.search(rf"\b{m}\b", text)]
     return [m for m in named if rungs.LADDER.index(rungs.MODEL_RUNG[m]) < mine
@@ -1484,15 +1494,17 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
     else:
         shutil.copyfile(slots_path, run_dir / "slots.json")
     spec = {"run_id": run_id, "kind": kind, "slots": str(slots_path), "model": model, "effort": effort,
+            "schema_version": 1, "slots_sha256": _sha256_bytes((run_dir / "slots.json").read_bytes()),
+            "slots_path": str(run_dir / "slots.json"),
             "cwd": str(cwd), "chain": ["CoS", model], "snapshot": str(run_dir / "snapshot.json"),
-            "gates": {"tier": args.tier, "allow": allow_paths(str(slots.get("FILES_IN_SCOPE", "")))},
+            "gates": {"tier": args.tier, "allow": allow_paths(_slot_str("FILES_IN_SCOPE", slots.get("FILES_IN_SCOPE", "")))},
             "permission_mode": slots.get("PERMISSION_MODE") or DEFAULT_PERMISSION_MODE,
             "codex_write": codex_write(slots),
             "codex_network": codex_network(slots),
             "scripts_dir": str(sdir), "scripts_source": ssrc,
             "rc": None, "outcome": None, "session_id": None}
     lint = run_dir / "lint.txt"
-    globs = scope_globs(str(slots.get("FILES_IN_SCOPE", "")))
+    globs = scope_globs(_slot_str("FILES_IN_SCOPE", slots.get("FILES_IN_SCOPE", "")))
     gates, bash_allow, why = _grants_from_slots(slots, cwd, sdir)
     if globs:
         why = ("refused-scope", f"FILES_IN_SCOPE has glob patterns the scope gate cannot match: {' '.join(globs)}; list exact paths")
