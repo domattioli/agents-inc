@@ -1,3 +1,3 @@
 {
-  "modules": ["relay.ts"]
+  "modules": ["mod.ts"]
 }

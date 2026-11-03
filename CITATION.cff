@@ -7,8 +7,8 @@ authors:
   - family-names: "Mattioli"
     given-names: "Dominik O."
     orcid: "https://orcid.org/0000-0002-7327-6337"
-version: 0.4.2
-date-released: 2026-10-23
+version: 0.5.0
+date-released: 2026-10-26
 doi: 10.5281/zenodo.22670100
 license: PolyForm-Small-Business-1.0.0
 license-url: "https://github.com/domattioli/agents_Inc/blob/main/LICENSE"

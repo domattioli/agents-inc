@@ -83,6 +83,29 @@ def _mod_missing(release: Path, home: Path, runner, which) -> list[str]:
     if listed.returncode != 0: return []
     return [] if "agents-inc@agents-inc-local" in (listed.stdout or "") else ["MOD_NOT_INSTALLED"]
 
+def _luna_report(release: Path, paths: InstallPaths) -> dict | None:
+    """Spec 028: the native agents-inc:luna type's status, only when the release ships the mod. Any failure is silent."""
+    if not (release / "mods/agents-inc/hooks/luna.ts").is_file(): return None
+    try:
+        from . import luna_native
+        return luna_native.status(paths)
+    except (OSError, ValueError, KeyError): return None
+
+def _luna_warnings(release: Path, paths: InstallPaths) -> list[str]:
+    """LUNA_OFF, LUNA_CODEX_NOT_READY, LUNA_CATALOG_MISSING: warnings only; READY and the failure codes stay as they are."""
+    report = _luna_report(release, paths)
+    if report is None: return []
+    from . import luna_native
+    code = luna_native.doctor_code(report)
+    return [code] if code else []
+
+def luna_line(paths: InstallPaths) -> str | None:
+    """The `luna type:` line `agents-inc doctor` prints, or None when no installed release ships the mod."""
+    report = _luna_report(paths.current, paths)
+    if report is None: return None
+    from . import luna_native
+    return luna_native.doctor_line(report)
+
 def check_install(paths: InstallPaths, live_model: str | None = None, runner=subprocess.run,
                   models: list[dict] | None = None, catalog_path: Path | None = None,
                   which=shutil.which, sandbox_probe=None) -> DoctorReport:
@@ -109,6 +132,7 @@ def check_install(paths: InstallPaths, live_model: str | None = None, runner=sub
     if which("claude", path=WORKER_PATH + os.pathsep + os.environ.get("PATH", "")) is None: codes.append("WB_CLAUDE_NOT_FOUND")
     if sys.platform == "darwin" and not sandbox_probe(): warnings.append("WB_SANDBOX_NESTED")  # inside another sandbox
     warnings.extend(_mod_missing(release, paths.home, runner, which))
+    warnings.extend(_luna_warnings(release, paths))
     warnings.extend(_hook_drift(paths))
     warnings.extend(_sandbox_exclusion(paths))
     if models is None:  # the catalog of the home being checked; CODEX_HOME still wins. [] stops a re-read of the default.

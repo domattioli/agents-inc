@@ -95,6 +95,33 @@ class GateDenyTest(_Gate):
         result = self.run_hook(payload("Explore", background=True))
         self.assertEqual(self.decision(result), "deny")
 
+    def test_allow_the_native_luna_type_even_in_background(self):
+        # Spec 028 FR-022: the mod's own type is agents-inc's route, so the gate lets it through.
+        for background in (False, True):
+            with self.subTest(background=background):
+                result = self.run_hook(payload("agents-inc:luna", background=background, session=f"n{background}"))
+                self.assertNotEqual(self.decision(result), "deny")
+
+    def test_allow_the_native_luna_type_whose_description_names_luna(self):
+        result = self.run_hook(payload("agents-inc:luna", description="luna: count lines"))
+        self.assertNotEqual(self.decision(result), "deny")
+
+    def test_the_spike_luna_brain_types_are_no_longer_exempt(self):
+        for subagent in ("luna-brain:luna", "luna"):
+            with self.subTest(subagent=subagent):
+                self.assertEqual(self.decision(self.run_hook(payload(subagent, session=subagent))), "deny")
+
+    def test_deny_a_lookalike_of_the_native_type(self):
+        for subagent in ("x-agents-inc:luna", "agents-inc:luna-2", "agents-inc:", "agents-inc:luna "):
+            with self.subTest(subagent=subagent):
+                self.assertEqual(self.decision(self.run_hook(payload(subagent, session=subagent))), "deny")
+
+    def test_native_type_passes_in_advisory_and_off_too(self):
+        for mode in ("advisory", "off"):
+            with self.subTest(mode=mode):
+                self.set_env(mode)
+                self.assertNotEqual(self.decision(self.run_hook(payload("agents-inc:luna", session=mode))), "deny")
+
     def test_deny_task_tool_too(self):
         self.assertEqual(self.decision(self.run_hook(payload("general-purpose", tool="Task"))), "deny")
 

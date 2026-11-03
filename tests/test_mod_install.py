@@ -1,5 +1,6 @@
 """Spec 027 FR-028: install, repair and uninstall register the agents-inc mod with the Claude CLI; doctor warns when it
 is missing. Every run uses a temp HOME and a fake `claude` first on PATH that records its argv."""
+import json
 import os
 import shutil
 import stat
@@ -60,6 +61,14 @@ class ModInstallTest(unittest.TestCase):
         self.assertEqual(self._install().returncode, 0)
         current = self.home / ".local/share/agents-inc/current"
         self.assertTrue((current / "mods/agents-inc/.claude-plugin/plugin.json").is_file())
+
+    def test_bundle_carries_the_luna_type(self):
+        """Spec 028 FR-019: the bundle holds luna.ts, and the one module hooks.json lists is the entry that loads it."""
+        self.assertEqual(self._install().returncode, 0)
+        hooks = self.home / ".local/share/agents-inc/current/mods/agents-inc/hooks"
+        self.assertGreater((hooks / "luna.ts").stat().st_size, 0)
+        self.assertEqual(json.loads((hooks / "hooks.json").read_text())["modules"], ["mod.ts"])
+        self.assertIn("./luna", (hooks / "mod.ts").read_text())
 
     def test_install_adds_the_marketplace_then_installs_the_plugin(self):
         r = self._install()

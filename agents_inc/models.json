@@ -423,6 +423,17 @@
       "cost_class": "mid",
       "status": "unprobed",
       "supported_efforts": ["low", "medium", "high", "max", "ultra"]
+    },
+    "gpt-6.1-terra": {
+      "vendor": "openai",
+      "provider": "codex",
+      "tier": "workhorse",
+      "tasks_good": ["extract", "summarize", "draft", "code-write", "code-review", "classify"],
+      "tasks_bad": [],
+      "ctx_hint": 128000,
+      "cost_class": "mid",
+      "status": "unprobed",
+      "supported_efforts": ["low", "medium", "high", "max", "ultra"]
     }
   }
 }

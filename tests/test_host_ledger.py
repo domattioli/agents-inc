@@ -54,6 +54,19 @@ class _Home(unittest.TestCase):
 
 
 class HookRowTest(_Home):
+    def test_native_luna_agent_call_gets_no_hook_row_and_other_types_still_do(self):
+        # Spec 028 FR-026: `agents-inc luna begin` writes that agent's row; the hook would add a second, labelled claude.
+        native = agent_payload("toolu_N1")
+        native["tool_input"]["subagent_type"] = "agents-inc:luna"
+        self.assertIsNone(host_ledger.dispatch_row(native))
+        self.assertFalse(host_ledger.record_hook_dispatch(self.paths.state, native))
+        self.assertEqual(self.rows(), [])
+        for subagent in ("general-purpose", "x-agents-inc:luna", None):
+            with self.subTest(subagent=subagent):
+                other = agent_payload("toolu_O1")
+                if subagent: other["tool_input"]["subagent_type"] = subagent
+                self.assertEqual(host_ledger.dispatch_row(other)["provider"], "claude")
+
     def test_host_workspace_is_under_state_dir(self):
         self.assertEqual(self.host_ws(), self.paths.state / "host-ledger")
 

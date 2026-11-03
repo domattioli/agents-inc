@@ -68,6 +68,89 @@ class RungArgvTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "--lead is allowed only for astra, sol, terra"):
             runtime.lead_args("luna", REPO)
 
+    def _fake_home(self, cache=True):
+        """A HOME whose .codex holds the models cache (an entry for the luna slug and one for astra) and an auth.json."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        codex = Path(tmp.name, ".codex"); codex.mkdir()
+        (codex / "auth.json").write_text("{}")
+        if cache:
+            (codex / "models_cache.json").write_text(json.dumps({"etag": "x", "models": [
+                {"slug": "gpt-5.6-luna", "tool_mode": "code_mode_only", "shell_type": "unified_exec",
+                 "experimental_supported_tools": ["clock"], "context_window": 1, "multi_agent_version": "v2",
+                 "apply_patch_tool_type": "freeform"},
+                {"slug": "gpt-6-astra", "tool_mode": "code_mode_only"}]}))
+        env = mock.patch.dict(os.environ, {"HOME": tmp.name}); env.start(); self.addCleanup(env.stop)
+        return codex
+
+    def test_host_tools_replaces_base_instructions_only_when_asked(self):
+        # The instructions override is for the luna types (--host-tools); a plain --no-tools run keeps Codex's own.
+        self._fake_home()
+        self.assertFalse(any("model_instructions_file" in a for a in _argv("luna")))
+        argv = build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, False, host_tools=True)
+        path = Path(json.loads(next(a for a in argv if a.startswith("model_instructions_file=")).split("=", 1)[1]))
+        self.assertEqual(path.read_text(), runtime.NO_TOOL_INSTRUCTIONS)
+        self.assertIn("features.shell_tool=false", argv)
+        resume = runtime.build_codex_resume_argv(EXE, "019a0000-0000-7000-8000-000000000000", "hi", "luna", "medium",
+                                                 Path("/w"), EFF, MAP, host_tools=True)
+        self.assertTrue(any(a.startswith("model_instructions_file=") for a in resume))
+
+    def test_host_tools_without_a_cache_entry_fails_closed(self):
+        # FR-010, FR-011: no stripped catalog means no run; Codex's own catalog would serve exec and apply_patch.
+        self._fake_home(cache=False)
+        with self.assertRaisesRegex(runtime.HostToolsCatalogMissing, r"^WB_LUNA_CATALOG_MISSING: .*models_cache\.json"):
+            build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, False, host_tools=True)
+        with self.assertRaisesRegex(runtime.HostToolsCatalogMissing, "WB_LUNA_CATALOG_MISSING"):
+            runtime.build_codex_resume_argv(EXE, "019a0000-0000-7000-8000-000000000000", "hi", "luna", "medium",
+                                            Path("/w"), EFF, MAP, host_tools=True)
+        with self.assertRaisesRegex(runtime.HostToolsCatalogMissing, runtime.CATALOG_WARM_COMMAND.split("{")[0].strip()):
+            runtime.no_tool_args(True, "gpt-5.6-luna")
+
+    def test_host_tools_argv_keeps_the_read_only_sandbox_and_no_web_search(self):
+        # FR-012
+        self._fake_home()
+        argv = build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, False, host_tools=True)
+        self.assertEqual(argv[argv.index("-s") + 1], "read-only")
+        self.assertIn('web_search="disabled"', argv)
+        self.assertNotIn("features.shell_tool=true", argv)
+
+    def test_host_tools_argv_drops_codex_context_notes(self):
+        # luna read the read-only sandbox note as a reason to ask permission through request_user_input (macOS stress
+        # run, 2026-10-25): host-tools runs, fresh and resumed, drop it with the mode text, skills and AGENTS.md.
+        self._fake_home()
+        argv = build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, False, host_tools=True)
+        resume = runtime.build_codex_resume_argv(EXE, "019a0000-0000-7000-8000-000000000000", "hi", "luna", "medium",
+                                                 Path("/w"), EFF, MAP, host_tools=True)
+        for setting in ("include_permissions_instructions=false", "include_collaboration_mode_instructions=false",
+                        "skills.include_instructions=false", "project_doc_max_bytes=0"):
+            self.assertIn(setting, argv)
+            self.assertIn(setting, resume)
+            self.assertNotIn(setting, _argv("luna"))
+
+    def test_host_tools_catalog_ignores_the_env_codex_home(self):
+        # plan D3 item 2: the catalog comes from HOME/.codex, the directory auth.json is linked from.
+        self._fake_home()
+        with tempfile.TemporaryDirectory() as other, mock.patch.dict(os.environ, {"CODEX_HOME": other}):
+            argv = build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, False, host_tools=True)
+        self.assertTrue(any(a.startswith("model_catalog_json=") for a in argv))
+
+    def test_host_tools_catalog_drops_exec_for_the_cached_model(self):
+        codex = self._fake_home()
+        argv = build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, False, host_tools=True)
+        plain = _argv("luna")
+        path = Path(json.loads(next(a for a in argv if a.startswith("model_catalog_json=")).split("=", 1)[1]))
+        got = json.loads(path.read_text())
+        self.assertEqual(got["etag"], "x")
+        self.assertEqual(got["models"], [{"slug": "gpt-5.6-luna", "tool_mode": "direct", "shell_type": "disabled",
+                                          "experimental_supported_tools": [], "context_window": 1,
+                                          "multi_agent_version": "none"}])
+        self.assertFalse(any("model_catalog_json" in a for a in plain))
+        self.assertIsNone(runtime.host_tools_catalog("gpt-6-sol", codex))
+
+    def test_host_tools_needs_tools_off(self):
+        with self.assertRaisesRegex(ValueError, "--host-tools needs tools off"):
+            build_codex_argv(EXE, "astra", "medium", Path("/w"), EFF, MAP, True, host_tools=True)
+
     def test_no_tools_forces_off(self):
         self.assertFalse(tools_for("astra", no_tools=True, tools=True))
         self.assertFalse(tools_for("luna", no_tools=True, tools=True))  # --no-tools wins before the luna check
@@ -240,6 +323,192 @@ class RunRecordTest(unittest.TestCase):
         self.assertIn("features.shell_tool=false", argv)
         _, err, argv = self._run("astra", tools=True, no_tools=True)
         self.assertIn('"tools": "off"', err)
+
+
+HOST_TOOLS_FAKE = """#!/usr/bin/env python3
+import json, os, sys
+home = os.environ["CODEX_HOME"]
+mode = os.environ.get("FAKE_MODE", "")
+sys.stdin.read()
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write(json.dumps({"argv": sys.argv[1:], "codex_home": home, "home": os.environ.get("HOME"),
+                        "path": os.environ.get("PATH"), "auth_link": os.path.islink(home + "/auth.json"),
+                        "has_cache": os.path.exists(home + "/models_cache.json"),
+                        "config": open(home + "/config.toml").read()}) + "\\n")
+if mode == "replace_auth":
+    os.unlink(home + "/auth.json")
+    open(home + "/auth.json", "w").write("{}")
+if mode == "quota":
+    sys.stderr.write("ERROR: You've hit your usage limit. Please try again at 5:00 PM.\\n")
+    sys.exit(1)
+if mode == "fail":
+    sys.stderr.write("boom\\n")
+    sys.exit(7)
+print("OK")
+"""
+
+
+class HostToolsRunTest(unittest.TestCase):
+    """Spec 028 FR-010 to FR-013, FR-016, FR-023: a host-tools run fails closed without the stripped catalog and runs in
+    an isolated CODEX_HOME. A fake Codex records what it sees; no real Codex starts."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.home = self.dir / "home"
+        self.real = self.home / ".codex"
+        self.real.mkdir(parents=True)
+        self.fake = self.dir / "codex"
+        self.fake.write_text(HOST_TOOLS_FAKE)
+        self.fake.chmod(0o755)
+        self.log = self.dir / "log.jsonl"
+        self.operator_home = self.dir / "operator-codex"
+        self.operator_home.mkdir()
+        (self.operator_home / "config.toml").write_text('model = "operator"\n')
+        env = mock.patch.dict(os.environ, {"HOME": str(self.home), "FAKE_LOG": str(self.log),
+                                           "CODEX_HOME": str(self.operator_home)})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("FAKE_MODE", None)
+        self.receipt = SimpleNamespace(codex_path=self.fake)
+
+    def add_cache(self):
+        (self.real / "models_cache.json").write_text(json.dumps({"models": [{"slug": MAP["luna"], "tool_mode": "code_mode_only"}]}))
+
+    def add_auth(self):
+        (self.real / "auth.json").write_text("{}")
+
+    def run_luna(self, host_tools=True):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(runtime, "load_model_map", return_value=MAP), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = run_codex("luna", "medium", self.dir, io.StringIO("p"), self.receipt, EFF, no_tools=True,
+                           host_tools=host_tools)
+        return rc, out.getvalue(), err.getvalue()
+
+    def calls(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+
+    def test_no_cache_entry_exits_3_before_any_process_or_temp_home(self):
+        self.add_auth()
+        with mock.patch.object(runtime, "lead_codex_home") as home:
+            rc, _, err = self.run_luna()
+        self.assertEqual(rc, 3)
+        self.assertEqual(err.count("WB_LUNA_CATALOG_MISSING"), 1)
+        self.assertIn("models_cache.json", err)
+        self.assertEqual(self.calls(), [])
+        home.assert_not_called()
+
+    def test_run_uses_an_isolated_home_with_the_real_auth_linked_and_no_cache(self):
+        self.add_cache()
+        self.add_auth()
+        rc, out, _ = self.run_luna()
+        self.assertEqual((rc, out), (0, "OK\n"))
+        call = self.calls()[0]
+        self.assertNotIn(call["codex_home"], (str(self.operator_home), str(self.real)))
+        self.assertTrue(call["auth_link"])
+        self.assertFalse(call["has_cache"])
+        self.assertNotIn("mcp_servers", call["config"])
+        self.assertEqual(call["home"], str(self.home))  # the caller's HOME and PATH are kept: no lead_env scrub
+        self.assertEqual(call["path"], os.environ["PATH"])
+        self.assertFalse(Path(call["codex_home"]).exists())  # removed afterwards
+        catalog = next(a for a in call["argv"] if a.startswith("model_catalog_json="))
+        self.assertIn(f"host-tools-catalog-{MAP['luna']}.json", catalog)
+        self.assertEqual(call["argv"][call["argv"].index("-s") + 1], "read-only")
+
+    def test_record_line_names_the_catalog_and_the_isolated_home(self):
+        self.add_cache()
+        self.add_auth()
+        _, _, err = self.run_luna()
+        record = json.loads(next(l for l in err.splitlines() if l.startswith("agents-inc run: record ")).split("record ", 1)[1])
+        self.assertEqual(record["catalog"], "host-tools")
+        self.assertTrue(record["catalog_path"].endswith(f"host-tools-catalog-{MAP['luna']}.json"))
+        self.assertEqual(record["codex_home"], "isolated")
+        self.assertEqual(record["tools"], "off")
+
+    def test_missing_auth_json_is_the_auth_error_and_starts_nothing(self):
+        self.add_cache()
+        with self.assertRaisesRegex(FileNotFoundError, "WB_CODEX_AUTH_MISSING"):
+            self.run_luna()
+        self.assertEqual(self.calls(), [])
+
+    def test_auth_replaced_by_a_real_file_keeps_the_home_and_turns_success_into_failure(self):
+        self.add_cache()
+        self.add_auth()
+        os.environ["FAKE_MODE"] = "replace_auth"
+        rc, _, err = self.run_luna()
+        kept = Path(self.calls()[0]["codex_home"])
+        self.addCleanup(shutil.rmtree, kept, ignore_errors=True)
+        self.assertEqual(rc, 1)
+        self.assertIn("isolated CODEX_HOME kept: auth.json is no longer a symlink", err)
+        self.assertTrue(kept.exists())
+        self.assertEqual((self.real / "auth.json").read_text(), "{}")  # the real credential is untouched
+
+    def test_quota_exits_75_with_the_existing_message_once(self):
+        self.add_cache()
+        self.add_auth()
+        os.environ["FAKE_MODE"] = "quota"
+        with mock.patch("agents_inc.free_health.report"):
+            rc, _, err = self.run_luna()
+        self.assertEqual(rc, 75)
+        self.assertEqual(err.count("hit a usage or rate limit"), 1)
+        self.assertIn(f"agents-inc run: codex {MAP['luna']} hit a usage or rate limit; retry at 5:00 PM", err)
+
+    def test_plain_exit_code_is_unchanged_with_and_without_host_tools(self):
+        self.add_cache()
+        self.add_auth()
+        os.environ["FAKE_MODE"] = "fail"
+        self.assertEqual(self.run_luna()[0], 7)
+        self.assertEqual(self.run_luna(host_tools=False)[0], 7)
+
+    def test_a_run_without_host_tools_keeps_the_callers_codex_home(self):
+        # FR-023: pre-028 luna routes are untouched: no isolated home, no catalog, no instructions override.
+        self.add_auth()
+        rc, _, err = self.run_luna(host_tools=False)
+        call = self.calls()[0]
+        self.assertEqual(rc, 0)
+        self.assertEqual(call["codex_home"], str(self.operator_home))
+        self.assertFalse(any(a.startswith(("model_catalog_json=", "model_instructions_file=")) for a in call["argv"]))
+        self.assertNotIn('"codex_home": "isolated"', err)
+
+
+class PreMod028RoutesTest(unittest.TestCase):
+    """Spec 028 FR-023, SC-007: the luna routes that exist before the native type (dispatch, the @luna at-route, a broker
+    Worker) never ask for host tools, the stripped catalog or an isolated CODEX_HOME."""
+
+    HOST_BITS = ("model_instructions_file", "model_catalog_json")
+
+    def test_plain_luna_argv_carries_no_host_tools_bits(self):
+        for tools in (False, True):
+            argv = build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, tools=tools)
+            self.assertFalse([a for a in argv if a.startswith(self.HOST_BITS)])
+        worker = build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, tools=True, worker=(Path("/c"), "r1"))
+        self.assertFalse([a for a in worker if a.startswith(self.HOST_BITS)])
+
+    def test_the_plain_tool_free_luna_run_keeps_the_callers_codex_home(self):
+        done = SimpleNamespace(stdout="OK\n", stderr="", returncode=0)
+        err = io.StringIO()
+        with mock.patch.object(runtime, "load_model_map", return_value=MAP), \
+                mock.patch.object(runtime.subprocess, "run", return_value=done) as sp, \
+                mock.patch.object(runtime, "lead_codex_home") as home, \
+                mock.patch.object(runtime.os, "access", return_value=True), \
+                mock.patch.object(Path, "is_file", return_value=True), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            run_codex("luna", "medium", Path("/w"), io.StringIO("p"), SimpleNamespace(codex_path=EXE), EFF, no_tools=True)
+        home.assert_not_called()
+        self.assertFalse([a for a in sp.call_args[0][0] if a.startswith(self.HOST_BITS)])
+        self.assertIsNone(sp.call_args[1]["env"])
+        self.assertNotIn("isolated", err.getvalue())
+        self.assertNotIn("catalog", err.getvalue())
+
+    def test_no_pre_028_route_source_passes_host_tools(self):
+        root = Path(__file__).resolve().parents[1]
+        for rel in ("agents_inc/install/dispatch.py", "agents_inc/install/broker.py",
+                    "skills/codex-bridge/scripts/at_route.sh", "skills/codex-bridge/scripts/agent.sh"):
+            path = root / rel
+            if path.is_file():
+                self.assertNotRegex(path.read_text(), r"host[-_]tools", rel)
 
 
 class LeadMcpTest(unittest.TestCase):

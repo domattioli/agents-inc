@@ -163,7 +163,7 @@ which model ids sit on each rung; edit `agents_inc/models.json` or
 | orchestrator | claude | `opus` | `opus` |
 | orchestrator | codex | `gpt-6.1-sol` | `gpt-5.6-sol`, `gpt-6.1-sol` |
 | workhorse | claude | `sonnet` | `sonnet` |
-| workhorse | codex | `gpt-5.6-terra` | `gpt-5.6-terra` |
+| workhorse | codex | `gpt-6.1-terra` | `gpt-5.6-terra`, `gpt-6.1-terra` |
 | grunt | claude | `haiku` | `haiku` |
 | grunt | codex | `gpt-6-luna` | `gpt-5.4-mini`, `gpt-5.6-luna`, `gpt-6-luna` |
 | grunt | gemini | `gemini-flash-lite-latest` | `gemini-2.5-flash`, `gemini-flash-lite`, `gemini-flash-lite-latest` |
@@ -258,7 +258,7 @@ vendor that isn't wired up here.
 |---|---|---|---|---|---|
 | astra | OpenAI (Codex) | `gpt-6-astra` | `@AGENTS_INC_LAUNCHER@ run --model astra --cwd <dir>` | executive | hardest reasoning |
 | sol | OpenAI (Codex) | `gpt-5.6-sol` | `@AGENTS_INC_LAUNCHER@ run --model sol --cwd <dir>` | orchestrator | orchestration, review |
-| terra | OpenAI (Codex) | `gpt-5.6-terra` | `@AGENTS_INC_LAUNCHER@ run --model terra --cwd <dir>` | workhorse | implementation |
+| terra | OpenAI (Codex) | `gpt-6.1-terra` | `@AGENTS_INC_LAUNCHER@ run --model terra --cwd <dir>` | workhorse | implementation |
 | luna | OpenAI (Codex) | `gpt-6-luna` | `@AGENTS_INC_LAUNCHER@ run --model luna --cwd <dir>` | grunt | triage, mechanical work |
 | fable | Anthropic | n/a — `Agent` tool | `Agent(model="fable", ...)` | executive | Claude-side hardest reasoning, last resort |
 | opus | Anthropic | n/a — `Agent` tool | `Agent(model="opus", ...)` | orchestrator | Claude-side orchestration, adversarial review, gates |

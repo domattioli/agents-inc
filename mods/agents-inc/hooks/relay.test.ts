@@ -28,6 +28,7 @@ function fakeProcesses(on: On, seen: string[][]) {
   })
 }
 
+// The luna agent shares the plugin's one session.start (mod.ts), so it registers after the relay pair.
 test('session.start registers the relay agent and the run tool', async ($, on) => {
   const registered: string[] = []
   on('agent.register', (_$, e) => {
@@ -39,8 +40,14 @@ test('session.start registers the relay agent and the run tool', async ($, on) =
     return { value: {} }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 's1' }))
+  on('ui.log', () => ({ value: undefined }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: JSON.stringify({ offered: true, slug: 'gpt-6-luna', reason: 'ready' }) }
+    return { value: { code: 0, signal: null } }
+  })
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
-  expect(registered).toEqual(['agent:relay', 'tool:run'])
+  expect(registered).toEqual(['agent:relay', 'tool:run', 'agent:luna'])
 })
 
 test('a call outside the relay subagent is refused', async ($, on) => {

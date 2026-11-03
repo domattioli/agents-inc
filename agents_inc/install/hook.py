@@ -24,6 +24,11 @@ AGENT_TOOLS = {"Agent", "Task"}
 AGENT_GATE_ENV = "AGENTS_INC_AGENT_GATE"
 AGENT_GATE_MODES = ("enforce", "advisory", "off")
 GATE_ALLOW = frozenset({"Explore", "Plan", "claude-code-guide", "statusline-setup"})
+# The agents-inc mod's native agent types run a Codex model through `agents-inc run` (spec 028): the persona name is
+# the true model and the call is agents-inc's own route, so neither the FR-002 deny nor the gate applies. Exact names,
+# not a prefix: a lookalike such as x-agents-inc:luna is still an outside spawn. The spike's luna-brain:* types are
+# no longer exempt; the spike mod stays installable but its types now meet the gate like any other.
+NATIVE_TYPES = frozenset({"agents-inc:luna"})
 GATE_DENY_REASON = ("agents-inc agent gate: this Agent/Task call is blocked (subagent_type: {subagent}; background: {background}). "
                     "Agent/Task spawns Claude subagents outside agents-inc routing, ledger, and verification. Allowed here: {allowed} "
                     "(foreground only). For every other delegation run: agents-inc dispatch --slots <json> --model <opus|sonnet|haiku|fable>. "
@@ -97,11 +102,17 @@ def agent_nudge(paths: InstallPaths, payload: dict) -> str:
     """Once per session, so a run of subagent spawns is not flooded with the same reminder."""
     return _context(_nudge_text(paths, payload))
 
+def _is_native(tool_input: object) -> bool:
+    subagent = tool_input.get("subagent_type") if isinstance(tool_input, dict) else None
+    return isinstance(subagent, str) and subagent in NATIVE_TYPES
+
 def persona_deny(payload: object) -> str:
     """The only blocking path. Anything unexpected fails open (empty string)."""
     try:
         if not isinstance(payload, dict) or payload.get("tool_name") not in AGENT_TOOLS: return ""
-        description = _tool_input(payload).get("description")
+        tool_input = _tool_input(payload)
+        if _is_native(tool_input): return ""
+        description = tool_input.get("description")
         if not isinstance(description, str) or not PERSONA_RE.match(description): return ""
         return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                   "permissionDecisionReason": PERSONA_DENY_REASON}})
@@ -125,12 +136,16 @@ def agent_gate_mode(paths: InstallPaths, env=None) -> tuple[str, str]:
 def write_agent_gate(paths: InstallPaths, mode: str) -> None:
     """Persist 'agent_gate' in settings.json, keeping other keys; a malformed file raises rather than being clobbered."""
     if mode not in AGENT_GATE_MODES: raise ValueError(f"agent gate mode must be one of {', '.join(AGENT_GATE_MODES)}: {mode!r}")
+    write_setting(paths, "agent_gate", mode)
+
+def write_setting(paths: InstallPaths, key: str, value: str) -> None:
+    """Persist one key in settings.json atomically with mode 0600, keeping other keys; a malformed file raises."""
     data = {}
     if paths.settings.exists():
         try: data = json.loads(paths.settings.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc: raise RuntimeError(f"{paths.settings} is not readable JSON: {exc}") from exc
         if not isinstance(data, dict): raise RuntimeError(f"{paths.settings} is not a JSON object")
-    data["agent_gate"] = mode
+    data[key] = value
     paths.settings.parent.mkdir(parents=True, exist_ok=True)
     fd, raw = tempfile.mkstemp(prefix=f".{paths.settings.name}.", dir=paths.settings.parent)
     try:
@@ -148,6 +163,7 @@ def gate_deny(paths: InstallPaths, payload: object) -> str:
         if not isinstance(tool_input, dict) or agent_gate_mode(paths)[0] != "enforce": return ""
         subagent, background = tool_input.get("subagent_type"), tool_input.get("run_in_background") is True
         if isinstance(subagent, str) and subagent in GATE_ALLOW and not background: return ""
+        if _is_native(tool_input): return ""
         reason = GATE_DENY_REASON.format(subagent=subagent if isinstance(subagent, str) else "omitted",
                                          background="yes" if background else "no", allowed=", ".join(sorted(GATE_ALLOW)))
         return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",

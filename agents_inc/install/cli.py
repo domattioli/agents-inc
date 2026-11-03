@@ -5,12 +5,12 @@ from pathlib import Path
 from .. import datafiles
 from .bundle import activate, stage_bundle
 from .discovery import install_skill_links, restore_skill_links
-from .doctor import check_install
+from .doctor import check_install, luna_line
 from .host_wiring import install_alias_links, install_host_wiring, remove_host_wiring, unwire_hooks, HOSTS
 from . import hook as host_hook
 from .paths import InstallPaths
 from .receipt import InstallReceipt, OwnedPath
-from .runtime import resolve_executable, run_codex
+from .runtime import resolve_executable, run_codex, run_codex_thread
 from .transaction import LifecycleLock, TransactionJournal
 
 def _paths(): return InstallPaths.for_home(Path.home())
@@ -253,7 +253,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="agents-inc")
     subs = parser.add_subparsers(dest="command", required=True)
     p = subs.add_parser("install"); p.add_argument("--source"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES)
-    p = subs.add_parser("run"); p.add_argument("--model", required=True); p.add_argument("--effort", default="medium"); p.add_argument("--cwd", required=True); p.add_argument("--tools", action="store_true"); p.add_argument("--no-tools", action="store_true"); p.add_argument("--write", action="store_true"); p.add_argument("--network", action="store_true"); p.add_argument("--run-dir"); p.add_argument("--lead", metavar="RUN_DIR"); p.add_argument("--home-repo")
+    p = subs.add_parser("run"); p.add_argument("--model", required=True); p.add_argument("--effort", default="medium"); p.add_argument("--cwd", required=True); p.add_argument("--tools", action="store_true"); p.add_argument("--no-tools", action="store_true"); p.add_argument("--host-tools", action="store_true", help="tools off; the caller's host runs the tools the model names (the agents-inc:luna type)"); p.add_argument("--write", action="store_true"); p.add_argument("--network", action="store_true"); p.add_argument("--run-dir"); p.add_argument("--lead", metavar="RUN_DIR"); p.add_argument("--home-repo"); p.add_argument("--thread", metavar="FILE", help="keep one Codex thread in FILE: start it when missing or empty, resume it otherwise")
     p = subs.add_parser("dispatch"); p.add_argument("--slots"); p.add_argument("--model"); p.add_argument("--effort"); p.add_argument("--cwd"); p.add_argument("--tier", choices=("grunt",)); p.add_argument("--run-dir"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--resume"); p.add_argument("--message"); p.add_argument("--home-repo"); p.add_argument("--serve", metavar="RUN_DIR"); p.add_argument("--poll-interval", type=float, default=1.0); p.add_argument("--idle-timeout", type=float, default=600.0); p.add_argument("--cancel", metavar="RUN_DIR"); p.add_argument("--wait", nargs=2, metavar=("RUN_DIR", "REQUEST_ID")); p.add_argument("--timeout", type=float, default=600.0)
     p = subs.add_parser("events", help="follow or redact live delegate events (spec 027)"); p.add_argument("verb", choices=("follow", "redact")); p.add_argument("run_dir", nargs="?")
     p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model")
@@ -263,10 +263,18 @@ def main(argv=None):
     p = subs.add_parser("ledger", add_help=False); p.add_argument("rest", nargs=argparse.REMAINDER)
     p = subs.add_parser("models"); p.add_argument("verb", nargs="?", choices=("bump", "chain")); p.add_argument("alias", nargs="?"); p.add_argument("slug", nargs="?"); p.add_argument("extra", nargs="*"); p.add_argument("--unpin", action="store_true"); p.add_argument("--clear", action="store_true")
     p = subs.add_parser("report", help="draft a bug report or feature request for agents_Inc; --submit files it"); p.add_argument("kind", choices=("bug", "feature")); p.add_argument("--title", required=True); p.add_argument("--body", required=True, help="text, or - to read stdin"); p.add_argument("--submit", action="store_true")
+    p = subs.add_parser("luna", help="the native agents-inc:luna subagent type (spec 028)"); p.add_argument("verb", choices=("status", "on", "off", "begin", "end")); p.add_argument("--json", action="store_true"); p.add_argument("--session"); p.add_argument("--agent"); p.add_argument("--cwd", default="."); p.add_argument("--outcome", choices=("done", "failed", "quota-paused", "aborted")); p.add_argument("--usage", help="JSON object of step usage sums (end)"); p.add_argument("--task", help="the Agent description (begin)")
     subs.add_parser("rollback"); p = subs.add_parser("uninstall"); p.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv); paths = _paths()
     try:
         if args.command == "install": return install(args)
+        if args.command == "luna":
+            from . import luna_native  # works before the receipt check: the mod asks at every session start
+            if args.verb in ("begin", "end"):
+                if not args.session or not args.agent: parser.error(f"luna {args.verb} needs --session and --agent")
+                if args.verb == "end" and not args.outcome: parser.error("luna end needs --outcome")
+                return luna_native.run_record(paths, args.verb, args.session, args.agent, args.cwd, args.outcome, args.usage, args.task)
+            return luna_native.run(paths, args.verb, args.json)
         if args.command == "dispatch":
             from . import dispatch  # works from a source checkout; Codex launch loads the receipt itself
             if args.cancel: return dispatch.cancel_run(args.cancel)
@@ -299,6 +307,8 @@ def main(argv=None):
             else:
                 print(" ".join(report.codes or ("READY",)))
                 print("agent gate: {} ({})".format(*host_hook.agent_gate_mode(paths)))
+                line = luna_line(paths)
+                if line: print(line)
                 for w in report.warnings: print(f"WARNING: {w}")
                 if "WB_CLI_NOT_FOUND" not in (*report.codes, *report.warnings):
                     print("NOTE: Codex delegates have no network by default; a dispatch opts in with "
@@ -322,7 +332,12 @@ def main(argv=None):
             if args.model in CLAUDE_MODELS:
                 print(f"Claude aliases go through: agents-inc dispatch --model {args.model} --effort {args.effort} --cwd {args.cwd}", file=sys.stderr)
                 return 2
-            return run_codex(args.model, args.effort, Path(args.cwd), sys.stdin, receipt, _efforts(paths.current.resolve()), args.no_tools, args.write, args.tools, Path(args.run_dir).resolve() if args.run_dir else None, lead_dir=Path(args.lead).resolve() if args.lead else None, home_repo=args.home_repo, network=args.network)
+            if args.thread and args.lead:
+                print("agents-inc run: --thread cannot be combined with --lead", file=sys.stderr)
+                return 2
+            if args.thread:
+                return run_codex_thread(Path(args.thread), args.model, args.effort, Path(args.cwd), sys.stdin, receipt, _efforts(paths.current.resolve()), args.no_tools, args.write, args.tools, Path(args.run_dir).resolve() if args.run_dir else None, home_repo=args.home_repo, network=args.network, host_tools=args.host_tools)
+            return run_codex(args.model, args.effort, Path(args.cwd), sys.stdin, receipt, _efforts(paths.current.resolve()), args.no_tools, args.write, args.tools, Path(args.run_dir).resolve() if args.run_dir else None, lead_dir=Path(args.lead).resolve() if args.lead else None, home_repo=args.home_repo, network=args.network, host_tools=args.host_tools)
         if args.command == "uninstall":
             if args.dry_run:
                 would_remove, would_retain = plan_uninstall(paths, receipt)

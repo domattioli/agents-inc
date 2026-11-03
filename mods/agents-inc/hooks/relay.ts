@@ -18,29 +18,36 @@ let sessionCwd = ''
 const isInside = (real: string | undefined, root: string | undefined): boolean =>
   real !== undefined && root !== undefined && (real === root || real.startsWith(root.replace(/\/$/, '') + '/'))
 
-export const register: Register = on => {
-  on('session.start', async ($, e, next) => {
-    sessionCwd = e.cwd
-    await $.agent.register({
-      name: 'relay',
-      description: 'Runs one agents-inc delegate and relays its live rows. Use only for agents-inc dispatch.',
-      prompt: RELAY_PROMPT,
-      tools: [TOOL],
-      model: 'haiku',
-      maxTurns: 3,
-    })
-    await $.tool.register({
-      name: 'run',
-      description: 'Run one agents-inc dispatch and stream its rows into the subagent transcript.',
-      inputSchema: {
-        type: 'object',
-        properties: { model: { type: 'string' }, slots: { type: 'string' }, effort: { type: 'string' } },
-        required: ['model', 'slots'],
-      },
-      isDeferred: false,
-    })
-    return next(e)
+// Called from mod.ts: a plugin's hooks.json names one module, and a module may register session.start once.
+export async function registerRelay(
+  $: {
+    agent: { register: (a: Record<string, unknown>) => Promise<unknown> }
+    tool: { register: (t: Record<string, unknown>) => Promise<unknown> }
+  },
+  e: { cwd: string },
+): Promise<void> {
+  sessionCwd = e.cwd
+  await $.agent.register({
+    name: 'relay',
+    description: 'Runs one agents-inc delegate and relays its live rows. Use only for agents-inc dispatch.',
+    prompt: RELAY_PROMPT,
+    tools: [TOOL],
+    model: 'haiku',
+    maxTurns: 3,
   })
+  await $.tool.register({
+    name: 'run',
+    description: 'Run one agents-inc dispatch and stream its rows into the subagent transcript.',
+    inputSchema: {
+      type: 'object',
+      properties: { model: { type: 'string' }, slots: { type: 'string' }, effort: { type: 'string' } },
+      required: ['model', 'slots'],
+    },
+    isDeferred: false,
+  })
+}
+
+export const register: Register = on => {
 
   on('tool.call', { tool: TOOL }, async ($, e, next) => {
     const agentId = e.agentId as string | undefined
