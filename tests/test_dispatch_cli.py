@@ -206,7 +206,7 @@ class DispatchCliTest(CliBase):
         rc, out, _ = self._launch("sonnet")
         spec = self._assert_launched(rc, out)
         rows = self._ledger_rows()
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 2)  # dispatched, then returned
         self.assertEqual((rows[0]["id"], rows[0]["status"], rows[0]["source"], rows[0]["model"]),
                          (spec["run_id"], "dispatched", "dispatch", "sonnet"))
         self.assertNotIn("ledger_error", spec)
@@ -216,6 +216,21 @@ class DispatchCliTest(CliBase):
             rc, out, _ = self._launch("sonnet")
         spec = self._assert_launched(rc, out)
         self.assertEqual(spec["ledger_error"], "ledger write failed")
+
+    def test_ledger_return_failure_does_not_change_outcome(self):
+        with mock.patch("agents_inc.host_ledger.record_dispatch_return", return_value=False):
+            rc, out, _ = self._launch("sonnet")
+        spec = self._assert_launched(rc, out)
+        self.assertEqual(spec["ledger_return_error"], "ledger write failed")
+        self.assertNotIn("ledger_error", spec)
+
+    def test_launched_run_also_leaves_a_returned_row(self):
+        rc, out, _ = self._launch("sonnet")
+        spec = self._assert_launched(rc, out)
+        rows = self._ledger_rows()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual((rows[1]["id"], rows[1]["status"]), (spec["run_id"], spec["outcome"]))
+        self.assertNotIn("ledger_return_error", spec)
 
     def test_dry_run_and_refusals_leave_no_ledger_row(self):
         self._main("--slots", str(self._slots()), "--model", "haiku", "--cwd", str(self.repo),
