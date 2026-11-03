@@ -167,7 +167,8 @@ def known_rung(text: str, model: str | None = None) -> str | None:
     return None
 
 # D48 fan-out line: `FAN_OUT: width <n>, total <n>, depth <n>`.
-FAN_OUT_RE = re.compile(r"^fan_out:\s*width\s+(\d+),\s*total\s+(\d+),\s*depth\s+(\d+)\s*$")
+FAN_OUT_RE = re.compile(r"^fan_out:\s*width\s+(\d+),\s*total\s+(\d+),\s*depth\s+(\d+)(?:[.;,]?\s.*)?$")
+MISSING_FORMS = {"fan-out": "FAN_OUT: width N, total N, depth N"}  # the key stays for callers; this is display text
 
 
 def _fan_out_line(ln: str) -> str:
@@ -448,6 +449,9 @@ def main() -> int:
         print("COMPLIANT")
     else:
         print(f"NON-COMPLIANT missing elements: {missing}")
+        for key, form in MISSING_FORMS.items():
+            if key in missing:
+                print(f"  {key}: expected `{form}`")
     lint_rc = run_handoff_lint(prompt_file, profile) if with_lint else 0
     return 1 if (missing or lint_rc) else 0
 

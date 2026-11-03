@@ -3,22 +3,40 @@ import json
 import sys
 import subprocess
 import os
+import re
 
-# luna only by default; astra/sol/terra are added by user config (roster.json / env map) once tested live.
-# The luna slug comes from agents_inc/routing.json (the single alias source, D-pin rule); the literal is a fallback.
+# All 4 seats by default (luna, terra, sol, astra), slugs from agents_inc/routing.json (the single alias source, D-pin rule);
+# the luna literal is the fallback. Roster / env-map overrides still replace a slug or add an alias.
 ROUTING = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "agents_inc", "routing.json")
+SEAT_TIERS = {"luna": "grunt", "terra": "workhorse", "sol": "orchestrator", "astra": "executive"}
+TIMEOUT_BY_EFFORT = {"high": 900, "xhigh": 1800}
+DEFAULT_TIMEOUT = 300
+EFFORTS = ["low", "medium", "high", "xhigh"]
+
+
+def _pinned_seats(path=ROUTING, fallback="gpt-6-luna"):
+    try:
+        with open(path) as fh:
+            tiers = json.load(fh)["tiers"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"luna": fallback}
+    seats = {}
+    for alias, tier in SEAT_TIERS.items():
+        try:
+            slug = tiers[tier]["codex"]
+        except (KeyError, TypeError):
+            continue
+        if isinstance(slug, str) and slug:
+            seats[alias] = slug
+    seats.setdefault("luna", fallback)
+    return seats
 
 
 def _pinned_luna(path=ROUTING, fallback="gpt-6-luna"):
-    try:
-        with open(path) as fh:
-            slug = json.load(fh)["tiers"]["grunt"]["codex"]
-        return slug if isinstance(slug, str) and slug else fallback
-    except (OSError, ValueError, KeyError, TypeError):
-        return fallback
+    return _pinned_seats(path, fallback)["luna"]
 
 
-DEFAULT_MODEL_MAP = {"luna": _pinned_luna()}
+DEFAULT_MODEL_MAP = _pinned_seats()
 
 
 def _read_map(raw):
@@ -100,6 +118,14 @@ def handle_tools_list(req_id):
                             },
                             "cwd": {
                                 "type": "string"
+                            },
+                            "effort": {
+                                "type": "string",
+                                "enum": EFFORTS
+                            },
+                            "conversation_id": {
+                                "type": "string",
+                                "description": "Thread id from a previous call; resumes that conversation"
                             }
                         },
                         "required": ["prompt"]
@@ -108,6 +134,21 @@ def handle_tools_list(req_id):
             ]
         }
     }
+
+AUTH_RE = re.compile(r"refresh|401|unauthorized|login|token", re.IGNORECASE)
+
+
+def _last_line(text):
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip() and not ln.startswith("CONVERSATION_ID=")]
+    return lines[-1] if lines else ""
+
+
+def _result(req_id, text, is_error=False):
+    res = {"content": [{"type": "text", "text": text}]}
+    if is_error:
+        res["isError"] = True
+    return {"jsonrpc": "2.0", "id": req_id, "result": res}
+
 
 def handle_tools_call(req_id, params):
     """Handle tools/call method."""
@@ -125,95 +166,60 @@ def handle_tools_call(req_id, params):
     prompt = args.get("prompt")
     model = args.get("model", "luna")
     cwd = args.get("cwd")
+    effort = args.get("effort")
+    conversation_id = args.get("conversation_id")
 
     if not prompt:
-        return {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Error: prompt required"
-                    }
-                ],
-                "isError": True
-            }
-        }
+        return _result(req_id, "Error: prompt required", True)
 
     # Resolve script path
     script_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(script_dir, "..", "scripts", "codexagent.sh")
 
-    cmd = [script_path, "--model", model, prompt]
+    cmd = [script_path, "--model", model]
+    if effort:
+        cmd += ["--effort", str(effort)]
+    if conversation_id:
+        cmd += ["--resume", str(conversation_id)]
+    cmd.append(prompt)
+
+    limit = TIMEOUT_BY_EFFORT.get(effort, DEFAULT_TIMEOUT)
+    env = dict(os.environ, CODEXAGENT_TIMEOUT=str(limit))
 
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=limit + 30,
             cwd=cwd,
+            env=env,
             stdin=subprocess.DEVNULL
         )
-
-        if result.returncode == 0:
-            return {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": result.stdout
-                        }
-                    ]
-                }
-            }
-        else:
-            error_msg = result.stderr if result.stderr else f"Exit code {result.returncode}"
-            return {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": error_msg
-                        }
-                    ],
-                    "isError": True
-                }
-            }
-
     except subprocess.TimeoutExpired:
-        return {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Error: timeout"
-                    }
-                ],
-                "isError": True
-            }
-        }
+        return _result(req_id, "Error: timeout after %ds (effort %s)" % (limit, effort or "default"), True)
     except Exception as e:
-        return {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Error: {str(e)}"
-                    }
-                ],
-                "isError": True
-            }
-        }
+        return _result(req_id, f"Error: {str(e)}", True)
+
+    stderr = result.stderr or ""
+    last = _last_line(stderr)
+    if result.returncode != 0 or not (result.stdout or "").strip():
+        if result.returncode != 0:
+            msg = "Error: codex exited %d" % result.returncode
+        else:
+            msg = "Error: empty result from codex (exit 0)"
+        if last:
+            msg += ": " + last
+        if AUTH_RE.search(stderr):
+            msg += ". Codex login failed; run `codex login` in a terminal"
+        return _result(req_id, msg, True)
+
+    content = [{"type": "text", "text": result.stdout}]
+    for line in stderr.splitlines():
+        if line.startswith("CONVERSATION_ID="):
+            content.append({"type": "text", "text": "conversation_id: " + line.split("=", 1)[1].strip()})
+    return {"jsonrpc": "2.0", "id": req_id, "result": {"content": content}}
+
 
 def main():
     """Main JSON-RPC server loop."""

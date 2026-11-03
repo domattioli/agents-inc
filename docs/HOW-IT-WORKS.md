@@ -380,8 +380,8 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
 - Roster
   - The installer creates an empty `~/.config/agents-inc/roster.json`. Model aliases there or in `AGENTS_INC_MODEL_MAP` (JSON object or file path) override the built-in slugs.
 - DelegateAgent MCP server
-  - `skills/codex-bridge/mcp/codex_agent_mcp.py` exposes a `DelegateAgent` tool that forwards a prompt to Codex. Only `luna` is exposed by default; add others through the roster, `AGENTS_INC_MODEL_MAP` or `CODEXAGENT_MODEL_MAP` after a live test.
-  - `bash skills/codex-bridge/mcp/install.sh` prints the registration command; `--apply` runs it. Offline check: `bash skills/codex-bridge/mcp/tests/smoke_mcp.sh --offline`.
+  - `skills/codex-bridge/mcp/codex_agent_mcp.py` exposes a `DelegateAgent` tool that forwards a prompt to Codex. All four seats (`luna`, `terra`, `sol`, `astra`) are exposed by default, with slugs from `routing.json`. The tool takes `effort` (low to xhigh; high and xhigh get longer time limits) and `conversation_id` to resume a thread. An empty or failed Codex run is an error, never a silent success. Roster, `AGENTS_INC_MODEL_MAP` or `CODEXAGENT_MODEL_MAP` still override a slug or add an alias.
+  - The server ships with the agents-inc mod, so `agents-inc install` registers it; no separate step. `skills/codex-bridge/mcp/install.sh` is deprecated and only prints how to remove an old user-scope entry. Offline check: `bash skills/codex-bridge/mcp/tests/smoke_mcp.sh --offline`.
 
 ## Status detail
 

@@ -6,8 +6,17 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The DelegateAgent MCP server offers all four Codex seats (`luna`, `terra`, `sol`, `astra`) by default, takes `effort` and `conversation_id` (resume), and ships with the agents-inc mod, so `agents-inc install` needs no extra setup. Reinstall refreshes an installed mod, and `agents-inc doctor` warns about an old user-scope `delegate-agent` entry (spec 031, #127)
+
+### Changed
+
+- The FAN_OUT lint accepts trailing prose after `depth N` and prints the expected form on failure. The consensus-debate skill lists the DelegateAgent route before the shell line, checks for empty output, and its brief template carries GOAL, CONSTRAINTS, DONE, OUT OF SCOPE and STOP ON BLOCK (spec 031)
+
 ### Fixed
 
+- An empty or failed Codex result from DelegateAgent is an error that quotes the last stderr line, with a `codex login` hint on auth failures (spec 031)
 - The Zenodo deposit script runs without `PYTHONPATH`.
 
 ## [0.5.0] — 2026-10-26

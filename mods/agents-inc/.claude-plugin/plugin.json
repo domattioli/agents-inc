@@ -1,5 +1,11 @@
 {
   "name": "agents-inc",
-  "version": "0.1.0",
-  "description": "Live view of agents-inc delegates: a relay subagent whose transcript shows the delegate's events."
+  "version": "0.2.0",
+  "description": "Live view of agents-inc delegates: a relay subagent whose transcript shows the delegate's events.",
+  "mcpServers": {
+    "delegate-agent": {
+      "command": "sh",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/delegate_agent.sh"]
+    }
+  }
 }

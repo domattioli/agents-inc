@@ -104,7 +104,15 @@ def install_mod(paths: InstallPaths, notices: list) -> None:
     mod = paths.current / "mods/agents-inc"
     if not (mod / ".claude-plugin/plugin.json").is_file(): return
     listed = _claude(paths.home, "plugin", "list")
-    if listed is None or MOD_PLUGIN in (listed.stdout or ""): return
+    if listed is None: return
+    if MOD_PLUGIN in (listed.stdout or ""):
+        # Spec 031 FR-014: refresh an installed plugin so a new manifest (mcpServers) reaches it. Warning only on failure.
+        for argv in (("plugin", "marketplace", "update", MOD_MARKETPLACE), ("plugin", "update", MOD_PLUGIN)):
+            done = _claude(paths.home, *argv, timeout=300)
+            if done is None or done.returncode != 0:
+                notices.append(f"warning: `claude {' '.join(argv)}` failed; the mod may be out of date")
+                return
+        return
     added = _claude(paths.home, "plugin", "marketplace", "add", str(mod.resolve()))
     done = _claude(paths.home, "plugin", "install", MOD_PLUGIN) if added is not None and added.returncode == 0 else added
     if done is None or done.returncode != 0:
