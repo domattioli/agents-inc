@@ -30,6 +30,11 @@ _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 from dispatch_rungs import ALIAS_VENDOR, FAN_OUT_BY_RUNG, LADDER, MODEL_RUNG  # noqa: E402
+import dispatch_schema  # noqa: E402  (#131: loaded from this directory, so a pinned copy is the one that runs)
+
+# #131 (H7): one fixed line after CONSTRAINTS, so the stop-on-block clause never depends on the slot author.
+STOP_ON_BLOCK_LINE = ("STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call, stop and hand back "
+                      "to the dispatcher; never switch to another tool to route around the block.")
 
 
 # 026 US4 (#109): C0 controls except tab, LF and CR, DEL, and bidirectional controls never reach a prompt.
@@ -368,6 +373,18 @@ def main() -> int:
         print(f"render: slot {hit[0]} has control character {hit[1]} at offset {hit[2]}", file=sys.stderr)
         return 2
 
+    # #131: dispatch_record.v1. Old string forms are converted for the check only; the text that renders is unchanged.
+    checked, converted = dispatch_schema.normalize(slots_data)
+    errors = dispatch_schema.validate_record(checked, model=model)
+    if errors:
+        for err in errors:
+            print(f"dispatch_record.v1 invalid: {err}", file=sys.stderr)
+        return 2
+    for name in ("FILES_IN_SCOPE", "ALLOWLIST", "FAN_OUT"):
+        if name in slots_data and not isinstance(slots_data[name], str):
+            slots_data[name] = dispatch_schema.slot_text(name, slots_data[name])
+    slots_data.pop("schema_version", None)
+
     # Determine default paths relative to script directory
     script_dir = Path(__file__).resolve().parent.parent
     if header_path is None:
@@ -433,6 +450,8 @@ def main() -> int:
             filled.append(slot)
     if filled:
         print("defaults filled: " + ", ".join(filled), file=sys.stderr)
+    if converted:
+        print("normalized: " + ", ".join(converted), file=sys.stderr)
 
     missing = []
     for slot in sorted(required_slots):
@@ -469,6 +488,12 @@ def main() -> int:
             if "{{" in line:
                 print(f"Unfilled placeholder in: {line}", file=sys.stderr)
         return 2
+
+    # #131: the fixed STOP ON BLOCK line goes just before OUT OF SCOPE, which follows CONSTRAINTS in the template.
+    out_lines = result.splitlines(keepends=True)
+    at = next((n for n, ln in enumerate(out_lines) if ln.startswith("OUT OF SCOPE:")), len(out_lines))
+    out_lines.insert(at, STOP_ON_BLOCK_LINE + "\n")
+    result = "".join(out_lines)
 
     # A top-rung supervisor is also the executive: drop the "X reports to X" link.
     result = re.sub(r"(?m)(REPORTING CHAIN: .*?)(\S+) reports to \2; ", r"\1", result)

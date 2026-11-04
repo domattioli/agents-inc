@@ -8,6 +8,7 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- `dispatch_record.v1`: `render_dispatch.py` validates every `--slots` file with a stdlib schema (`dispatch_schema.py`, pinned per run), accepts structured `FILES_IN_SCOPE`, `ALLOWLIST` and `FAN_OUT`, always emits a `STOP ON BLOCK:` line, and `run.json` and the `dispatched` ledger row carry `slots_sha256` (#131, D70).
 - The DelegateAgent MCP server offers all four Codex seats (`luna`, `terra`, `sol`, `astra`) by default, takes `effort` and `conversation_id` (resume), and ships with the agents-inc mod, so `agents-inc install` needs no extra setup. Reinstall refreshes an installed mod, and `agents-inc doctor` warns about an old user-scope `delegate-agent` entry (spec 031, #127)
 
 ### Changed
