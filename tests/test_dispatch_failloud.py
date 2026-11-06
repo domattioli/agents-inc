@@ -225,7 +225,8 @@ class CallerSandboxTest(DispatchBase):
     def test_launch_refuses_before_any_child(self):
         run_dir = self.root / "rd"
         run_dir.mkdir()
-        with self._sandboxed(), mock.patch.object(dispatch.subprocess, "Popen") as popen:
+        with self._sandboxed(), mock.patch.object(dispatch, "api_reachable", return_value=False), \
+                mock.patch.object(dispatch.subprocess, "Popen") as popen:
             for kind, model in (("claude", "sonnet"), ("codex", "luna")):
                 with self.subTest(kind=kind), self.assertRaises(dispatch.CallerSandboxed):
                     dispatch.launch(kind, model, None, self.repo, "p", run_dir)

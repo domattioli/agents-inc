@@ -370,12 +370,20 @@ CLAUDE_WORKER_DENY = (".ssh", ".config", ".codex-bridge", ".codex", ".local", ".
 WORKER_SETTINGS = '{"sandbox": {"enabled": false}}'
 # #94: AGENTS_INC_ALLOW_SANDBOXED=1 lets dispatch start inside another sandbox (tests, a caller that knows better).
 ALLOW_SANDBOXED_ENV = "AGENTS_INC_ALLOW_SANDBOXED"
-SANDBOX_FIX = ('add "agents-inc *" to sandbox.excludedCommands; rerun as one plain command (no env prefix, cd or &&); '
-               "do not retry unchanged")
+SANDBOX_FIX = ('do not retry unchanged; two routes: (a) rerun as one plain command with no cd, &&, ;, pipe, redirect, heredoc or $(...) '
+               '(add "agents-inc *" to sandbox.excludedCommands); (b) for Claude rungs set '
+               'sandbox.network.allowedDomains ["api.anthropic.com"] in ~/.claude/settings.json')
+CODEX_NESTED_FIX = "Codex cannot nest a sandbox (rc 71); run as one plain `agents-inc ...` command"
+PROBE_HOST, PROBE_TIMEOUT = "api.anthropic.com", 2.0
+_SANDBOX_NOTE: dict = {}  # run.json fields launch() sets when it proceeds inside a Claude Code sandbox
 
 
 class CallerSandboxed(RuntimeError):
     """#94: dispatch itself runs inside another sandbox: the delegate would lose its network, so no child starts."""
+
+    def __init__(self, where="", fix=None, code="caller-sandboxed"):
+        super().__init__(where)
+        self.fix, self.code = fix, code
 
 
 def caller_sandbox(env=None) -> str | None:
@@ -388,6 +396,37 @@ def caller_sandbox(env=None) -> str | None:
     if env.get("CODEX_SANDBOX"):
         return "CODEX_SANDBOX is set (Codex sandbox)"
     return None
+
+
+def api_reachable(env=None, timeout: float = PROBE_TIMEOUT, target: str = PROBE_HOST, port: int = 443) -> bool:
+    """HTTP CONNECT to target:port through HTTPS_PROXY. True only on a 200 status line; anything else is False."""
+    import base64 as _b64, socket, urllib.parse
+    env = os.environ if env is None else env
+    raw = env.get("HTTPS_PROXY") or env.get("https_proxy")
+    if not raw:
+        return False
+    try:
+        u = urllib.parse.urlsplit(raw if "//" in raw else "//" + raw)
+        host, pport = u.hostname, u.port
+        if not host or not pport:
+            return False
+        head = f"CONNECT {target}:{port} HTTP/1.1\r\nHost: {target}:{port}\r\n"
+        if u.username is not None:
+            cred = f"{urllib.parse.unquote(u.username)}:{urllib.parse.unquote(u.password or '')}"
+            head += "Proxy-Authorization: Basic " + _b64.b64encode(cred.encode()).decode() + "\r\n"
+        with socket.create_connection((host, pport), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall((head + "\r\n").encode())
+            buf = b""
+            while b"\n" not in buf and len(buf) < 4096:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    break
+                buf += chunk
+        parts = buf.split(b"\n", 1)[0].decode("latin-1").split()
+        return len(parts) >= 2 and parts[1] == "200"
+    except Exception:
+        return False
 
 
 def worker_env(exe: str, base: dict | None = None) -> dict:
@@ -694,8 +733,13 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
     lead_dir (#68, D60): run a Codex or Claude delegate as a Lead with the broker MCP tools over that run directory."""
     if not _BROKER_SAFE_WRITES:
         where = caller_sandbox()
+        _SANDBOX_NOTE.clear()
         if where:
-            raise CallerSandboxed(where)
+            if not where.startswith("SANDBOX_RUNTIME") or not api_reachable():
+                raise CallerSandboxed(where)
+            if kind != "claude":
+                raise CallerSandboxed(where, CODEX_NESTED_FIX, "caller-sandboxed-codex")
+            _SANDBOX_NOTE.update({"caller_sandbox": "claude-code", "api": "reachable"})
     channel = _ask_channel(run_dir, _WORKER_ASK) if (_BROKER_SAFE_WRITES and _WORKER_ASK) else None
     if kind == "claude":
         if lead_dir is not None and channel is not None:
@@ -726,6 +770,8 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
                 + ((channel["script"], channel["config"]) if channel else ())))
             argv += ["--settings", WORKER_SETTINGS]
             argv = [SANDBOX_EXEC, "-f", str(profile)] + argv
+        elif _SANDBOX_NOTE:
+            argv += ["--settings", WORKER_SETTINGS]
         limit = _turn_timeout()
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 cwd=str(cwd), text=True, start_new_session=True, **extra)
@@ -1220,7 +1266,7 @@ def _red_before_run(spec: dict, run_dir: Path, reason: str, detail: str, home_re
 def _launch_failed(spec: dict, run_dir: Path, exc: Exception, home_repo: str | None, out_name: str = "stdout.md") -> int:
     """022 FR-009: launch() raised, so no child ran. Record red/launch-failed, print one status line, return 1."""
     if isinstance(exc, CallerSandboxed):  # #94: blocked, exit 69, the fix in the detail
-        return _red_before_run(spec, run_dir, "blocked", f"caller-sandboxed: {exc}; {SANDBOX_FIX}", home_repo, out_name,
+        return _red_before_run(spec, run_dir, "blocked", f"{exc.code}: {exc}; {exc.fix or SANDBOX_FIX}", home_repo, out_name,
                                code=EXIT_BLOCKED)
     return _red_before_run(spec, run_dir, "launch-failed", f"{type(exc).__name__}: {exc}", home_repo, out_name)
 
@@ -1603,6 +1649,7 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
                            if kind == "claude" else {}))
     except Exception as exc:
         return _launch_failed(spec, run_dir, exc, getattr(args, "home_repo", None))
+    spec.update(_SANDBOX_NOTE)
     if lead_dir is not None:
         _record_lead(spec, lead_dir)
     out_path = run_dir / "stdout.md"
