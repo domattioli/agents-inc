@@ -98,6 +98,23 @@ def _quickref_text(paths: InstallPaths, payload: dict) -> str:
     try: return f"{QUICKREF_HEADER}\n\n{source.read_text(encoding='utf-8')}"
     except OSError: return f"agents-inc quickref missing: {source} not found; read skills/workerbee/SKILL.md before dispatching."
 
+COMPOUND_DISPATCH_RE = re.compile(r"agents-inc\s+(?:dispatch|run|luna)\b")
+COMPOUND_MARKERS = ("&&", ";", "|", "cd ", "<<", ">", "$(")
+COMPOUND_DENY_REASON = ("agents-inc must be the whole Bash call. Write the slots file in one call, dispatch in the next. "
+                        "Never set dangerouslyDisableSandbox.")
+
+def compound_deny(payload: object) -> str:
+    """Deny a Bash call that wraps an agents-inc dispatch in a compound command. Fails open on anything unexpected."""
+    try:
+        if not isinstance(payload, dict) or payload.get("tool_name") != "Bash": return ""
+        command = str(_tool_input(payload).get("command") or "")
+        if not COMPOUND_DISPATCH_RE.search(command): return ""
+        if not any(m in command for m in COMPOUND_MARKERS): return ""
+        return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                  "permissionDecisionReason": COMPOUND_DENY_REASON}})
+    except Exception:
+        return ""
+
 def agent_nudge(paths: InstallPaths, payload: dict) -> str:
     """Once per session, so a run of subagent spawns is not flooded with the same reminder."""
     return _context(_nudge_text(paths, payload))
@@ -251,7 +268,8 @@ def run(paths: InstallPaths, event: str, host: str | None, stdin=sys.stdin) -> i
         if event == "session-start": out = session_start(paths, host or "claude")
         elif event == "agent-nudge":
             payload = _payload(stdin)
-            if _is_dispatch(payload):  # the Bash matcher sees every command; only dispatch-shaped calls get context
+            out = compound_deny(payload)
+            if not out and _is_dispatch(payload):  # the Bash matcher sees every command; only dispatch-shaped calls get context
                 nudge = _nudge_text(paths, payload) if payload.get("tool_name") in AGENT_TOOLS else ""  # NUDGE wording is Agent-only
                 out = persona_deny(payload) or gate_deny(paths, payload) or _context(nudge, _quickref_text(paths, payload), duplicate_check(paths, payload))
         elif event == "agent-done": agent_done(paths, _payload(stdin))

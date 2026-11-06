@@ -69,8 +69,12 @@ def _sandbox_exclusion(paths: InstallPaths) -> list[str]:
     except (OSError, ValueError): return []
     sandbox = data.get("sandbox") if isinstance(data, dict) else None
     excluded = sandbox.get("excludedCommands", []) if isinstance(sandbox, dict) else []
-    if any(isinstance(e, str) and e.split()[:1] == ["agents-inc"] for e in excluded): return []
-    return ["WB_SANDBOX_EXCLUDE_MISSING"]
+    out = []
+    if not any(isinstance(e, str) and e.split()[:1] == ["agents-inc"] for e in excluded): out.append("WB_SANDBOX_EXCLUDE_MISSING")
+    network = sandbox.get("network") if isinstance(sandbox, dict) else None
+    domains = network.get("allowedDomains", []) if isinstance(network, dict) else []
+    if not isinstance(domains, list) or "api.anthropic.com" not in domains: out.append("WB_SANDBOX_API_DOMAIN_MISSING")
+    return out
 
 def _mod_missing(release: Path, home: Path, runner, which) -> list[str]:
     """Spec 027: the release ships the live-view mod but Claude Code does not list it. Warning only; READY stays."""
