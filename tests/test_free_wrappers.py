@@ -101,6 +101,7 @@ fi
 
     # Set up environment
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
     existing_path = os.environ.get("PATH", "")
     monkeypatch.setenv("PATH", f"{shimdir}:{existing_path}")
     monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
@@ -424,6 +425,64 @@ class TestWrapperExecution:
 
         # Should fail due to connection failure (proxy)
         assert result.returncode != 0
+
+
+# === Spec 029 FR-001: wrapper temp files ===
+
+class TestWrapperTempFiles:
+    """Wrappers write no fixed /tmp names; their temp files are unique and removed."""
+
+    SCRIPTS = ("oask.sh", "mask.sh", "gask.sh")
+
+    def _run(self, repo_root, name, tmpdir, monkeypatch):
+        monkeypatch.setenv("TMPDIR", str(tmpdir))
+        monkeypatch.setenv("SHIM_STATUS", "200")
+        # mask.sh goes through the proxy so it fails fast without network.
+        monkeypatch.setenv("https_proxy", "http://127.0.0.1:9")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+        return subprocess.run(
+            ["bash", str(repo_root / "skills" / "codex-bridge" / "scripts" / name), "test prompt"],
+            env=os.environ.copy(),
+            cwd=str(repo_root),
+            timeout=30,
+            capture_output=True,
+            text=True
+        )
+
+    def test_no_fixed_tmp_names(self, repo_root):
+        """T003: no script holds a /tmp/<name>report_err or /tmp/<name>response literal."""
+        import re
+        pattern = re.compile(r"/tmp/[a-z_]+(report_err|response)")
+        for name in self.SCRIPTS:
+            text = (repo_root / "skills" / "codex-bridge" / "scripts" / name).read_text()
+            assert not pattern.search(text), f"{name} still writes a fixed /tmp name"
+
+    def test_temp_dir_empty_after_run(self, wrapper_env, repo_root, monkeypatch):
+        """T004: each wrapper leaves its own TMPDIR empty on exit."""
+        tmp_path, shimdir = wrapper_env
+        tmpdir = tmp_path / "t"
+        for name in self.SCRIPTS:
+            tmpdir.mkdir(exist_ok=True)
+            self._run(repo_root, name, tmpdir, monkeypatch)
+            assert list(tmpdir.iterdir()) == [], f"{name} left files in TMPDIR"
+
+    def test_unwritable_temp_dir_fails_clean(self, wrapper_env, repo_root, monkeypatch):
+        """T005: an unwritable TMPDIR fails before the request: non-zero, no traceback, no files."""
+        import unittest
+        tmp_path, shimdir = wrapper_env
+        tmpdir = tmp_path / "ro"
+        tmpdir.mkdir()
+        tmpdir.chmod(0o500)
+        try:
+            if os.access(tmpdir, os.W_OK):
+                raise unittest.SkipTest("chmod 0o500 does not block writes for this user")
+            for name in self.SCRIPTS:
+                result = self._run(repo_root, name, tmpdir, monkeypatch)
+                assert result.returncode != 0, f"{name} exited 0 with unwritable TMPDIR"
+                assert "Traceback" not in result.stderr, f"{name} traceback: {result.stderr}"
+                assert list(tmpdir.iterdir()) == [], f"{name} left files in TMPDIR"
+        finally:
+            tmpdir.chmod(0o700)
 
 
 def load_tests(loader, tests, pattern):

@@ -117,6 +117,53 @@ class HostWiringTest(unittest.TestCase):
         self.assertIn('sandbox.excludedCommands: agents-inc *', removed)
         self.assertNotIn("sandbox", json.loads((self.home / ".claude/settings.json").read_text()))
 
+    def test_claude_host_gets_allow_rule_once(self):
+        from agents_inc.install.host_wiring import HOSTS, add_hooks
+        claude = next(h for h in HOSTS if h.name == "claude")
+        seed = {"permissions": {"allow": ["Bash(git status)"], "deny": ["Bash(rm *)"]}}
+        config = add_hooks(json.loads(json.dumps(seed)), self.paths, claude)
+        config = add_hooks(config, self.paths, claude)
+        self.assertEqual(config["permissions"]["allow"].count("Bash(agents-inc *)"), 1)
+        self.assertEqual(config["permissions"]["allow"], ["Bash(git status)", "Bash(agents-inc *)"])
+        self.assertEqual(config["permissions"]["deny"], ["Bash(rm *)"])
+        codex = next(h for h in HOSTS if h.name == "codex")
+        self.assertNotIn("permissions", add_hooks({}, self.paths, codex))
+
+    def test_no_host_wiring_leaves_settings_without_allow_rule(self):
+        import argparse
+        from unittest import mock
+        from agents_inc.install import cli
+        source = Path(self.tmp.name) / "source"; (source / "agents_inc").mkdir(parents=True)
+        (source / "agents_inc" / "models.json").write_text("{}")
+        for name in ("workerbee", "codex-bridge"):
+            (source / "skills" / name).mkdir(parents=True); (source / "skills" / name / "SKILL.md").write_text("x")
+        self._hosts("claude")
+        settings = self.home / ".claude/settings.json"
+        settings.write_text(json.dumps({"permissions": {"allow": ["Bash(git status)"]}}))
+        before = settings.read_bytes()
+        args = argparse.Namespace(source=str(source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=True, no_mod=True)
+        with mock.patch.object(cli, "_paths", return_value=self.paths):
+            self.assertEqual(cli.install(args), 0)
+        self.assertEqual(settings.read_bytes(), before)
+        self.assertNotIn("Bash(agents-inc *)", settings.read_text())
+
+    def test_uninstall_removes_only_our_allow_rule(self):
+        from agents_inc.install.host_wiring import unwire_hooks
+        self._hosts("claude")
+        settings = self.home / ".claude/settings.json"
+        seed = ["Bash(git status)", "Bash(agents-inc doctor)"]
+        settings.write_text(json.dumps({"permissions": {"allow": list(seed)}}))
+        receipt = install_host_wiring(self.paths, _receipt())
+        self.assertIn("Bash(agents-inc *)", json.loads(settings.read_text())["permissions"]["allow"])
+        remove_host_wiring(self.paths, receipt)
+        self.assertEqual(json.loads(settings.read_text())["permissions"]["allow"], seed)
+        settings.write_text("{}")
+        receipt = install_host_wiring(self.paths, _receipt())
+        remove_host_wiring(self.paths, receipt)
+        self.assertNotIn("permissions", json.loads(settings.read_text()))
+        install_host_wiring(self.paths, _receipt())
+        self.assertIn("permissions.allow: Bash(agents-inc *)", unwire_hooks(self.paths, "claude"))
+
     def test_bash_nudge_handlers_carry_if_filters(self):
         from agents_inc.install.host_wiring import HOSTS, add_hooks, hook_command
         claude = next(h for h in HOSTS if h.name == "claude")

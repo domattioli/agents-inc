@@ -93,6 +93,7 @@ def _legacy(command: object, paths: InstallPaths) -> bool:
 def strip_hooks(config: dict, paths: InstallPaths, legacy: bool = False) -> dict:
     """Drop owned entries; with legacy=True (install/repair only) also drop the pre-013 at_route line."""
     strip_sandbox_exclusion(config)
+    strip_allow_rule(config)
     hooks = config.get("hooks")
     if not isinstance(hooks, dict): return config
     def drop(h): return isinstance(h, dict) and (_owned(h.get("command"), paths) or (legacy and _legacy(h.get("command"), paths)))
@@ -126,6 +127,25 @@ def strip_sandbox_exclusion(config: dict) -> dict:
     if not sandbox: del config["sandbox"]
     return config
 
+ALLOW_RULE = "Bash(agents-inc *)"  # spec 029: the operator session may run agents-inc without a prompt; delegate tool grants are unchanged
+
+def add_allow_rule(config: dict) -> dict:
+    """Claude host only: list `Bash(agents-inc *)` under permissions.allow. Other entries are left as they are."""
+    permissions = config.setdefault("permissions", {})
+    if not isinstance(permissions, dict): return config
+    allow = permissions.setdefault("allow", [])
+    if isinstance(allow, list) and ALLOW_RULE not in allow: allow.append(ALLOW_RULE)
+    return config
+
+def strip_allow_rule(config: dict) -> dict:
+    """Remove only our rule; drop the keys we created when nothing else is left in them."""
+    permissions = config.get("permissions")
+    if not isinstance(permissions, dict) or not isinstance(permissions.get("allow"), list): return config
+    permissions["allow"] = [e for e in permissions["allow"] if e != ALLOW_RULE]
+    if not permissions["allow"]: del permissions["allow"]
+    if not permissions: del config["permissions"]
+    return config
+
 def add_hooks(config: dict, paths: InstallPaths, host: Host) -> dict:
     config = strip_hooks(config, paths, legacy=True)
     hooks = config.setdefault("hooks", {})
@@ -141,7 +161,7 @@ def add_hooks(config: dict, paths: InstallPaths, host: Host) -> dict:
         hooks["PostToolUse"].append({"matcher": "mcp__.*__DelegateAgent", "hooks": [{"type": "command", "command": hook_command(paths, "agent-done"), "timeout": 5}]})
     if host.prompt_hook:  # timeout above the hook's own 120 s alarm
         hooks.setdefault("UserPromptSubmit", []).append({"hooks": [{"type": "command", "command": at_route_command(paths), "timeout": 130}]})
-    if host.name == "claude": add_sandbox_exclusion(config)
+    if host.name == "claude": add_sandbox_exclusion(config); add_allow_rule(config)
     return config
 
 def gemini_reads_agents_md(config: dict) -> dict:
@@ -235,6 +255,8 @@ def unwire_hooks(paths: InstallPaths, host_name: str) -> list[str]:
                         if isinstance(h, dict) and _owned(h.get("command"), paths)]
     if SANDBOX_EXCLUDE in ((config.get("sandbox") or {}).get("excludedCommands") or []):
         removed.append(f"sandbox.excludedCommands: {SANDBOX_EXCLUDE}")
+    if ALLOW_RULE in ((config.get("permissions") or {}).get("allow") or []):
+        removed.append(f"permissions.allow: {ALLOW_RULE}")
     if not removed: return []
     write_file(target, _dump_json(strip_hooks(config, paths)), paths)
     return removed

@@ -699,6 +699,7 @@ then reported "no files outside scope touched".
    edits. Nested delegation: commit/push authority stays w/ Chief of Staff
    only, never inherited downward — delegate w/ own children integrates
    their output in-tree + reports, does not commit.
+   A Codex delegate (astra, sol, terra, luna) cannot read a path outside --cwd; paste the needed excerpts into the prompt.
    **The allowlist is a hard lock and is opt-in** — it binds only when the
    dispatch actually carries one. An operator naming a model without an
    allowlist is a top-level assignment (downward within Claude is free),
@@ -990,6 +991,7 @@ id, saved stdout/stderr, transient-failure retries, and a provider-neutral
 | Dispatch exits 69 with `detail=caller-sandboxed` | Add `"agents-inc *"` to `sandbox.excludedCommands` and rerun as one plain command (no env prefix, `cd` or `&&`). Not `dangerouslyDisableSandbox` (auto mode refuses it) and not `AGENTS_INC_ALLOW_SANDBOXED=1` for Codex (nested sandbox, rc 71). Never retry unchanged (D65, D66) |
 | Operator changes the premise mid-flight | Kill the running delegate before it reports against the old one |
 | Delegate needs to commit under `workspace-write` | Expect `Operation not permitted`. Land the commit yourself |
+| gh fails with `x509: OSStatus -26276` in sandboxed Bash (#122) | Cause outside this repo, not confirmed (suspected: sandbox proxy CA vs macOS keychain trust). Use the GitHub MCP tools, or run gh outside the sandbox. Do not retry gh unchanged. `doctor --probe-dispatch` reports `WB_GITHUB_CERT`. Upstream: none filed yet |
 | Non-Claude vendor chosen with no Step 0.5 gate line stated | Non-compliant dispatch. Do not send it |
 | Async submit with no `watch.sh` line emitted in the same turn | Non-compliant (Step 3b). Emit it before moving on |
 

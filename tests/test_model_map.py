@@ -66,7 +66,7 @@ class ModelMapTest(unittest.TestCase):
         stub = Path(self.tmp.name) / "bin"; stub.mkdir()
         (stub / "codex").write_text('#!/bin/bash\nprintf "%s " "$@" > "$STUB_OUT"\nfor a in "$@"; do [ "$prev" = "-o" ] && echo ok > "$a"; prev="$a"; done\n')
         (stub / "codex").chmod(0o755)
-        env = {"PATH": f"{stub}:{os.path.dirname(sys.executable)}:/usr/bin:/bin", "HOME": self.tmp.name, "STUB_OUT": str(Path(self.tmp.name) / "out")}
+        env = {"PATH": f"{stub}:{os.path.dirname(sys.executable)}:/usr/bin:/bin", "HOME": self.tmp.name, "TMPDIR": self.tmp.name, "STUB_OUT": str(Path(self.tmp.name) / "out")}
         bad = subprocess.run(["/bin/bash", str(root), "--model", "nope", "hi"], env=env, capture_output=True, text=True)
         self.assertEqual(bad.returncode, 1); self.assertIn("invalid model", bad.stderr)
         dflt = subprocess.run(["/bin/bash", str(root), "--model", "terra", "hi"], env=env, capture_output=True, text=True)

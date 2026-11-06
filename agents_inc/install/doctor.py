@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,13 +17,22 @@ from .paths import InstallPaths
 from .receipt import InstallReceipt
 from .runtime import MODEL_ALIASES, build_codex_argv, is_temp_or_shim_path
 
+PROBE_HOSTS = ("api.anthropic.com", "api.github.com")
+PROBE_HOST_TIMEOUT = 5  # per host, sequential in the child
+PROBE_CHILD_TIMEOUT = 12  # 2 x PROBE_HOST_TIMEOUT plus start; with GH_TIMEOUT the worst case stays under 20 s (SC-005)
+GH_TIMEOUT = 6
+
 @dataclass(frozen=True)
 class DoctorReport:
     ready: bool
     codes: tuple[str, ...]
     live: dict | None = None
     warnings: tuple[str, ...] = ()  # non-fatal; never affects `ready` or the CLI exit code
-    def as_dict(self): return {"ready": self.ready, "codes": list(self.codes), "live": self.live, "warnings": list(self.warnings)}
+    probe: dict | None = None  # --probe-dispatch: {host: {"status": reachable|blocked|cert, "elapsed", "fix"}}
+    def as_dict(self):
+        out = {"ready": self.ready, "codes": list(self.codes), "live": self.live, "warnings": list(self.warnings)}
+        if self.probe is not None: out["probe"] = self.probe  # keyed only when asked, so the plain --json shape stays pinned
+        return out
 
 def _hook_drift(paths: InstallPaths) -> list[str]:
     """Warn when the installed at_route hook differs from the source checkout it came from."""
@@ -106,9 +116,50 @@ def luna_line(paths: InstallPaths) -> str | None:
     from . import luna_native
     return luna_native.doctor_line(report)
 
+def _probe_dispatch(runner, which) -> dict:
+    """Spec 029: a child with the Worker env tries both hosts; `gh` runs in the caller env (#122). Fails closed to blocked."""
+    from .dispatch import worker_env  # lazy, like check_install
+    argv = [sys.executable, str(Path(__file__).with_name("netprobe.py")), *PROBE_HOSTS]
+    try: out = runner(argv, env=worker_env(sys.executable), capture_output=True, text=True, timeout=PROBE_CHILD_TIMEOUT,
+                      stdin=subprocess.DEVNULL, check=False).stdout
+    except subprocess.TimeoutExpired as exc: out = exc.stdout  # rows the child flushed before the kill
+    except OSError: out = ""
+    if isinstance(out, bytes): out = out.decode("utf-8", "replace")
+    rows = {}
+    for line in (out or "").splitlines():
+        try: row = json.loads(line)
+        except ValueError: continue
+        if isinstance(row, dict) and row.get("host") in PROBE_HOSTS and row.get("status") in ("reachable", "blocked", "cert"): rows[row["host"]] = row
+    probe = {h: {"status": rows[h]["status"], "elapsed": rows[h].get("elapsed", PROBE_CHILD_TIMEOUT), "fix": None} if h in rows
+             else {"status": "blocked", "elapsed": PROBE_CHILD_TIMEOUT, "fix": None} for h in PROBE_HOSTS}
+    gh = which("gh")
+    if gh:
+        try: done = runner([gh, "api", "/zen"], capture_output=True, text=True, timeout=GH_TIMEOUT, stdin=subprocess.DEVNULL, check=False)
+        except (OSError, subprocess.SubprocessError): done = None
+        if done is not None and re.search(r"x509|certificate", done.stderr or "", re.I): probe["api.github.com"]["status"] = "cert"
+    return probe
+
+def _probe_codes(probe: dict, warnings, env=os.environ) -> tuple[list[str], list[str]]:
+    """FR-007, FR-012: model host blocked/cert -> blocking code; GitHub blocked/cert -> warning. Sets each row's `fix`."""
+    from .dispatch import SANDBOX_FIX  # lazy, like check_install
+    codes, warns = [], []
+    model, github = probe["api.anthropic.com"], probe["api.github.com"]
+    if model["status"] == "blocked":
+        codes.append("WB_DISPATCH_API_BLOCKED")
+        sandboxed = env.get("SANDBOX_RUNTIME") or "WB_SANDBOX_EXCLUDE_MISSING" in warnings
+        model["fix"] = "dispatch child cannot reach api.anthropic.com; " + SANDBOX_FIX if sandboxed else "dispatch child cannot reach api.anthropic.com:443; check firewall/proxy"
+    elif model["status"] == "cert":
+        codes.append("WB_DISPATCH_API_CERT")
+        model["fix"] = "dispatch child TLS verify failed for api.anthropic.com (proxy/MITM CA?); see D70"
+    if github["status"] == "blocked":
+        warns.append("WB_GITHUB_BLOCKED"); github["fix"] = "allow api.github.com or use the GitHub MCP tools"
+    elif github["status"] == "cert":
+        warns.append("WB_GITHUB_CERT"); github["fix"] = "gh TLS fails in sandbox (#122); use the GitHub MCP tools or run gh outside the sandbox"
+    return codes, warns
+
 def check_install(paths: InstallPaths, live_model: str | None = None, runner=subprocess.run,
                   models: list[dict] | None = None, catalog_path: Path | None = None,
-                  which=shutil.which, sandbox_probe=None) -> DoctorReport:
+                  which=shutil.which, sandbox_probe=None, probe_dispatch: bool = False) -> DoctorReport:
     from .dispatch import WORKER_PATH, sandbox_available, worker_env  # lazy: dispatch is heavy and optional here
     sandbox_probe = sandbox_probe or sandbox_available
     codes = []; warnings = []
@@ -150,4 +201,9 @@ def check_install(paths: InstallPaths, live_model: str | None = None, runner=sub
         code = "READY" if completed.returncode == 0 and "PONG" in output else ("WB_AUTH_REQUIRED" if "auth" in output.lower() or "login" in output.lower() else "WB_MODEL_UNAVAILABLE")
         live = {"code": code, "executable": str(receipt.codex_path), "isolated": True}
         if code != "READY": codes.append(code)
-    return DoctorReport(not codes, tuple(sorted(set(codes))), live, tuple(sorted(set(warnings))))
+    probe = None
+    if probe_dispatch:  # opt-in: plain doctor makes no new network call
+        probe = _probe_dispatch(runner, which)
+        c, w = _probe_codes(probe, warnings)
+        codes += c; warnings += w
+    return DoctorReport(not codes, tuple(sorted(set(codes))), live, tuple(sorted(set(warnings))), probe)

@@ -42,6 +42,7 @@ Grunt prompts also carry `FILES IN SCOPE:` and a numeric `STOP RULE:`. Every pro
 
 MUST lines that are easy to drop:
 
+- A Codex delegate (astra, sol, terra, luna) cannot read a path outside --cwd; paste the needed excerpts into the prompt.
 - State out loud which Step 0 exception you are using, when you use one.
 - Caveman absent or unreadable: the prompt says `caveman NOT installed -> checked by hand`; an unreadable skill file gets `caveman unreadable -> checked by hand` and is not a block.
 - Sub-delegation follows D46 ruling 3. A Lead on the Executive or Orchestrator rung may sub-delegate to any lower rung, only via `agents-inc dispatch`; never the Agent tool (D59). A Workhorse delegate sub-delegates only to the Grunt rung, with an enumerated allowlist. A Grunt never sub-delegates. The delegate echoes `SUB-DELEGATE MODEL: <slug> -- allowlist match: yes` before any nested call.
@@ -62,5 +63,6 @@ Lint (mandatory, D41): `agents-inc dispatch` lints every prompt it renders; by h
 - Permission classifier blocks a dispatch: report it, do not rephrase around it.
 - Before the first dispatch in a sandboxed Claude Code session, `~/.claude/settings.json` must list `"agents-inc *"` under `sandbox.excludedCommands`. Doctor warns `WB_SANDBOX_EXCLUDE_MISSING` when it does not. Auto mode denies the agent that edit, so hand back to the operator with that exact ask before dispatching, not after the refusal.
 - Dispatch exits 69 with `detail=caller-sandboxed`: the caller runs inside a sandbox that blocks the provider API. Add `"agents-inc *"` to `sandbox.excludedCommands` and rerun as one plain command: an env prefix, `cd` or `&&` stops the match. Auto mode refuses `dangerouslyDisableSandbox`, and a Codex delegate cannot start inside the sandbox (nested `sandbox-exec`, rc 71), so `AGENTS_INC_ALLOW_SANDBOXED=1` does not help it. Never retry unchanged (D65, D66).
+- `gh` fails with `x509: OSStatus -26276` in sandboxed Bash (#122): cause outside this repo, not confirmed (suspected: sandbox proxy CA vs macOS keychain trust). Use the GitHub MCP tools, or run gh outside the sandbox. Do not retry gh unchanged. `doctor --probe-dispatch` reports `WB_GITHUB_CERT`. Upstream: none filed yet.
 - Harness "requires approval" on a delegate call is a missing grant (#54, D58), not a policy refusal: stop, record the exact command, hand back, never route around it. One plain command per Bash call (no `cd`, `&&`, `;`, pipes, loops, shell variables); a compound command matches no grant.
 - Operator changes the premise: stop the running delegate first.

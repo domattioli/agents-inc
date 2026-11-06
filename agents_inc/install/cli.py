@@ -215,7 +215,7 @@ def main(argv=None):
     p = subs.add_parser("run"); p.add_argument("--model", required=True); p.add_argument("--effort", default="medium"); p.add_argument("--cwd", required=True); p.add_argument("--tools", action="store_true"); p.add_argument("--no-tools", action="store_true"); p.add_argument("--host-tools", action="store_true", help="tools off; the caller's host runs the tools the model names (the agents-inc:luna type)"); p.add_argument("--write", action="store_true"); p.add_argument("--network", action="store_true"); p.add_argument("--run-dir"); p.add_argument("--lead", metavar="RUN_DIR"); p.add_argument("--home-repo"); p.add_argument("--thread", metavar="FILE", help="keep one Codex thread in FILE: start it when missing or empty, resume it otherwise")
     p = subs.add_parser("dispatch"); p.add_argument("--slots"); p.add_argument("--model"); p.add_argument("--effort"); p.add_argument("--cwd"); p.add_argument("--tier", choices=("grunt",)); p.add_argument("--run-dir"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--resume"); p.add_argument("--message"); p.add_argument("--home-repo"); p.add_argument("--serve", metavar="RUN_DIR"); p.add_argument("--poll-interval", type=float, default=1.0); p.add_argument("--idle-timeout", type=float, default=600.0); p.add_argument("--cancel", metavar="RUN_DIR"); p.add_argument("--wait", nargs=2, metavar=("RUN_DIR", "REQUEST_ID")); p.add_argument("--timeout", type=float, default=600.0)
     p = subs.add_parser("events", help="follow or redact live delegate events (spec 027)"); p.add_argument("verb", choices=("follow", "redact")); p.add_argument("run_dir", nargs="?")
-    p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model")
+    p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model"); p.add_argument("--probe-dispatch", action="store_true", help="check from a Worker-env child that api.anthropic.com and api.github.com are reachable (spec 029)")
     p = subs.add_parser("repair"); p.add_argument("--source"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES)
     p = subs.add_parser("unwire"); p.add_argument("--host", choices=("claude",), default="claude")
     p = subs.add_parser("hook"); p.add_argument("event", choices=("session-start", "agent-nudge", "agent-done")); p.add_argument("--host", choices=("claude", "codex", "gemini"))
@@ -260,11 +260,14 @@ def main(argv=None):
             from .. import host_ledger  # lazy: hook events must not depend on the ledger import
             return host_ledger.cli(args.rest, paths.state)
         if args.command == "doctor":
-            report = check_install(paths, args.live_model)
+            report = check_install(paths, args.live_model, probe_dispatch=args.probe_dispatch)
             if args.json:
                 print(json.dumps(report.as_dict()))
             else:
                 print(" ".join(report.codes or ("READY",)))
+                for host, row in (report.probe or {}).items():
+                    print(f"probe: {host} {row['status']} {row['elapsed']}s")
+                    if row.get("fix"): print(f"FIX: {row['fix']}")
                 print("agent gate: {} ({})".format(*host_hook.agent_gate_mode(paths)))
                 line = luna_line(paths)
                 if line: print(line)

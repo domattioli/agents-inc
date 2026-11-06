@@ -145,8 +145,8 @@ EOF
   exit 0
 fi
 
-out_f="$(mktemp -t at_route_out.XXXXXX)"
-err_f="$(mktemp -t at_route_err.XXXXXX)"
+out_f="$(mktemp "${TMPDIR:-/tmp}/at_route_out.XXXXXX")"
+err_f="$(mktemp "${TMPDIR:-/tmp}/at_route_err.XXXXXX")"
 trap 'rm -f "$out_f" "$err_f"' EXIT
 
 # Portable timeout: perl alarm survives exec, SIGALRM kills the child.
@@ -217,6 +217,9 @@ if [[ "$rc" -eq 0 ]]; then
     echo "---"
     exit 0
   fi
+  # CLI mode prints the box on stdout, hook mode on stderr. A plain fd redirect, not
+  # process substitution: the Claude Code sandbox denies /dev/fd writes (spec 029).
+  box_fd=2; [[ "$CLI" == 1 ]] && box_fd=1
   {
     # ANSI cyan box, on by default. Claude Code passes hook stderr escapes through
     # (verified 2026-09-23). AT_ROUTE_COLOR=0 disables.
@@ -225,8 +228,7 @@ if [[ "$rc" -eq 0 ]]; then
     printf '%s┌─ %s (%s) · %ss ─%s\n' "$c" "$alias_name" "$model" "$elapsed" "$r"
     sed "s/^/${c}│ /; s/\$/${r}/" "$out_f"
     printf '%s└─%s\n' "$c" "$r"
-  } > >(if [[ "$CLI" == 1 ]]; then cat; else cat >&2; fi)
-  wait
+  } >&"$box_fd"
   [[ "$CLI" == 1 ]] && exit 0
   exit 2
 else

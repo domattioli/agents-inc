@@ -1,0 +1,148 @@
+{
+  "feature": "specs/002-dispatch-graph-ledger",
+  "phases": {
+    "specify": "succeeded",
+    "clarify": "succeeded (operator answered FR-009)",
+    "plan": "succeeded (sonnet)",
+    "tasks": "succeeded (haiku)",
+    "checklist": "succeeded (haiku)",
+    "analyze": "succeeded (3 cycles; cycle-1 F1/F4 false; cycle-3 CLEAN)",
+    "implement": "succeeded (haiku; sonnet review D1-D6 fixed; 101 tests)"
+  },
+  "analyze_cycles": 3,
+  "updated": "2026-10-24T06:38:54Z",
+  "012-free-tier-routing": {
+    "specify": "succeeded",
+    "clarify": "succeeded (main-session answers, operator-directed)",
+    "plan": "succeeded",
+    "tasks": "succeeded",
+    "checklist": "succeeded",
+    "analyze": {
+      "status": "succeeded",
+      "cycles": 1
+    },
+    "implement": "succeeded (T001-T022 + exec fixes F2,F3)"
+  },
+  "013-at-route-hardening": {
+    "specify": "succeeded (supervisor opus, 2026-10-01)",
+    "clarify": "succeeded (operator answers via Executive, 5/5 integrated, 2026-10-01)",
+    "plan": "succeeded (supervisor opus inline, R1, 2026-10-01)",
+    "tasks": "succeeded (supervisor opus, 2026-10-01)",
+    "checklist": "succeeded (supervisor opus, checklists/install-safety.md, 2026-10-01)",
+    "analyze": {
+      "status": "succeeded (sonnet; 0 CRITICAL, 3 HIGH resolved by supervisor)",
+      "cycles": 1
+    },
+    "implement": "succeeded (haiku T004/T006, Executive T005, 2026-10-01; T007 BLOCKED-PEER skills/codex-bridge/SKILL.md)"
+  },
+  "014-provider-health-env-names": {
+    "specify": "succeeded (supervisor opus, 2026-10-01)",
+    "clarify": "succeeded (operator answers via Executive, 5/5 integrated, 2026-10-01)",
+    "plan": "succeeded (supervisor opus inline, R1, 2026-10-01)",
+    "tasks": "succeeded (supervisor opus, 2026-10-01)",
+    "checklist": "succeeded (supervisor opus, checklists/health-and-names.md, 2026-10-01)",
+    "analyze": {
+      "status": "succeeded (sonnet; 0 CRITICAL, 0 HIGH, 7 MEDIUM resolved; first attempt aborted by API 429)",
+      "cycles": 1
+    },
+    "implement": "succeeded (haiku T003+T004, T006+T007, supervisor-verified 2026-10-01; T005 BLOCKED-PEER agents_inc/free_health.py)"
+  },
+  "015-dispatch-naming-legibility": {
+    "specify": "succeeded (supervisor opus, 2026-10-01)",
+    "clarify": "succeeded (operator answers via Executive, 5/5 integrated, 2026-10-01)",
+    "plan": "succeeded (supervisor opus inline, R1, 2026-10-01; Appendix A exact skill text)",
+    "tasks": "succeeded (supervisor opus, 2026-10-01; T001/T002 tests RED shown)",
+    "checklist": "succeeded (supervisor opus, checklists/hook-and-recovery.md, 2026-10-01)",
+    "analyze": {
+      "status": "succeeded (sonnet; 0 CRITICAL, 2 HIGH resolved A1/A2, 6 MEDIUM resolved or accepted)",
+      "cycles": 1
+    },
+    "implement": "succeeded (Executive T003; haiku T004+T005, supervisor-verified 2026-10-01; suite 699 run, only known router failure)"
+  },
+  "016-dispatch-contract-records": {
+    "specify": "succeeded (supervisor opus, 2026-10-01)",
+    "clarify": "succeeded (operator answers via Executive, 5/5 integrated, 2026-10-01)",
+    "plan": "succeeded (supervisor opus, 2026-10-01)",
+    "tasks": "succeeded (supervisor opus, 2026-10-01)",
+    "checklist": "succeeded (records-and-contract.md, 26 items, 4 open, 2026-10-01)",
+    "analyze": {
+      "status": "succeeded (sonnet cycle 1: 0 CRITICAL, 4 HIGH resolved by supervisor)",
+      "cycles": 1
+    },
+    "implement": "in progress (T001-T008, T010-T014 supervisor-verified 2026-10-01; T009 Executive pending; suite 773 run, router failure + 5 T009 integration cases red)"
+  },
+  "018-mcp-channel-hygiene": {
+    "specify": "succeeded (Orchestrator Lead opus, 2026-10-06; 12 FR, 9 SC)",
+    "clarify": "succeeded (5/5 integrated 2026-10-06; Q2 operator directly, Q1 Q3 Q4 Q5 Supervisor opus operator-directed)",
+    "plan": "succeeded (Orchestrator Lead opus, 2026-10-06; plan.md, research.md)",
+    "tasks": "succeeded (Orchestrator Lead opus, 2026-10-06; T001-T038, two waves)",
+    "checklist": "succeeded (requirements.md; protocol-hygiene.md 26/26 pass after analyze cycle 1)",
+    "analyze": {
+      "status": "succeeded (fable, 2 cycles: cycle 1 16 findings 0 CRITICAL 2 HIGH, 16 fixed by Lead; cycle 2 A1 A2 resolved, 6 new 0 HIGH, 6 fixed by Supervisor)",
+      "cycles": 2
+    },
+    "implement": "wave 1 succeeded 2026-10-06 (agents_Inc 21e4820 in PR 52, operator ruling; T002-T010, T012-T015, T017-T019; haiku T007 T010 T018, sonnet T008 T013, Supervisor opus tests and review; T011 T016 live checks pending on operator Mac); wave 2 waits for 017"
+  },
+  "024-easy-wins-90-91-92-93": {
+    "specify": "succeeded (Orchestrator Lead opus, 2026-10-23; FR-001 to FR-024, SC-001 to SC-005)",
+    "clarify": "succeeded (Lead answers, 5/5 integrated, 2026-10-23)",
+    "plan": "succeeded (Orchestrator Lead opus, 2026-10-23)",
+    "tasks": "succeeded (Orchestrator Lead opus, 2026-10-23; T001-T019)",
+    "checklist": "succeeded (requirements.md, CHK001-CHK021 pass)",
+    "analyze": {
+      "status": "succeeded (Lead, 2 cycles: cycle 1 A1-A3 fixed, A4 A5 accepted; cycle 2 CLEAN)",
+      "cycles": 2
+    },
+    "implement": "succeeded 2026-10-23 (#90 haiku, #91 sonnet, #93 sonnet, all Lead-verified; #92 Lead after broker refusal credential-seeking; T019 move to DomI deferred to CoS)"
+  },
+  "025-stress-followups": {
+    "plan": "succeeded (opus, 2026-10-23; plan.md, research and data model folded in)",
+    "tasks": "succeeded (opus, 2026-10-23; T001-T020, T020 move to DomI)",
+    "checklist": "succeeded (opus, 2026-10-23; requirements.md, CHK001-CHK029, 16 pass, 13 open)",
+    "analyze": {
+      "status": "succeeded (opus, 2 cycles: cycle 1 F1-F13 0 CRITICAL 3 HIGH 5 MEDIUM 5 LOW, all ruled by Executive 2026-10-23; cycle 2 C2-1 to C2-3 LOW resolved; C2-4 LOW and C2-5 HIGH found during implement)",
+      "cycles": 2
+    },
+    "implement": "red 2026-10-23 (opus; T001-T018 done, T019 red: SC-001 fails only on out-of-scope tests.test_dispatch_broker test_credential_seeking_refused, which asserts bare-word refusals FR-006 removes, analyze C2-5; T020 move to DomI deferred to CoS)"
+  },
+  "026-sandbox-safe-runs": {
+    "specify": "succeeded (CoS opus, 2026-10-24)",
+    "clarify": "succeeded (1 Q; fable second opinion run 20261024T043655Z-fable-7293c5 picked XDG relocation; superseded by CoS reproduction: metadata reads above sandbox holes)",
+    "plan": "succeeded (opus run 20261024T043959Z-opus-6cc39a; US2 rewritten by CoS after reproduction)",
+    "tasks": "succeeded (same run)",
+    "checklist": "succeeded (same run; CoS rulings closed 12 open items)",
+    "analyze": "succeeded (sonnet run 20261024T045239Z-sonnet-f2b8ce; cycle 1: CRITICAL=0 HIGH=3, all resolved by CoS)",
+    "implement": "succeeded (sonnet T005-T023; CoS verified: tests 1574 OK skip 17, skills 91 OK, WorkerGitTest 4/4 outside sandbox; commit dcc4f65; T025 move pending)"
+  },
+  "027-live-delegate-view": {
+    "specify": "succeeded (opus Lead)",
+    "clarify": "succeeded (operator answered Q1-Q5 2026-10-24; Q2 overrode: agents-inc installs mod)",
+    "plan": "succeeded (opus)",
+    "tasks": "succeeded (opus, 46 tasks)",
+    "checklist": "succeeded (opus)",
+    "analyze": {
+      "status": "succeeded (opus self-analyze; cycle2 CRITICAL=0 HIGH=0; Q2 edits after analyze by CoS)",
+      "cycles": 2
+    },
+    "implement": "pending"
+  },
+  "028-agents-inc-as-mod": {
+    "specify": "succeeded (opus, 2026-10-24)",
+    "clarify": "succeeded (opus, 2026-10-24; Q1-Q3 answered by operator)",
+    "plan": "succeeded (opus, 2026-10-24; plan.md, research.md R1-R8)",
+    "tasks": "succeeded (opus, 2026-10-24; T001-T048, T048 move to DomI)",
+    "analyze": "succeeded (opus, 2026-10-24; F1-F15: CRITICAL-as-WARN 1, HIGH 3, MEDIUM 7, LOW 4; awaiting CoS rulings)"
+  },
+  "029-sandbox-batch": {
+    "phases": {
+      "specify": "succeeded (main session)",
+      "clarify": "succeeded (operator: Q1 B opt-in, Q2 C)",
+      "plan": "succeeded (opus Plan scout; supervisor wrote files, gate 12/12 FR)",
+      "tasks": "succeeded (sonnet scout; 45 tasks incl. US5 T039-T045, gate green)",
+      "checklist": "succeeded (haiku scout; sandbox-compat.md 34 items, gate green)",
+      "analyze": "succeeded (2 cycles opus-medium: c1 0C/3H/13M/9L applied by sonnet; c2 0C/1H/8M fixed by supervisor N1-N9 + L1,L2,L4,L8)"
+    },
+    "analyze_cycles": 2,
+    "updated": "2026-10-28"
+  }
+}

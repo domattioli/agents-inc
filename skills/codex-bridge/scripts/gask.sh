@@ -42,8 +42,7 @@ gask_report_trap() {
     [[ -n "$retry" ]] && retry_arg=(--retry-after "$retry")
     PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" python3 -m agents_inc.free_health report \
       --provider gemini --model "${MODEL:-gemini-3.8-flash}" --outcome "$outcome" "${retry_arg[@]+${retry_arg[@]}}" \
-      >/dev/null 2>/tmp/gask_report_err.$$ || echo "gask: health report failed" >&2
-    rm -f /tmp/gask_report_err.$$ 2>/dev/null
+      >/dev/null 2>/dev/null || echo "gask: health report failed" >&2
   fi
   rm -f ${GASK_CLEANUP_FILES[@]+"${GASK_CLEANUP_FILES[@]}"} 2>/dev/null
   exit $ec
