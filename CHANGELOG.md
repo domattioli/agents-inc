@@ -6,20 +6,31 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-06
+
+Version 0.6.0 because PyPI, Zenodo and GitHub all hold 0.5.0 and the merged work since then adds features in 0.x.
+
 ### Added
 
-- `dispatch_record.v1`: `render_dispatch.py` validates every `--slots` file with a stdlib schema (`dispatch_schema.py`, pinned per run), accepts structured `FILES_IN_SCOPE`, `ALLOWLIST` and `FAN_OUT`, always emits a `STOP ON BLOCK:` line, and `run.json` and the `dispatched` ledger row carry `slots_sha256` (#131, D70).
+- `dispatch_record.v1`: `render_dispatch.py` validates every `--slots` file with a stdlib schema (`dispatch_schema.py`, pinned per run), accepts structured `FILES_IN_SCOPE`, `ALLOWLIST` and `FAN_OUT`, always emits a `STOP ON BLOCK:` line, and `run.json` and the `dispatched` ledger row carry `slots_sha256` (#131, D70)
 - The DelegateAgent MCP server offers all four Codex seats (`luna`, `terra`, `sol`, `astra`) by default, takes `effort` and `conversation_id` (resume), and ships with the agents-inc mod, so `agents-inc install` needs no extra setup. Reinstall refreshes an installed mod, and `agents-inc doctor` warns about an old user-scope `delegate-agent` entry (spec 031, #127)
+- The unittest suite runs in CI on Ubuntu, macOS and Windows for every push and pull request to `development` and `main`. The Windows job is advisory until the Unix-only paths are ported (#137, #138)
+- `agents-inc uninstall --dry-run` lists what an uninstall would remove and which paths it keeps (spec 030, #121)
 
 ### Changed
 
 - The FAN_OUT lint accepts trailing prose after `depth N` and prints the expected form on failure. The consensus-debate skill lists the DelegateAgent route before the shell line, checks for empty output, and its brief template carries GOAL, CONSTRAINTS, DONE, OUT OF SCOPE and STOP ON BLOCK (spec 031)
+- The chain lint catches `you report to` and `who reports to` on the chain line, and the consensus-debate moderator leaves chain slots blank (spec 030, #45)
+- `docs/governance/DELEGATION-MODEL.md` records the verified Claude Code harness facts, and the speckit pipeline hands analyze results over through a file (spec 030, #123, #86)
 
 ### Fixed
 
+- A dispatch from inside the Claude Code Bash sandbox no longer refuses. `agents-inc dispatch` probes `api.anthropic.com` through the sandbox proxy; when the probe succeeds, Claude rungs run inside the sandbox with sandboxing disabled in the child so it does not nest, and Codex rungs refuse as `caller-sandboxed-codex`. When the probe fails, exit 69 names both fixes. A PreToolUse hook denies compound `agents-inc dispatch` calls (`cd`, `&&`, pipes, heredocs) that defeat the `excludedCommands` rule, and `agents-inc doctor` warns when `sandbox.network.allowedDomains` lacks `api.anthropic.com` (#135, #136, D71)
 - An empty or failed Codex result from DelegateAgent is an error that quotes the last stderr line, with a `codex login` hint on auth failures (spec 031)
-- `agents-inc dispatch` writes a `returned` ledger row at the end of every run, so the outcome reaches the ledger and not only `run.json` (#131).
-- The Zenodo deposit script runs without `PYTHONPATH`.
+- `agents-inc dispatch` writes a `returned` ledger row at the end of every run, so the outcome reaches the ledger and not only `run.json` (#131)
+- `agents-inc uninstall` no longer reports a conflict for a restored predecessor link, and it removes every hash-named release directory (spec 030, #121)
+- The wheel-building tests build in a temporary directory when the checkout is read-only (#129, #130)
+- The Zenodo deposit script runs without `PYTHONPATH`
 
 ## [0.5.0] — 2026-10-26
 
