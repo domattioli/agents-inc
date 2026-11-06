@@ -10,6 +10,8 @@ jobs:
   unittest:
     name: unittest (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Windows is advisory until the Unix-only code paths (fcntl, fchmod, file locks) are ported.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
