@@ -153,6 +153,20 @@ class SandboxExclusionTest(DoctorWarningsTest):
         (self.home / ".claude" / "settings.json").unlink(missing_ok=True)
         self.assertNotIn("WB_SANDBOX_EXCLUDE_MISSING", check_install(self.paths, models=self.models, **HOST).warnings)
 
+    def test_api_domain_missing_is_a_warning(self):
+        self._settings({"sandbox": {"excludedCommands": ["agents-inc *"], "network": {"allowedDomains": ["github.com"]}}})
+        report = check_install(self.paths, models=self.models, **HOST)
+        self.assertEqual(report.codes, ())
+        self.assertIn("WB_SANDBOX_API_DOMAIN_MISSING", report.warnings)
+
+    def test_api_domain_present_is_silent(self):
+        self._settings({"sandbox": {"network": {"allowedDomains": ["api.anthropic.com"]}}})
+        self.assertNotIn("WB_SANDBOX_API_DOMAIN_MISSING", check_install(self.paths, models=self.models, **HOST).warnings)
+
+    def test_no_settings_file_no_api_domain_warning(self):
+        (self.home / ".claude" / "settings.json").unlink(missing_ok=True)
+        self.assertNotIn("WB_SANDBOX_API_DOMAIN_MISSING", check_install(self.paths, models=self.models, **HOST).warnings)
+
 
 if __name__ == "__main__":
     unittest.main()

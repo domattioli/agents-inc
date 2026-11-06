@@ -7,6 +7,8 @@ MCP_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../mcp/codex_agent_mcp.py"
 
 MODEL="luna"
 RAW_SLUG=""
+EFFORT=""
+RESUME_ID=""
 PROMPT_ARGS=()
 
 # Parse flags
@@ -18,6 +20,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --slug)
             RAW_SLUG="$2"
+            shift 2
+            ;;
+        --effort)
+            EFFORT="$2"
+            shift 2
+            ;;
+        --resume)
+            RESUME_ID="$2"
             shift 2
             ;;
         *)
@@ -40,12 +50,18 @@ if [[ ${#PROMPT_ARGS[@]} -eq 0 ]]; then
     exit 1
 fi
 
+if ! command -v codex &>/dev/null; then
+    echo "Error: codex CLI not found on PATH" >&2
+    exit 1
+fi
+
 # Join prompt args with space
 PROMPT="${PROMPT_ARGS[@]}"
 
 TMPFILE=$(mktemp ${TMPDIR:+"$TMPDIR/bridge.XXXXXX"})
 STDERR_FILE=$(mktemp ${TMPDIR:+"$TMPDIR/bridge.XXXXXX"})
-trap "rm -f '$TMPFILE' '$STDERR_FILE'" EXIT
+JSONL_FILE=$(mktemp ${TMPDIR:+"$TMPDIR/bridge.XXXXXX"})
+trap "rm -f '$TMPFILE' '$STDERR_FILE' '$JSONL_FILE'" EXIT
 
 TIMEOUT_CMD=""
 if command -v timeout &>/dev/null; then
@@ -56,11 +72,23 @@ fi
 
 TIMEOUT_VAL="${CODEXAGENT_TIMEOUT:-300}"
 
+EFFORT_ARGS=()
+if [[ -n "$EFFORT" ]]; then
+    EFFORT_ARGS=(-c "model_reasoning_effort=$EFFORT")
+fi
+
+if [[ -n "$RESUME_ID" ]]; then
+    # exec resume has no -s and no -C: sandbox mode goes through -c, cwd is the caller's.
+    CODEX_ARGV=(exec resume "$RESUME_ID" -m "$SLUG" ${EFFORT_ARGS[@]+"${EFFORT_ARGS[@]}"} -c sandbox_mode=read-only --skip-git-repo-check --json -o "$TMPFILE" -- "$PROMPT")
+else
+    CODEX_ARGV=(exec -m "$SLUG" ${EFFORT_ARGS[@]+"${EFFORT_ARGS[@]}"} -s read-only --skip-git-repo-check --json -o "$TMPFILE" -- "$PROMPT")
+fi
+
 CODEX_EXIT=0
 if [[ -n "$TIMEOUT_CMD" ]]; then
-    "$TIMEOUT_CMD" "$TIMEOUT_VAL" codex exec -m "$SLUG" -s read-only --skip-git-repo-check -o "$TMPFILE" -- "$PROMPT" 2>"$STDERR_FILE" >/dev/null || CODEX_EXIT=$?
+    "$TIMEOUT_CMD" "$TIMEOUT_VAL" codex "${CODEX_ARGV[@]}" 2>"$STDERR_FILE" >"$JSONL_FILE" || CODEX_EXIT=$?
 else
-    codex exec -m "$SLUG" -s read-only --skip-git-repo-check -o "$TMPFILE" -- "$PROMPT" 2>"$STDERR_FILE" >/dev/null || CODEX_EXIT=$?
+    codex "${CODEX_ARGV[@]}" 2>"$STDERR_FILE" >"$JSONL_FILE" || CODEX_EXIT=$?
 fi
 
 if [[ $CODEX_EXIT -ne 0 ]]; then
@@ -68,12 +96,33 @@ if [[ $CODEX_EXIT -ne 0 ]]; then
     exit $CODEX_EXIT
 fi
 
-if [[ ! -s "$TMPFILE" ]]; then
-    if [[ -s "$STDERR_FILE" ]]; then
-        cat "$STDERR_FILE" >&2
-    fi
-    echo "Error: empty result from codex exec." >&2
+THREAD_ID="$(head -n 5 "$JSONL_FILE" | python3 -c '
+import json, sys
+for line in sys.stdin:
+    try:
+        tid = json.loads(line).get("thread_id")
+    except (ValueError, AttributeError):
+        continue
+    if tid:
+        print(tid)
+        break
+' || true)"
+
+if [[ -n "$RESUME_ID" && "$THREAD_ID" != "$RESUME_ID" ]]; then
+    echo "Error: conversation $RESUME_ID not found; Codex started a new thread" >&2
     exit 1
 fi
 
+if [[ ! -s "$TMPFILE" ]]; then
+    LAST_ERR="$(grep -v '^[[:space:]]*$' "$STDERR_FILE" | tail -n 1 || true)"
+    if [[ -s "$STDERR_FILE" ]]; then
+        cat "$STDERR_FILE" >&2
+    fi
+    echo "Error: empty result from codex exec${LAST_ERR:+: $LAST_ERR}" >&2
+    exit 1
+fi
+
+if [[ -n "$THREAD_ID" ]]; then
+    echo "CONVERSATION_ID=$THREAD_ID" >&2
+fi
 cat "$TMPFILE"

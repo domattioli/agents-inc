@@ -1,0 +1,8 @@
+#!/bin/bash
+# Fake claude for spec 031 tests. Records argv to $FAKE_CLAUDE_LOG.
+if [[ -n "${FAKE_CLAUDE_LOG:-}" ]]; then echo "$*" >> "$FAKE_CLAUDE_LOG"; fi
+case "$1 ${2:-}" in
+    "plugin list") printf '%s\n' "${FAKE_CLAUDE_PLUGIN_LIST:-}" ;;
+    "mcp list") printf '%s\n' "${FAKE_CLAUDE_MCP_LIST:-}" ;;
+esac
+exit 0

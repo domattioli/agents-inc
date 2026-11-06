@@ -91,7 +91,7 @@ RUNG_RE = re.compile(r"^rung:\s*(\w+)", re.MULTILINE)
 ROLE_RANK = {"operator": 5, "executive": 4, "supervisor": 3, "orchestrator": 3,
              "cos": 3, "workhorse": 2, "grunt": 1}
 _RUNG_RANK = {"grunt": 1, "workhorse": 2, "orchestrator": 3, "executive": 4}
-_CHAIN_CLAUSE_RE = re.compile(r"(\S+) reports to (?:the )?(\S+)")
+_REPORTS_TO_RE = re.compile(r"\breports? to\b")
 
 
 def _seat_rank(name: str) -> int | None:
@@ -103,19 +103,57 @@ def _seat_rank(name: str) -> int | None:
     return None
 
 
-def reporting_chain_inverted(lower: str) -> bool:
-    """True when a `reporting chain:` line has a seat reporting to a lower-ranked seat."""
+def _first_alias_rank(text: str) -> int | None:
+    """Rank of the alias that appears earliest in text (same loop as render_dispatch._first_alias)."""
+    best = None
+    for alias in MODEL_RUNG:
+        m = re.search(r"\b%s\b" % alias, text, re.IGNORECASE)
+        if m and (best is None or m.start() < best[0]):
+            best = (m.start(), alias)
+    return _RUNG_RANK[MODEL_RUNG[best[1]]] if best else None
+
+
+def _delegate_rank(text: str, model: str | None = None) -> int | None:
+    """Rank of the delegate seat: --model, else line-start `model:`, else earliest alias on `role:`."""
+    if model and model.strip().lower() in MODEL_RUNG:
+        return _RUNG_RANK[MODEL_RUNG[model.strip().lower()]]
+    for key in ("model:", "role:"):
+        for ln in text.splitlines():
+            ln = ln.strip()
+            if ln.lower().startswith(key):
+                rank = _first_alias_rank(ln[len(key):])
+                if rank is not None:
+                    return rank
+    return None
+
+
+def reporting_chain_inverted(lower: str, delegate_rank: int | None = None) -> bool:
+    """True when a `reporting chain:` line has a seat reporting to a lower-ranked seat.
+
+    `you` resolves to delegate_rank (unresolved: skip). `X reports to Y, who reports to Z`
+    continues the chain from Y. A receiver ranks by its first known seat word.
+    """
     for ln in lower.splitlines():
         ln = ln.strip()
         if not ln.startswith("reporting chain:"):
             continue
         for clause in ln[len("reporting chain:"):].split(";"):
-            m = _CHAIN_CLAUSE_RE.search(clause)
-            if not m:
+            segs = _REPORTS_TO_RE.split(clause)
+            if len(segs) < 2:
                 continue
-            reporter, receiver = _seat_rank(m.group(1)), _seat_rank(m.group(2))
-            if reporter is not None and receiver is not None and reporter > receiver:
-                return True
+            words = re.findall(r"[\w-]+", segs[0])
+            if not words:
+                continue
+            reporter = delegate_rank if words[-1] == "you" else _seat_rank(words[-1])
+            for seg in segs[1:]:
+                receiver = None
+                for w in re.findall(r"[\w-]+", re.split(r"\bwho\b", seg)[0]):
+                    receiver = _seat_rank(w)
+                    if receiver is not None:
+                        break
+                if reporter is not None and receiver is not None and reporter > receiver:
+                    return True
+                reporter = receiver
     return False
 
 
@@ -129,7 +167,8 @@ def known_rung(text: str, model: str | None = None) -> str | None:
     return None
 
 # D48 fan-out line: `FAN_OUT: width <n>, total <n>, depth <n>`.
-FAN_OUT_RE = re.compile(r"^fan_out:\s*width\s+(\d+),\s*total\s+(\d+),\s*depth\s+(\d+)\s*$")
+FAN_OUT_RE = re.compile(r"^fan_out:\s*width\s+(\d+),\s*total\s+(\d+),\s*depth\s+(\d+)(?:[.;,]?\s.*)?$")
+MISSING_FORMS = {"fan-out": "FAN_OUT: width N, total N, depth N"}  # the key stays for callers; this is display text
 
 
 def _fan_out_line(ln: str) -> str:
@@ -247,7 +286,7 @@ def check(text: str, tier: str | None = None, prompt_text: str | None = None,
             if rung and any(v > c for v, c in zip(parse_fan_out(text), FAN_OUT_BY_RUNG[rung])):
                 missing.append("fan-out-over-ceiling")
 
-    if reporting_chain_inverted(lower):
+    if reporting_chain_inverted(lower, _delegate_rank(lower, model)):
         missing.append("reporting-chain-inverted")
 
     # Check tier-specific requirements.
@@ -410,6 +449,9 @@ def main() -> int:
         print("COMPLIANT")
     else:
         print(f"NON-COMPLIANT missing elements: {missing}")
+        for key, form in MISSING_FORMS.items():
+            if key in missing:
+                print(f"  {key}: expected `{form}`")
     lint_rc = run_handoff_lint(prompt_file, profile) if with_lint else 0
     return 1 if (missing or lint_rc) else 0
 

@@ -1,6 +1,6 @@
 """Command line for user-scoped direct Codex installation."""
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, sys, tempfile
+import argparse, json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 from .. import datafiles
 from .bundle import activate, stage_bundle
@@ -104,15 +104,25 @@ def install_mod(paths: InstallPaths, notices: list) -> None:
     mod = paths.current / "mods/agents-inc"
     if not (mod / ".claude-plugin/plugin.json").is_file(): return
     listed = _claude(paths.home, "plugin", "list")
-    if listed is None or MOD_PLUGIN in (listed.stdout or ""): return
+    if listed is None: return
+    if MOD_PLUGIN in (listed.stdout or ""):
+        # Spec 031 FR-014: refresh an installed plugin so a new manifest (mcpServers) reaches it. Warning only on failure.
+        for argv in (("plugin", "marketplace", "update", MOD_MARKETPLACE), ("plugin", "update", MOD_PLUGIN)):
+            done = _claude(paths.home, *argv, timeout=300)
+            if done is None or done.returncode != 0:
+                notices.append(f"warning: `claude {' '.join(argv)}` failed; the mod may be out of date")
+                return
+        return
     added = _claude(paths.home, "plugin", "marketplace", "add", str(mod.resolve()))
     done = _claude(paths.home, "plugin", "install", MOD_PLUGIN) if added is not None and added.returncode == 0 else added
     if done is None or done.returncode != 0:
         notices.append(f"warning: mod install failed ({'unavailable' if done is None else done.returncode}); the live view is off, delegation still works")
 
+MOD_UNINSTALL_ARGVS = (("plugin", "uninstall", MOD_PLUGIN), ("plugin", "marketplace", "remove", MOD_MARKETPLACE))
+
 def uninstall_mod(paths: InstallPaths) -> list:
     notices = []
-    for argv in (("plugin", "uninstall", MOD_PLUGIN), ("plugin", "marketplace", "remove", MOD_MARKETPLACE)):
+    for argv in MOD_UNINSTALL_ARGVS:
         done = _claude(paths.home, *argv)
         if done is not None and done.returncode != 0: notices.append(f"warning: `claude {' '.join(argv)}` failed ({done.returncode})")
     return notices
@@ -182,28 +192,67 @@ def verify_installed(paths: InstallPaths) -> None:
     if not launcher_ok: problems.append(f"launcher does not resolve: {paths.launcher}")
     if problems: raise RuntimeError("WB_INSTALL_UNVERIFIED: " + "; ".join(problems))
 
+_RELEASE_HASH = re.compile(r"[0-9a-f]{64}")
+
+def _is_release_hash(entry: Path) -> bool:
+    """A content-addressed release dir: 64-hex name, a real directory, not a symlink."""
+    return bool(_RELEASE_HASH.fullmatch(entry.name)) and entry.is_dir() and not entry.is_symlink()
+
+def _link_unchanged(item: OwnedPath) -> bool:
+    return item.target is not None and os.readlink(item.path) == item.target
+
+def _current_is_ours(paths: InstallPaths, release: Path) -> bool:
+    return paths.current.is_symlink() and (paths.current.parent / os.readlink(paths.current)).resolve() == release.resolve()
+
+def _removable_releases(paths: InstallPaths, keep: Path | None) -> list[Path]:
+    """Every hash-named release dir under `releases`, except the one `current` still resolves to."""
+    if not paths.releases.is_dir(): return []
+    return sorted(e for e in paths.releases.iterdir() if _is_release_hash(e) and (keep is None or e.resolve() != keep))
+
+def plan_uninstall(paths: InstallPaths, receipt: InstallReceipt) -> tuple[list[Path], list[Path]]:
+    """Read-only mirror of `uninstall`: (would_remove, would_retain). Takes no lock, writes nothing."""
+    remove: list[Path] = []; retain: list[Path] = []
+    for item in receipt.owned_paths:
+        if item.kind != "symlink": continue
+        if not item.path.is_symlink():
+            if item.path.exists(): retain.append(item.path)
+            continue
+        if not _link_unchanged(item): retain.append(item.path)
+        else: remove.append(item.path)  # a recorded predecessor is restored in place, never retained
+    if retain:
+        return remove, retain
+    release = paths.releases / receipt.release_hash
+    current_removed = _current_is_ours(paths, release)
+    if current_removed: remove.append(paths.current)
+    remove.append(paths.receipt)
+    keep = paths.current.resolve() if paths.current.exists() and not current_removed else None
+    remove.extend(_removable_releases(paths, keep))
+    return remove, retain
+
 def uninstall(paths: InstallPaths, receipt: InstallReceipt) -> set[Path]:
     """Remove only receipt-owned, byte-for-byte unchanged artifacts."""
     with LifecycleLock(paths.lock):
         TransactionJournal.recover(paths.journal)
         journal = TransactionJournal(paths.journal).begin("uninstall")
-        retained = restore_skill_links(paths, receipt, journal)
+        restored: set[Path] = set()
+        retained = restore_skill_links(paths, receipt, journal, restored)
         remove_host_wiring(paths, receipt, journal)
         for item in receipt.owned_paths:
-            if item.kind != "symlink" or item.path in retained or not item.path.is_symlink(): continue
-            if item.target is None or os.readlink(item.path) != item.target:
+            if item.kind != "symlink" or item.path in retained or item.path in restored or not item.path.is_symlink(): continue
+            if not _link_unchanged(item):
                 retained.add(item.path)
         if retained:
             # Receipt is evidence needed for a future conservative retry.
             journal.commit(); return retained
         # `current` is ours when it points at the receipt's release; a foreign link stays put.
         release = paths.releases / receipt.release_hash
-        if paths.current.is_symlink() and (paths.current.parent / os.readlink(paths.current)).resolve() == release.resolve():
+        if _current_is_ours(paths, release):
             journal.apply("unlink", paths.current, os.readlink(paths.current), None, lambda: paths.current.unlink())
         journal.apply("receipt", paths.receipt, None, None, lambda: paths.receipt.unlink(missing_ok=True))
         journal.commit()
         # After commit: the release tree is content-addressed and reproducible, so its removal needs no journal.
-        if release.is_dir() and not paths.current.exists(): shutil.rmtree(release, ignore_errors=True)
+        for stale in _removable_releases(paths, paths.current.resolve() if paths.current.exists() else None):
+            shutil.rmtree(stale, ignore_errors=True)
         for empty in (paths.releases, paths.releases.parent):
             try: empty.rmdir()
             except OSError: break
@@ -223,7 +272,7 @@ def main(argv=None):
     p = subs.add_parser("models"); p.add_argument("verb", nargs="?", choices=("bump", "chain")); p.add_argument("alias", nargs="?"); p.add_argument("slug", nargs="?"); p.add_argument("extra", nargs="*"); p.add_argument("--unpin", action="store_true"); p.add_argument("--clear", action="store_true")
     p = subs.add_parser("report", help="draft a bug report or feature request for agents_Inc; --submit files it"); p.add_argument("kind", choices=("bug", "feature")); p.add_argument("--title", required=True); p.add_argument("--body", required=True, help="text, or - to read stdin"); p.add_argument("--submit", action="store_true")
     p = subs.add_parser("luna", help="the native agents-inc:luna subagent type (spec 028)"); p.add_argument("verb", choices=("status", "on", "off", "begin", "end")); p.add_argument("--json", action="store_true"); p.add_argument("--session"); p.add_argument("--agent"); p.add_argument("--cwd", default="."); p.add_argument("--outcome", choices=("done", "failed", "quota-paused", "aborted")); p.add_argument("--usage", help="JSON object of step usage sums (end)"); p.add_argument("--task", help="the Agent description (begin)")
-    subs.add_parser("rollback"); subs.add_parser("uninstall")
+    subs.add_parser("rollback"); p = subs.add_parser("uninstall"); p.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv); paths = _paths()
     try:
         if args.command == "install": return install(args)
@@ -298,9 +347,15 @@ def main(argv=None):
                 return run_codex_thread(Path(args.thread), args.model, args.effort, Path(args.cwd), sys.stdin, receipt, _efforts(paths.current.resolve()), args.no_tools, args.write, args.tools, Path(args.run_dir).resolve() if args.run_dir else None, home_repo=args.home_repo, network=args.network, host_tools=args.host_tools)
             return run_codex(args.model, args.effort, Path(args.cwd), sys.stdin, receipt, _efforts(paths.current.resolve()), args.no_tools, args.write, args.tools, Path(args.run_dir).resolve() if args.run_dir else None, lead_dir=Path(args.lead).resolve() if args.lead else None, home_repo=args.home_repo, network=args.network, host_tools=args.host_tools)
         if args.command == "uninstall":
+            if args.dry_run:
+                would_remove, would_retain = plan_uninstall(paths, receipt)
+                for argv in MOD_UNINSTALL_ARGVS: print(f"would run: claude {' '.join(argv)}")
+                for path in would_remove: print(f"would remove: {path}")
+                for path in would_retain: print(f"would retain: {path}")
+                return 0
             retained = uninstall(paths, receipt)
             for line in uninstall_mod(paths): print(line)
-            if retained: print("WB_CONFIG_CONFLICT: retained modified artifacts", file=sys.stderr); return 1
+            if retained: print("WB_CONFIG_CONFLICT: retained modified artifacts", file=sys.stderr); [print(p, file=sys.stderr) for p in sorted(retained)]; return 1
             return 0
         if args.command == "repair": return install(args)
         if args.command == "rollback":
