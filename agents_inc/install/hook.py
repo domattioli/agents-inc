@@ -1,6 +1,6 @@
 """Host hook entry points. Advisory, except the FR-002 persona deny and the opt-in agent gate deny; never break a session, always exit 0."""
 from __future__ import annotations
-import hashlib, json, os, re, sys, tempfile, time
+import hashlib, json, os, re, shlex, sys, tempfile, time
 from datetime import datetime
 from .doctor import check_install
 from .paths import InstallPaths
@@ -103,15 +103,114 @@ COMPOUND_MARKERS = ("&&", ";", "|", "cd ", "<<", ">", "$(")
 COMPOUND_DENY_REASON = ("agents-inc must be the whole Bash call. Write the slots file in one call, dispatch in the next. "
                         "Never set dangerouslyDisableSandbox.")
 
+COMPOUND_SAFE_FORM = " Run it as: agents-inc dispatch --slots <file> --model <alias>"
+_SHELL_PUNCT = "();<>|&"
+_WRAPPERS = frozenset({"env", "exec", "command", "nohup", "time", "nice", "xargs"})
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# Command heads that run or re-evaluate what follows; shlex cannot see through them, so they fail closed.
+_HIDING_HEADS = frozenset({"{", "}", "if", "then", "do", "else", "elif", "while", "until", "eval", "alias", "source", "."})
+
+def _unquote(text: str) -> str:
+    """Drop quote chars and backslashes so a quoted launcher word ('agents-inc') still matches the dispatch regex."""
+    return re.sub(r"['\"\\]", "", text)
+
+def _subst_body(command: str, start: int) -> str:
+    """Text of the command substitution that opens at `start` (`$(` or a backtick): to the matching close, else the end."""
+    if command[start] == "`":
+        end = command.find("`", start + 1)
+        return command[start + 1:end if end >= 0 else len(command)]
+    depth = 0
+    for j in range(start + 1, len(command)):
+        depth += (command[j] == "(") - (command[j] == ")")
+        if depth == 0: return command[start + 2:j]
+    return command[start + 2:]
+
+def _scan_quotes(command: str) -> tuple[str, list[str]]:
+    """One quote-state pass: return (command with unquoted newlines turned into ';', bodies of every `$(` or backtick
+    substitution outside single quotes). Raises ValueError on an unterminated quote."""
+    out, state, bodies, i, tick = [], "", [], 0, False
+    while i < len(command):
+        c = command[i]
+        if state == "'":
+            if c == "'": state = ""
+        elif c == "\\" and i + 1 < len(command):
+            out.append(c); i += 1; c = command[i]
+        elif c == "`" or (c == "$" and command[i + 1:i + 2] == "("):
+            if c == "$" or not tick:
+                body = _subst_body(command, i)
+                bodies.append(body)
+                # Quote chars inside the body mean the close-finder may have stopped early (a quoted `)`): the body is
+                # not trustworthy, so also scan everything after the opener as raw text.
+                if any(q in body for q in "'\"\\"): bodies.append(command[i + (2 if c == "$" else 1):])
+            if c == "`": tick = not tick
+        elif state == '"':
+            if c == '"': state = ""
+        elif c in "'\"": state = c
+        elif c == "\n": c = " ; "
+        out.append(c); i += 1
+    if state: raise ValueError("unterminated quote")
+    return "".join(out), bodies
+
+def _dispatch_shape(command: str) -> str:
+    """Return the offending element when an executed `agents-inc dispatch|run|luna` shares the call with a shell
+    operator, cd, command substitution or an env prefix; else "". Quoted prose that only mentions the command never
+    counts, but a dispatch inside a `$(...)` or backtick substitution, a `sh -c` string, or behind a wrapper word
+    (env, exec, command, nohup, time, nice, xargs) does. Unbalanced quotes fall back to the raw-substring rule."""
+    try:
+        text, bodies = _scan_quotes(command)
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""  # a `#` inside a word must not swallow the rest of the call
+        tokens = list(lexer)
+    except ValueError:
+        if not COMPOUND_DISPATCH_RE.search(command): return ""
+        return next((m for m in COMPOUND_MARKERS if m in command), "")
+    if any(COMPOUND_DISPATCH_RE.search(_unquote(b)) for b in bodies): return "command substitution"
+    # Fail closed on shapes that can hide a launcher, but only when the call could involve agents-inc at all.
+    flat = re.sub(r"\\\n", "", command)
+    could_hide = "agents-inc" in flat or "agents-inc" in re.sub(r"\$\{[^}]*\}|[\\'\"`]", "", flat)
+    commands, current, operators = [], [], []
+    for tok in tokens:
+        if tok and all(ch in _SHELL_PUNCT for ch in tok):
+            operators.append(tok); commands.append(current); current = []
+        else:
+            current.append(tok)
+    commands.append(current)
+    commands = [c for c in commands if c]
+    def is_dispatch(words: list[str]) -> bool:
+        return (len(words) >= 2 and os.path.basename(words[0].lstrip("\\")) == "agents-inc"
+                and words[1] in ("dispatch", "run", "luna"))
+    dispatch, env_prefix = False, False
+    for words in commands:
+        rest, skipped = list(words), 0
+        while rest and _ASSIGN_RE.match(rest[0]): rest.pop(0); skipped += 1
+        if not rest: continue
+        if could_hide:
+            if any(ch in rest[0] for ch in "$`\\\n"): return f"expanded command word {rest[0]!r}"
+            if rest[0] in _HIDING_HEADS: return f"shell keyword {rest[0]}"
+        head = os.path.basename(rest[0].lstrip("\\"))
+        if head in _WRAPPERS and any(is_dispatch(rest[i:]) for i in range(1, len(rest))): return f"{head} wrapper"
+        if head in _SHELLS and any(re.fullmatch(r"-[a-z]*c[a-z]*", w) for w in rest[1:]) \
+                and any(COMPOUND_DISPATCH_RE.search(_unquote(w)) for w in rest[1:]): return f"{head} -c string"
+        if is_dispatch(rest):
+            dispatch = True; env_prefix = env_prefix or bool(skipped)
+    if not dispatch: return ""
+    if env_prefix: return "env prefix"
+    if operators: return operators[0]
+    if bodies: return "command substitution"
+    return ""
+
 def compound_deny(payload: object) -> str:
     """Deny a Bash call that wraps an agents-inc dispatch in a compound command. Fails open on anything unexpected."""
     try:
         if not isinstance(payload, dict) or payload.get("tool_name") != "Bash": return ""
         command = str(_tool_input(payload).get("command") or "")
-        if not COMPOUND_DISPATCH_RE.search(command): return ""
-        if not any(m in command for m in COMPOUND_MARKERS): return ""
+        found = _dispatch_shape(command)
+        if not found: return ""
+        reason = f"{COMPOUND_DENY_REASON}{COMPOUND_SAFE_FORM} (found: {found})."
         return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                  "permissionDecisionReason": COMPOUND_DENY_REASON}})
+                                                  "permissionDecisionReason": reason}})
     except Exception:
         return ""
 

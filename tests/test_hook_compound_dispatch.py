@@ -29,7 +29,7 @@ class CompoundDispatchTest(unittest.TestCase):
     def _assert_denied(self, command):
         data = json.loads(self._run(bash(command)))["hookSpecificOutput"]
         self.assertEqual(data["permissionDecision"], "deny")
-        self.assertEqual(data["permissionDecisionReason"], REASON)
+        self.assertTrue(data["permissionDecisionReason"].startswith(REASON))
 
     def test_plain_dispatch_allowed(self):
         out = self._run(bash("agents-inc dispatch --model haiku slots.json"))
@@ -50,6 +50,102 @@ class CompoundDispatchTest(unittest.TestCase):
 
     def test_unrelated_compound_allowed(self):
         self.assertEqual(hook.compound_deny(bash("cd /x && ls | tail")), "")
+
+    def _assert_allowed(self, command):
+        self.assertEqual(hook.compound_deny(bash(command)), "")
+
+    def test_quoted_marker_allowed(self):
+        self._assert_allowed('git commit -m "agents-inc dispatch; x"')
+        self._assert_allowed('git commit -m "fix agents-inc dispatch; tidy"')
+
+    def test_quoted_redirect_arg_allowed(self):
+        self._assert_allowed("agents-inc dispatch --slots s.json --message 'a > b'")
+
+    def test_env_prefix_denied(self):
+        self._assert_denied("AGENTS_INC_ALLOW_SANDBOXED=1 agents-inc dispatch --model haiku s.json")
+
+    def test_double_quoted_subst_denied(self):
+        self._assert_denied('agents-inc dispatch --message "$(cat x)" s.json')
+
+    def test_single_quoted_subst_allowed(self):
+        self._assert_allowed("agents-inc dispatch --message '$(x)' s.json")
+
+    def test_unbalanced_quote_falls_back(self):
+        self._assert_denied("agents-inc dispatch --message 'oops; s.json")
+
+    def test_newline_separated_denied(self):
+        self._assert_denied("ls\nagents-inc dispatch --model haiku s.json")
+
+    def test_absolute_path_launcher_denied(self):
+        self._assert_denied("/Users/x/.local/bin/agents-inc dispatch --model haiku s.json && ls")
+
+    def test_echo_mention_allowed(self):
+        self._assert_allowed("echo agents-inc dispatch")
+
+    def test_hash_in_word_does_not_hide_chain(self):
+        self._assert_denied("agents-inc dispatch --slots s.json --tag a#b && rm -rf x")
+
+    def test_hash_comment_then_newline_command_denied(self):
+        self._assert_denied("agents-inc dispatch s.json # note\nrm -rf x")
+
+    def test_dispatch_in_double_quoted_subst_denied(self):
+        self._assert_denied('echo "$(agents-inc dispatch s.json)"')
+
+    def test_dispatch_in_backtick_subst_denied(self):
+        self._assert_denied("echo `agents-inc dispatch s.json`")
+
+    def test_dispatch_in_shell_c_denied(self):
+        self._assert_denied('bash -c "agents-inc dispatch s.json"')
+        self._assert_denied("sh -c 'agents-inc dispatch s.json'")
+
+    def test_wrapper_words_denied(self):
+        for wrapper in ("env", "exec", "command", "nohup", "time", "nice", "xargs"):
+            self._assert_denied(f"{wrapper} agents-inc dispatch --slots s.json")
+
+    def test_leading_backslash_denied(self):
+        self._assert_denied("\\agents-inc dispatch s.json && ls")
+
+    def test_echo_quoted_prose_still_allowed(self):
+        self._assert_allowed('echo "run agents-inc dispatch later"')
+
+    def test_equals_flag_with_quoted_semicolon_allowed(self):
+        self._assert_allowed('agents-inc dispatch --message="a;b" --slots s.json')
+
+    def test_reason_names_plain_form(self):
+        data = json.loads(hook.compound_deny(bash("agents-inc dispatch s.json && ls")))["hookSpecificOutput"]
+        reason = data["permissionDecisionReason"]
+        self.assertTrue(reason.startswith(REASON))
+        self.assertIn("Run it as: agents-inc dispatch --slots <file> --model <alias>", reason)
+        self.assertIn("found: &&", reason)
+
+    def test_brace_and_keyword_heads_denied(self):
+        self._assert_denied("{ agents-inc dispatch s.json; printf done; }")
+        self._assert_denied("if true; then agents-inc dispatch s.json; printf done; fi")
+
+    def test_eval_and_quoted_launcher_shell_c_denied(self):
+        self._assert_denied("eval 'agents-inc dispatch s.json; printf done'")
+        self._assert_denied("bash -c \"'agents-inc' dispatch s.json; printf done\"")
+
+    def test_launcher_expansion_denied(self):
+        self._assert_denied('launcher=agents-inc; "$launcher" dispatch s.json; printf done')
+        self._assert_denied("agents-${EMPTY-}inc dispatch s.json; printf done")
+        self._assert_denied("$'agents-inc' dispatch s.json; printf done")
+        self._assert_denied("agents-\\\ninc dispatch s.json; printf done")
+
+    def test_quoted_launcher_in_substitution_denied(self):
+        self._assert_denied("""printf '%s' "$('agents-inc' dispatch s.json; printf done)\"""")
+
+    def test_premature_close_denied(self):
+        self._assert_denied("""printf '%s' "$(printf ')'; agents-inc dispatch s.json)\"""")
+
+    def test_alias_denied(self):
+        self._assert_denied("shopt -s expand_aliases\nalias ai='agents-inc'\nai dispatch s.json; printf done")
+
+    def test_hiding_shapes_allowed_without_agents_inc(self):
+        self._assert_allowed("ls $HOME")
+        self._assert_allowed("if true; then ls; fi")
+        self._assert_allowed("eval \"$(ssh-agent)\"")
+        self._assert_allowed("{ ls; }")
 
     def test_exception_fails_open(self):
         with mock.patch.object(hook, "_tool_input", side_effect=RuntimeError("boom")):

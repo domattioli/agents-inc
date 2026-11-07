@@ -472,6 +472,20 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(self._result("e2")["reason"], "bad-effort")
 
     # --- D51 round two (sol 4, 7, 9, 10) ---------------------------------------------
+    def test_worker_env_marks_worker(self):
+        self.assertEqual(dispatch.worker_env("/x/claude", {})["AGENTS_INC_WORKER"], "1")
+
+    def test_worker_env_caches_under_tmpdir(self):
+        env = dispatch.worker_env("/x/claude", {"TMPDIR": "/t/tmp"})
+        self.assertEqual(env["XDG_CACHE_HOME"], "/t/tmp/cache")
+        self.assertEqual(env["npm_config_cache"], "/t/tmp/npm")
+        self.assertEqual(env["PIP_CACHE_DIR"], "/t/tmp/pip")
+
+    def test_worker_env_no_cache_without_tmpdir(self):
+        env = dispatch.worker_env("/x/claude", {})
+        for key in ("XDG_CACHE_HOME", "npm_config_cache", "PIP_CACHE_DIR"):
+            self.assertNotIn(key, env)
+
     def test_worker_env_drops_canary_and_secrets(self):
         canary = {"AGENTS_INC_CANARY": "leak", "CODEX_BRIDGE_TOKEN": "t", "OPENAI_API_KEY": "k",
                   "MY_SECRET": "s", "USER": "u", "TERM": "xterm", "LANG": "C", "TMPDIR": str(self.root)}
@@ -490,7 +504,8 @@ class BrokerTest(unittest.TestCase):
             finally:
                 dispatch._BROKER_SAFE_WRITES = False
         env = captured["env"]
-        self.assertEqual(set(env), {"PATH", "HOME", "USER", "TERM", "LANG", "TMPDIR"})
+        self.assertEqual(set(env), {"PATH", "HOME", "USER", "TERM", "LANG", "TMPDIR", "AGENTS_INC_WORKER",
+                                    "XDG_CACHE_HOME", "npm_config_cache", "PIP_CACHE_DIR"})
         for leaked in ("AGENTS_INC_CANARY", "CODEX_BRIDGE_TOKEN", "OPENAI_API_KEY", "MY_SECRET"):
             self.assertNotIn(leaked, env)
         self.assertNotIn("leak", json.dumps(env))
