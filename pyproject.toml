@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agents-inc"
 dynamic = ["version"]
-description = "Cross-vendor governance for an agentic-AI workforce"
+description = "agents-inc runs AI models the way a company runs staff: a Lead takes your request, delegates it down an org chart of cheaper Worker models, and accepts nothing until a reviewer signs off."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "LicenseRef-PolyForm-Small-Business-1.0.0-NoAI-Training"
