@@ -379,17 +379,35 @@ def real_codex_home() -> Path:
     return Path.home() / ".codex"
 
 
+def cache_entry(cache: dict, slug: str) -> dict | None:
+    """Codex's cached catalog entry for slug; else the newest cached entry of the same family (the part after the last
+    '-', e.g. luna), which the caller relabels as slug. Codex 0.159.2 caches gpt-5.6-luna while the account serves
+    gpt-6-luna to dispatch runs (2026-11-07), so an exact-only lookup failed every native step."""
+    models = [m for m in cache.get("models", []) if isinstance(m, dict) and isinstance(m.get("slug"), str)]
+    exact = next((m for m in models if m["slug"] == slug), None)
+    if exact is not None or "-" not in slug:
+        return exact
+    family = slug.rsplit("-", 1)[1]
+    def version(m: dict) -> tuple:
+        head = m["slug"].rsplit("-", 1)[0]
+        return tuple(int(x) for x in re.findall(r"\d+", head))
+    same = [m for m in models if m["slug"].rsplit("-", 1)[-1] == family and m["slug"].startswith("gpt-")]
+    return max(same, key=version, default=None)
+
+
 def host_tools_catalog(slug: str, codex_home: Path | None = None) -> Path | None:
     """A model catalog holding only slug, with HOST_TOOLS_MODEL applied; None when Codex has no cached entry for slug
     under codex_home (default: the real Codex home)."""
     home = codex_home or real_codex_home()
     try:
         cache = json.loads((home / "models_cache.json").read_text())
-        entry = next(m for m in cache.get("models", []) if m.get("slug") == slug)
-    except (OSError, ValueError, StopIteration, AttributeError):
+        entry = cache_entry(cache, slug)
+    except (OSError, ValueError, AttributeError):
+        return None
+    if entry is None:
         return None
     path = Path(tempfile.gettempdir()) / "agents-inc" / f"host-tools-catalog-{slug}.json"
-    model = {k: v for k, v in {**entry, **HOST_TOOLS_MODEL}.items() if k not in HOST_TOOLS_DROP}
+    model = {k: v for k, v in {**entry, **HOST_TOOLS_MODEL, "slug": slug}.items() if k not in HOST_TOOLS_DROP}
     _write_if_changed(path, json.dumps({**cache, "models": [model]}))
     return path
 

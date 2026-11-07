@@ -123,7 +123,10 @@ type TurnUsageOut = {
 }
 
 // The system prompt names a placeholder Claude model; luna is not that model, so those lines go.
-const stripModelLines = (text: string) => text.split('\n').filter(l => !MODEL_LINE.test(l)).join('\n')
+// The harness's commit-attribution reminder names a Claude model to credit; luna read it as its own identity (2026-11-07).
+const ATTRIBUTION = /<system-reminder>\s*Attribution for git commits[\s\S]*?<\/system-reminder>/g
+const stripModelLines = (text: string) =>
+  text.replace(ATTRIBUTION, '').split('\n').filter(l => !MODEL_LINE.test(l)).join('\n')
 
 // The harness's skill-listing reminder, cut to the skill names: luna can still call Skill by name, without ~25k chars
 // of descriptions in every fresh prompt.

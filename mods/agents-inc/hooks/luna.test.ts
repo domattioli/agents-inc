@@ -683,3 +683,10 @@ test('a failing begin or end does not fail the step', async ($, on) => {
   expect(logs.some(l => l.includes('begin exited 2'))).toBe(true)
   expect(logs.some(l => l.includes('end exited 2'))).toBe(true)
 })
+
+test('render drops the commit-attribution reminder, which names a Claude model', () => {
+  const msgs = [{ role: 'user' as const, content: [{ type: 'text', text: 'do x\n<system-reminder>\nAttribution for git commits: end with Claude Haiku 5.5\n</system-reminder>\nthen y' }] }]
+  const out = render(msgs)
+  expect(out.includes('Haiku')).toBe(false)
+  expect(out.includes('do x') && out.includes('then y')).toBe(true)
+})
