@@ -403,11 +403,11 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
   - Today: submit with `agent.sh submit --backend codex --wait "<prompt>"`, inspect by hand or run the reviewer, optionally record the decision. `agents-inc dispatch` already automates scope and report checks; cross-vendor review and ledger acceptance stay separate steps.
   - Planned (beta, not built): one-line submit, automatic cheapest-eligible selection, automatic verifier and reviewer, acceptance recorded in the ledger. Tracked in [PLAN-MVP.md](PLAN-MVP.md).
 - Open issues at 0.3.0
-  - [#7](https://github.com/domattioli/agents_Inc/issues/7) CLI-agnostic dispatch so Codex can drive the workflow; [#8](https://github.com/domattioli/agents_Inc/issues/8) astra `--approve-for-me` classifier blocks; [#6](https://github.com/domattioli/agents_Inc/issues/6) stale `BASE` path in `up.sh`; [#4](https://github.com/domattioli/agents_Inc/issues/4) prompt style-compression template; [#3](https://github.com/domattioli/agents_Inc/issues/3) speckit mandate for Lead-run work.
+  - [#7](https://github.com/domattioli/agents-inc/issues/7) CLI-agnostic dispatch so Codex can drive the workflow; [#8](https://github.com/domattioli/agents-inc/issues/8) astra `--approve-for-me` classifier blocks; [#6](https://github.com/domattioli/agents-inc/issues/6) stale `BASE` path in `up.sh`; [#4](https://github.com/domattioli/agents-inc/issues/4) prompt style-compression template; [#3](https://github.com/domattioli/agents-inc/issues/3) speckit mandate for Lead-run work.
 
 ## Where it fits
 
-`agents_Inc` is an integration and governance layer above provider tools. It does not replace their CLIs or instruction formats. It serves developers who use more than one provider, want to control incremental spend, and need delegated work checked before acceptance.
+`agents-inc` is an integration and governance layer above provider tools. It does not replace their CLIs or instruction formats. It serves developers who use more than one provider, want to control incremental spend, and need delegated work checked before acceptance.
 
 | provider tool | used | changed | notes |
 |---|---|---|---|
@@ -422,7 +422,7 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
 
 | tool | several vendors | no API billing ² | routes by rule | other-vendor review ³ | scripted checks ³ | decision ledger | `@model` question | parallel worktrees | workflow SDK |
 |---|---|---|---|---|---|---|---|---|---|
-| **agents_Inc** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| **agents-inc** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | [CrewAI](https://docs.crewai.com) | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ |
 | [AutoGen](https://github.com/microsoft/autogen) / Microsoft Agent Framework ⁴ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | [firstmate](https://github.com/kunchenguid/firstmate) ⁵ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
@@ -435,9 +435,9 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
 - Notes
   1. [claude-model-router-hook](https://github.com/tzachbon/claude-model-router-hook), [auto-model-router](https://github.com/IuriiTurok/auto-model-router), [model-routing](https://github.com/abroberts14/model-routing), [claude-router](https://github.com/bmersereau/claude-router); details in [at-route/AT-ROUTE-PRIOR-ART.md](at-route/AT-ROUTE-PRIOR-ART.md).
   2. CrewAI, AutoGen, aider and the API routers call provider APIs with your keys; they can also run free local models.
-  3. In `agents_Inc` these run on the governed path, off by default.
+  3. In `agents-inc` these run on the governed path, off by default.
   4. AutoGen is in maintenance mode; Microsoft names Microsoft Agent Framework as its successor.
-  5. firstmate works at a different layer (where agents run and how they are watched); evaluation open in [#31](https://github.com/domattioli/agents_Inc/issues/31).
+  5. firstmate works at a different layer (where agents run and how they are watched); evaluation open in [#31](https://github.com/domattioli/agents-inc/issues/31).
   6. [Bindle](https://github.com/deislabs/bindle) is a sibling: the ledger owns job identity and status; Bindle stores artifact bytes.
   7. Continue.dev also uses `@`, but its `@` adds a context source, not a model.
   - LangGraph and other agent frameworks are not compared yet.

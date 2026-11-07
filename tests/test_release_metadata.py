@@ -1,6 +1,6 @@
 """Every release cites the same Zenodo concept DOI ("Cite all versions").
 
-Operator ruling 2026-10-07: 10.5281/zenodo.22670100 is the concept DOI for agents_Inc (record 23092581 is
+Operator ruling 2026-10-07: 10.5281/zenodo.22670100 is the concept DOI for agents-inc (record 23092581 is
 v0.1.0). Zenodo's GitHub integration adds each new release as a version under that concept, so the
 citation never changes between releases. The release workflow runs this suite before it builds.
 """

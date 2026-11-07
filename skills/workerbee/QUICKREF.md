@@ -47,7 +47,7 @@ MUST lines that are easy to drop:
 - Caveman absent or unreadable: the prompt says `caveman NOT installed -> checked by hand`; an unreadable skill file gets `caveman unreadable -> checked by hand` and is not a block.
 - Sub-delegation follows D46 ruling 3. A Lead on the Executive or Orchestrator rung may sub-delegate to any lower rung, only via `agents-inc dispatch`; never the Agent tool (D59). A Workhorse delegate sub-delegates only to the Grunt rung, with an enumerated allowlist. A Grunt never sub-delegates. The delegate echoes `SUB-DELEGATE MODEL: <slug> -- allowlist match: yes` before any nested call.
 - `LESSON-CANDIDATE` relays one rung up, never skipping. A scout check for duplicates and contradictions runs before it reaches the Executive. Only the Executive presents it to the operator.
-- Dispatch work that touches an agents_Inc issue: fetch SKILL.md Step 11 first.
+- Dispatch work that touches an agents-inc issue: fetch SKILL.md Step 11 first.
 - `poll.sh` reports state, never content. Do not pipe a delegate's log into context.
 
 Lint (mandatory, D41): `agents-inc dispatch` lints every prompt it renders; by hand, from any directory: `python3 ~/.claude/skills/workerbee/scripts/check_dispatch_prompt.py <prompt_file> [--with-handoff-lint]`. Save the prompt to a file first. Reports: same script with `--profile report`, which checks report elements. Render prompts with `agents-inc dispatch --slots <json> --model <alias> --dry-run` (or `~/.claude/skills/workerbee/scripts/render_dispatch.py --slots <json>`); worked example in `slots.md`.

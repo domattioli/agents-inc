@@ -1,6 +1,6 @@
-# agents_Inc agent instructions
+# agents-inc agent instructions
 
-`agents_Inc` pools Claude, Codex, Gemini, Mistral, and OpenRouter capacity behind governed routing. It checks delegated work with deterministic verification and cross-vendor review, then records decisions in an append-only ledger. The repository was named `agents_for_dummies` before 2026-09-07. Old names in historical documents stay unchanged.
+`agents-inc` pools Claude, Codex, Gemini, Mistral, and OpenRouter capacity behind governed routing. It checks delegated work with deterministic verification and cross-vendor review, then records decisions in an append-only ledger. The repository was named `agents_for_dummies` before 2026-09-07. Old names in historical documents stay unchanged.
 
 ## Repository layout
 

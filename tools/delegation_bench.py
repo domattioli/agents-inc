@@ -1,22 +1,25 @@
-"""Token savings bench: the same build-test-verify task with and without agents_Inc.
+"""Token savings bench: the same build-test-verify task with and without agents-inc.
 
 See docs/proposals/delegation-savings-test.md. Each trial: fresh empty git dir holding only SPEC.md, a fresh
 `claude -p` session under one arm's isolated HOME, then the hidden acceptance script. One JSON row per trial.
 
 Arms
-  A0  no agents_Inc, Agent/Task disallowed (session does everything itself)
-  A1  no agents_Inc, native Agent allowed (host's own delegation)
-  B   agents_Inc installed, agent gate advisory
-  C   agents_Inc installed, agent gate enforce
+  A0  no agents-inc, Agent/Task disallowed (session does everything itself)
+  A1  no agents-inc, native Agent allowed (host's own delegation)
+  B   agents-inc installed, agent gate advisory
+  C   agents-inc installed, agent gate enforce
   Acheap  as A0 but the session model is sonnet
+  Bcheap  as B but the session model is sonnet (cheap supervisor, cheap delegates)
 
 Usage:
   python3 tools/delegation_bench.py --size S --arms A0,A1,B,C --n 1 --out <dir>
   python3 tools/delegation_bench.py --rollup <dir>
 Auth: each arm runs `claude -p` under an isolated HOME, so Keychain auth (macOS interactive login) is not
 visible to the trial. Set CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY in the calling
-environment; those two survive the CLAUDE* scrub. A preflight (`claude auth status` under the trial env) runs once
-per arm before its first trial; skip it with --no-auth-check.
+environment; those two survive the CLAUDE* scrub. Each arm HOME also gets a `claude` shim on PATH that re-exports
+CLAUDE_CODE_OAUTH_TOKEN from `<home>/.bench-oauth` (mode 0600, written from the calling env, removed when absent):
+without it a delegate started from the trial's Bash tool runs with no login. A preflight (`claude auth status` under
+the trial env) runs once per arm before its first trial; skip it with --no-auth-check.
 
 Sandbox: the harness launches `claude -p` and `agents-inc` itself, so the repo's sandbox.excludedCommands entry
 `agents-inc *` does not cover it. Either add `python3 tools/delegation_bench.py *` to sandbox.excludedCommands or
@@ -24,7 +27,7 @@ run it from a plain terminal (agents-inc dispatch exits 69 inside the sandbox).
 """
 from __future__ import annotations
 
-import argparse, json, os, shutil, subprocess, sys, time
+import argparse, json, os, shlex, shutil, subprocess, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,7 +35,9 @@ sys.path.insert(0, str(ROOT))
 from agents_inc.install.dispatch import claude_usage, CLAUDE_MODELS  # noqa: E402
 
 FIX = ROOT / "fixtures" / "build-test-verify"
-ARMS = ("A0", "A1", "B", "C", "Acheap")
+ARMS = ("A0", "A1", "B", "C", "Acheap", "Bcheap")
+AGENTS_INC_ARMS = ("B", "C", "Bcheap")
+SONNET_ARMS = ("Acheap", "Bcheap")
 SCRUB = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE",
          "CLAUDE_PID", "CLAUDE_CODE_ENTRYPOINT", "SANDBOX_RUNTIME")
 KEEP = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")   # headless auth; survive the CLAUDE* scrub
@@ -49,9 +54,11 @@ def arm_home(out: Path, arm: str) -> Path:
     home = out / "homes" / arm
     marker = home / ".bench-ready"
     if marker.exists():
+        install_shim(home)      # token may have changed since the arm was built
         return home
     home.mkdir(parents=True, exist_ok=True)
-    if arm in ("B", "C"):
+    install_shim(home)
+    if arm in AGENTS_INC_ARMS:
         env = dict(os.environ, HOME=str(home))
         launcher = home / ".local/bin/agents-inc"
         try:
@@ -81,6 +88,40 @@ def trial_env(home: Path) -> dict:
     env["PATH"] = f"{home / '.local/bin'}:{env.get('PATH', '')}"
     env.setdefault("AGENTS_INC_TURN_TIMEOUT_S", "1800")
     return env
+
+
+SHIM = """#!/bin/sh
+# delegation bench: every `claude` under this HOME (trial, native subagent, agents-inc delegate) logs in with the
+# operator's setup-token. A delegate launched from a trial's Bash tool otherwise prints `Not logged in`: the fake
+# HOME has no Keychain login and CLAUDE_CODE_OAUTH_TOKEN does not survive into the command's environment.
+if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -r "$HOME/.bench-oauth" ]; then
+  CLAUDE_CODE_OAUTH_TOKEN=$(cat "$HOME/.bench-oauth"); export CLAUDE_CODE_OAUTH_TOKEN
+fi
+exec {real} "$@"
+"""
+
+
+def install_shim(home: Path) -> None:
+    """`<home>/.local/bin/claude`: re-exports the token from `<home>/.bench-oauth` (mode 0600), then execs the
+    real claude. The token file is written only when the calling env carries CLAUDE_CODE_OAUTH_TOKEN, and removed
+    when it does not. Nothing prints or logs the value."""
+    real = next((p for p in (shutil.which("claude", path=d) for d in os.environ.get("PATH", "").split(os.pathsep))
+                 if p and not p.startswith(str(home))), None)
+    if not real:
+        raise SystemExit("claude not on PATH")
+    shim = home / ".local" / "bin" / "claude"
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    shim.write_text(SHIM.format(real=shlex.quote(real)))
+    shim.chmod(0o755)
+    tok = home / ".bench-oauth"
+    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if token:
+        fd = os.open(tok, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(token)
+        tok.chmod(0o600)
+    elif tok.exists():
+        tok.unlink()
 
 
 _AUTH_OK: set = set()
@@ -119,14 +160,18 @@ def run_trial(out: Path, size: str, arm: str, rep: int, timeout: int, auth_check
     work.mkdir(parents=True)
     shutil.copy(FIX / size / "SPEC.md", work / "SPEC.md")
     subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    # dispatch's scope snapshot needs a HEAD; an empty repo fails it with "ambiguous argument 'HEAD'"
+    subprocess.run(["git", "add", "SPEC.md"], cwd=work, check=True)
+    subprocess.run(["git", "-c", "user.name=bench", "-c", "user.email=bench@localhost", "commit", "-q", "-m", "fixture"],
+                   cwd=work, check=True)
     home = arm_home(out, arm)
     if auth_check:
         auth_preflight(home, arm)
-    model = CLAUDE_MODELS["sonnet" if arm == "Acheap" else "opus"]
+    model = CLAUDE_MODELS["sonnet" if arm in SONNET_ARMS else "opus"]
     argv = ["claude", "-p", "--model", model, "--output-format", "json", "--permission-mode", "bypassPermissions"]
     if arm in ("A0", "Acheap"):
         argv += ["--disallowedTools", "Agent", "Task"]
-    prompt = BASE_PROMPT + (LADDER if arm in ("B", "C") else "")
+    prompt = BASE_PROMPT + (LADDER if arm in AGENTS_INC_ARMS else "")
     argv += ["--", prompt]
     version = subprocess.run(["claude", "--version"], capture_output=True, text=True).stdout.strip()
     t0 = time.time()
@@ -175,15 +220,16 @@ def totals(session: dict | None, delegates: list[dict]) -> dict:
 
 def rollup(out: Path) -> str:
     rows = [json.loads(l) for l in (out / "rows.jsonl").read_text().splitlines() if l.strip()]
-    lines = ["| trial | arm | accepted | cases | traps | false accept | input | output | cache read | cache write | list-price USD (quota proxy) | seconds | agents-inc dispatches | native subagents |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    lines = ["| trial | arm | accepted | cases | traps | false accept | input | output | cache read | cache write | list-price USD (quota proxy) | seconds | turns (session+delegates) | agents-inc dispatches | native subagents |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         a, t = r["acceptance"], r["totals"]["all"]
         sub = (r.get("subagent_stats") or {}).get("spawned")
+        turns = sum((u or {}).get("num_turns") or 0 for u in [r.get("session_usage")] + list(r["delegate_usage"]))
         lines.append(f"| {r['trial']} | {r['arm']} | {r['accepted']} | {a.get('passed')}/{a.get('total')} | "
                      f"{a.get('traps_passed')}/{a.get('traps')} | {a.get('false_accept')} | {t['input_tokens']:,} | "
                      f"{t['output_tokens']:,} | {t['cache_read']:,} | {t['cache_write']:,} | {t['cost_usd']} | "
-                     f"{r['seconds']} | {len(r['delegate_usage'])} | {sub} |")
+                     f"{r['seconds']} | {turns} | {len(r['delegate_usage'])} | {sub} |")
     lines += ["", "By model:", ""]
     for r in rows:
         bm = ", ".join(f"{m}: in {v['input_tokens']:,} out {v['output_tokens']:,} cr {v['cache_read']:,} cw {v['cache_write']:,}"

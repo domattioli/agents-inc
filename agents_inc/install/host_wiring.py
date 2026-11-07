@@ -54,7 +54,7 @@ def block_text(paths: InstallPaths) -> str:
         "- Claude's `Agent` tool spawns Claude subagents only. Use it only when agents-inc routing selects a Claude rung.",
         f"- Before the first dispatch in a session, read `{skills / 'workerbee/QUICKREF.md'}` (gates, ladder, verification, 14-field prompt contract; about 2k tokens). Read the full `{skills / 'workerbee/SKILL.md'}` and `{skills / 'codex-bridge/SKILL.md'}` (about 20k tokens together) only for a non-Claude rung, a prompt written from scratch, or a disputed gate.",
         "- A delegate's self-reported PASS is not evidence. Verify the output yourself before accepting it.",
-        "- If doctor does not print `READY`, say so to the operator and run `agents-inc repair --source <agents_Inc checkout>`.",
+        "- If doctor does not print `READY`, say so to the operator and run `agents-inc repair --source <agents-inc checkout>`.",
         END,
         "",
     ))

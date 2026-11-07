@@ -248,7 +248,7 @@ class ToolGrantTest(GrantsBase):
 class GrantsSectionTest(GrantsBase):
     """#54: dispatch renders the fixed grants into every Claude delegate prompt."""
     HEADER = "GRANTS (fixed by dispatch for this run; the harness allows exactly these tools):"
-    PREFIX = "gh issue view 54 -R domattioli/agents_Inc"
+    PREFIX = "gh issue view 54 -R domattioli/agents-inc"
 
     def _prompt(self) -> str:
         return (self._run_dir() / "prompt.md").read_text()
@@ -381,6 +381,16 @@ class GateRefusalTest(GrantsBase):
                     shutil.rmtree(shutil_runs)
                 self.calls.clear()
                 self._refused(gates)
+
+    def test_string_gates_message_names_expected_type(self):
+        for name, gates in {"plain-command": "python3 -m unittest", "json-scalar": "5", "json-object": '{"argv": ["x"]}'}.items():
+            with self.subTest(name):
+                self.calls.clear()
+                rc, out, err = self._dispatch(GATES=gates)
+                self.assertEqual(rc, 3, out + err)
+                self.assertIn("GATES must be a JSON list, got string", out)
+                import shutil
+                shutil.rmtree(self.runs, ignore_errors=True)
 
     def test_json_string_accepted(self):
         rc, out, _ = self._dispatch(GATES=json.dumps([{"argv": PASS}]))

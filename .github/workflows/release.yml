@@ -95,7 +95,7 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
-            --title "agents_Inc ${GITHUB_REF_NAME#v}" \
+            --title "agents-inc ${GITHUB_REF_NAME#v}" \
             --notes-file release-notes.md
 
   zenodo-concept:
