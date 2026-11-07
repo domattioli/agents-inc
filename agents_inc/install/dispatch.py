@@ -67,7 +67,8 @@ def _load(name: str, scripts: Path = SCRIPTS):
 
 
 # 025 (#104): a dispatch from an agents-inc checkout is judged by the checkout's workerbee scripts, pinned at launch.
-PINNED_SCRIPTS = ("check_dispatch_prompt.py", "render_dispatch.py", "dispatch_rungs.py", "pre_dispatch_snapshot.py")
+PINNED_SCRIPTS = ("check_dispatch_prompt.py", "render_dispatch.py", "dispatch_rungs.py", "pre_dispatch_snapshot.py",
+                  "dispatch_schema.py")
 PINNED_TEMPLATES = ("header.md", "slots.md")  # render_dispatch.py reads these from the directory above its own
 
 
@@ -85,6 +86,15 @@ def scripts_dir(cwd: Path) -> tuple[Path, str]:
             and all(p.is_file() and not p.is_symlink() for p in probes)):
         return scripts, "checkout"
     return SCRIPTS, "installed"
+
+
+def _slot_str(name: str, value) -> str:
+    """#131: the string form of a slot that may be structured (FILES_IN_SCOPE and ALLOWLIST arrays, FAN_OUT object)."""
+    if isinstance(value, list):
+        return "\n".join(str(v) for v in value) if name == "FILES_IN_SCOPE" else ", ".join(str(v) for v in value)
+    if isinstance(value, dict):
+        return f"width {value.get('width')}, total {value.get('total')}, depth {value.get('depth')}"
+    return str(value)
 
 
 def _pin_scripts(src: Path, run_id: str) -> Path:
@@ -252,13 +262,6 @@ def snapshot(*args: str, cwd: Path, scripts: Path = SCRIPTS) -> tuple[int, str]:
     return res.returncode, res.stdout + res.stderr
 
 
-def scope_text(value) -> str:
-    """FILES_IN_SCOPE as one string. A JSON list of paths is joined with spaces; str() on a list would add brackets the glob check refuses."""
-    if isinstance(value, (list, tuple)):
-        return " ".join(str(v) for v in value)
-    return str(value or "")
-
-
 def allow_paths(files_in_scope: str) -> list[str]:
     """Paths named in the FILES_IN_SCOPE slot; prose such as "none (read-only)" yields nothing."""
     out = []
@@ -367,12 +370,20 @@ CLAUDE_WORKER_DENY = (".ssh", ".config", ".codex-bridge", ".codex", ".local", ".
 WORKER_SETTINGS = '{"sandbox": {"enabled": false}}'
 # #94: AGENTS_INC_ALLOW_SANDBOXED=1 lets dispatch start inside another sandbox (tests, a caller that knows better).
 ALLOW_SANDBOXED_ENV = "AGENTS_INC_ALLOW_SANDBOXED"
-SANDBOX_FIX = ('add "agents-inc *" to sandbox.excludedCommands; rerun as one plain command (no env prefix, cd or &&); '
-               "do not retry unchanged")
+SANDBOX_FIX = ('do not retry unchanged; two routes: (a) rerun as one plain command with no cd, &&, ;, pipe, redirect, heredoc or $(...) '
+               '(add "agents-inc *" to sandbox.excludedCommands); (b) for Claude rungs set '
+               'sandbox.network.allowedDomains ["api.anthropic.com"] in ~/.claude/settings.json')
+CODEX_NESTED_FIX = "Codex cannot nest a sandbox (rc 71); run as one plain `agents-inc ...` command"
+PROBE_HOST, PROBE_TIMEOUT = "api.anthropic.com", 2.0
+_SANDBOX_NOTE: dict = {}  # run.json fields launch() sets when it proceeds inside a Claude Code sandbox
 
 
 class CallerSandboxed(RuntimeError):
     """#94: dispatch itself runs inside another sandbox: the delegate would lose its network, so no child starts."""
+
+    def __init__(self, where="", fix=None, code="caller-sandboxed"):
+        super().__init__(where)
+        self.fix, self.code = fix, code
 
 
 def caller_sandbox(env=None) -> str | None:
@@ -385,6 +396,37 @@ def caller_sandbox(env=None) -> str | None:
     if env.get("CODEX_SANDBOX"):
         return "CODEX_SANDBOX is set (Codex sandbox)"
     return None
+
+
+def api_reachable(env=None, timeout: float = PROBE_TIMEOUT, target: str = PROBE_HOST, port: int = 443) -> bool:
+    """HTTP CONNECT to target:port through HTTPS_PROXY. True only on a 200 status line; anything else is False."""
+    import base64 as _b64, socket, urllib.parse
+    env = os.environ if env is None else env
+    raw = env.get("HTTPS_PROXY") or env.get("https_proxy")
+    if not raw:
+        return False
+    try:
+        u = urllib.parse.urlsplit(raw if "//" in raw else "//" + raw)
+        host, pport = u.hostname, u.port
+        if not host or not pport:
+            return False
+        head = f"CONNECT {target}:{port} HTTP/1.1\r\nHost: {target}:{port}\r\n"
+        if u.username is not None:
+            cred = f"{urllib.parse.unquote(u.username)}:{urllib.parse.unquote(u.password or '')}"
+            head += "Proxy-Authorization: Basic " + _b64.b64encode(cred.encode()).decode() + "\r\n"
+        with socket.create_connection((host, pport), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall((head + "\r\n").encode())
+            buf = b""
+            while b"\n" not in buf and len(buf) < 4096:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    break
+                buf += chunk
+        parts = buf.split(b"\n", 1)[0].decode("latin-1").split()
+        return len(parts) >= 2 and parts[1] == "200"
+    except Exception:
+        return False
 
 
 def worker_env(exe: str, base: dict | None = None) -> dict:
@@ -582,7 +624,7 @@ def lead_roster(model: str, slots: dict, fan_out: dict | None, scripts: Path = S
     if _kind(model) == "claude" and fan_out.get("depth", 0) <= 0:
         return []
     rungs = _load("dispatch_rungs", scripts)
-    text = str(slots.get("ALLOWLIST", "")).lower()
+    text = _slot_str("ALLOWLIST", slots.get("ALLOWLIST", "")).lower()
     mine = rungs.LADDER.index(rungs.MODEL_RUNG[model])
     named = [m for m in (*CODEX_SLUGS, *CLAUDE_MODELS) if re.search(rf"\b{m}\b", text)]
     return [m for m in named if rungs.LADDER.index(rungs.MODEL_RUNG[m]) < mine
@@ -691,8 +733,13 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
     lead_dir (#68, D60): run a Codex or Claude delegate as a Lead with the broker MCP tools over that run directory."""
     if not _BROKER_SAFE_WRITES:
         where = caller_sandbox()
+        _SANDBOX_NOTE.clear()
         if where:
-            raise CallerSandboxed(where)
+            if not where.startswith("SANDBOX_RUNTIME") or not api_reachable():
+                raise CallerSandboxed(where)
+            if kind != "claude":
+                raise CallerSandboxed(where, CODEX_NESTED_FIX, "caller-sandboxed-codex")
+            _SANDBOX_NOTE.update({"caller_sandbox": "claude-code", "api": "reachable"})
     channel = _ask_channel(run_dir, _WORKER_ASK) if (_BROKER_SAFE_WRITES and _WORKER_ASK) else None
     if kind == "claude":
         if lead_dir is not None and channel is not None:
@@ -723,6 +770,8 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
                 + ((channel["script"], channel["config"]) if channel else ())))
             argv += ["--settings", WORKER_SETTINGS]
             argv = [SANDBOX_EXEC, "-f", str(profile)] + argv
+        elif _SANDBOX_NOTE:
+            argv += ["--settings", WORKER_SETTINGS]
         limit = _turn_timeout()
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 cwd=str(cwd), text=True, start_new_session=True, **extra)
@@ -1193,6 +1242,7 @@ def _finish(spec: dict, run_dir: Path, out_path: Path, result: dict, home_repo: 
         spec["reason_detail"] = detail
     else:
         spec.pop("reason_detail", None)
+    _record_ledger_return(spec)
     _write_json(run_dir / "run.json", spec)
     print(_status(spec, report, snap, out_path))
     _mirror_and_note(spec, run_dir, home_repo, prompt)
@@ -1206,6 +1256,7 @@ def _red_before_run(spec: dict, run_dir: Path, reason: str, detail: str, home_re
     _wtext(out_path, "")
     spec.update(rc=-1, outcome="red", reason=reason,
                 reason_detail=re.sub(r"\s+", "_", screen_text(detail, 200).strip()))
+    _record_ledger_return(spec)
     _write_json(run_dir / "run.json", spec)
     print(_status(spec, "none", snap, out_path))
     _mirror_and_note(spec, run_dir, home_repo, None)
@@ -1215,7 +1266,7 @@ def _red_before_run(spec: dict, run_dir: Path, reason: str, detail: str, home_re
 def _launch_failed(spec: dict, run_dir: Path, exc: Exception, home_repo: str | None, out_name: str = "stdout.md") -> int:
     """022 FR-009: launch() raised, so no child ran. Record red/launch-failed, print one status line, return 1."""
     if isinstance(exc, CallerSandboxed):  # #94: blocked, exit 69, the fix in the detail
-        return _red_before_run(spec, run_dir, "blocked", f"caller-sandboxed: {exc}; {SANDBOX_FIX}", home_repo, out_name,
+        return _red_before_run(spec, run_dir, "blocked", f"{exc.code}: {exc}; {exc.fix or SANDBOX_FIX}", home_repo, out_name,
                                code=EXIT_BLOCKED)
     return _red_before_run(spec, run_dir, "launch-failed", f"{type(exc).__name__}: {exc}", home_repo, out_name)
 
@@ -1230,6 +1281,19 @@ def _record_ledger_node(spec: dict, slots: dict) -> None:
             spec["ledger_error"] = "ledger write failed"
     except Exception as exc:
         spec["ledger_error"] = f"{type(exc).__name__}: {exc}"
+
+
+def _record_ledger_return(spec: dict) -> None:
+    """Add a `returned` ledger row for this run. A failure goes to run.json, never the outcome."""
+    if not spec.get("run_id") or not spec.get("outcome"):
+        return
+    try:
+        from .. import host_ledger  # lazy, like cli.py
+        from .cli import _paths
+        if not host_ledger.record_dispatch_return(_paths().state, spec):
+            spec["ledger_return_error"] = "ledger write failed"
+    except Exception as exc:
+        spec["ledger_return_error"] = f"{type(exc).__name__}: {exc}"
 
 
 def _grants_from_slots(slots: dict, cwd: Path, scripts: Path = SCRIPTS) -> tuple[list | None, list, tuple | None]:
@@ -1484,15 +1548,17 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
     else:
         shutil.copyfile(slots_path, run_dir / "slots.json")
     spec = {"run_id": run_id, "kind": kind, "slots": str(slots_path), "model": model, "effort": effort,
+            "schema_version": 1, "slots_sha256": _sha256_bytes((run_dir / "slots.json").read_bytes()),
+            "slots_path": str(run_dir / "slots.json"),
             "cwd": str(cwd), "chain": ["CoS", model], "snapshot": str(run_dir / "snapshot.json"),
-            "gates": {"tier": args.tier, "allow": allow_paths(scope_text(slots.get("FILES_IN_SCOPE", "")))},
+            "gates": {"tier": args.tier, "allow": allow_paths(_slot_str("FILES_IN_SCOPE", slots.get("FILES_IN_SCOPE", "")))},
             "permission_mode": slots.get("PERMISSION_MODE") or DEFAULT_PERMISSION_MODE,
             "codex_write": codex_write(slots),
             "codex_network": codex_network(slots),
             "scripts_dir": str(sdir), "scripts_source": ssrc,
             "rc": None, "outcome": None, "session_id": None}
     lint = run_dir / "lint.txt"
-    globs = scope_globs(scope_text(slots.get("FILES_IN_SCOPE", "")))
+    globs = scope_globs(_slot_str("FILES_IN_SCOPE", slots.get("FILES_IN_SCOPE", "")))
     gates, bash_allow, why = _grants_from_slots(slots, cwd, sdir)
     if globs:
         why = ("refused-scope", f"FILES_IN_SCOPE has glob patterns the scope gate cannot match: {' '.join(globs)}; list exact paths")
@@ -1593,6 +1659,7 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
                            if kind == "claude" else {}))
     except Exception as exc:
         return _launch_failed(spec, run_dir, exc, getattr(args, "home_repo", None))
+    spec.update(_SANDBOX_NOTE)
     if lead_dir is not None:
         _record_lead(spec, lead_dir)
     out_path = run_dir / "stdout.md"

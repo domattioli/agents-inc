@@ -124,12 +124,17 @@ class BuildTests(unittest.TestCase):
             setuptools_major = 0
         if setuptools_major < 77:
             self.skipTest("setuptools 77 or later is needed for an offline build")
+        dist = DIST
+        try:
+            dist.mkdir(parents=True, exist_ok=True)
+        except OSError:  # read-only checkout (e.g. a container mount, #129)
+            dist = Path(self.enterContext(tempfile.TemporaryDirectory())) / "dist"
+            dist.mkdir()
         if _has_pypa_build():
-            command = [sys.executable, "-m", "build", "--no-isolation", "--sdist", "--wheel", "--outdir", str(DIST), "."]
+            command = [sys.executable, "-m", "build", "--no-isolation", "--sdist", "--wheel", "--outdir", str(dist), "."]
         else:
-            command = [sys.executable, "-c", BUILD_META, str(DIST)]
-        DIST.mkdir(parents=True, exist_ok=True)
-        for stale in DIST.glob(f"agents_inc-{agents_inc.__version__}*"):
+            command = [sys.executable, "-c", BUILD_META, str(dist)]
+        for stale in dist.glob(f"agents_inc-{agents_inc.__version__}*"):
             stale.unlink()
         ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,9 +149,9 @@ class BuildTests(unittest.TestCase):
             env = {**os.environ, "HOME": tmp, "XDG_CACHE_HOME": str(Path(tmp) / "cache")}
             result = subprocess.run(command, cwd=source, capture_output=True, text=True, env=env, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
-        wheels = list(DIST.glob(f"agents_inc-{agents_inc.__version__}-*.whl"))
+        wheels = list(dist.glob(f"agents_inc-{agents_inc.__version__}-*.whl"))
         self.assertEqual(len(wheels), 1, result.stdout[-2000:] + result.stderr[-2000:])
-        self.assertTrue(list(DIST.glob(f"agents_inc-{agents_inc.__version__}.tar.gz")))
+        self.assertTrue(list(dist.glob(f"agents_inc-{agents_inc.__version__}.tar.gz")))
         with zipfile.ZipFile(wheels[0]) as wheel:
             names = set(wheel.namelist())
             metadata = next(n for n in names if n.endswith(".dist-info/METADATA"))

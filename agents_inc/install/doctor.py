@@ -69,8 +69,12 @@ def _sandbox_exclusion(paths: InstallPaths) -> list[str]:
     except (OSError, ValueError): return []
     sandbox = data.get("sandbox") if isinstance(data, dict) else None
     excluded = sandbox.get("excludedCommands", []) if isinstance(sandbox, dict) else []
-    if any(isinstance(e, str) and e.split()[:1] == ["agents-inc"] for e in excluded): return []
-    return ["WB_SANDBOX_EXCLUDE_MISSING"]
+    out = []
+    if not any(isinstance(e, str) and e.split()[:1] == ["agents-inc"] for e in excluded): out.append("WB_SANDBOX_EXCLUDE_MISSING")
+    network = sandbox.get("network") if isinstance(sandbox, dict) else None
+    domains = network.get("allowedDomains", []) if isinstance(network, dict) else []
+    if not isinstance(domains, list) or "api.anthropic.com" not in domains: out.append("WB_SANDBOX_API_DOMAIN_MISSING")
+    return out
 
 def _mod_missing(release: Path, home: Path, runner, which) -> list[str]:
     """Spec 027: the release ships the live-view mod but Claude Code does not list it. Warning only; READY stays."""
@@ -82,6 +86,19 @@ def _mod_missing(release: Path, home: Path, runner, which) -> list[str]:
     except (OSError, subprocess.SubprocessError): return []
     if listed.returncode != 0: return []
     return [] if "agents-inc@agents-inc-local" in (listed.stdout or "") else ["MOD_NOT_INSTALLED"]
+
+def _mcp_user_scope(home: Path, runner, which) -> list[str]:
+    """Spec 031 FR-015: the plugin ships delegate-agent now; a user-scope entry from the old install.sh doubles it.
+    A plugin server is listed as `plugin:agents-inc:delegate-agent:`, a user one as `delegate-agent:`. Warning only."""
+    claude = which("claude")
+    if not claude: return []
+    try: listed = runner([claude, "mcp", "list"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, check=False,
+                            env=dict(os.environ, HOME=str(home)))
+    except (OSError, subprocess.SubprocessError): return []
+    if listed.returncode != 0: return []
+    if any(ln.strip().startswith("delegate-agent:") for ln in (listed.stdout or "").splitlines()):
+        return ["MCP_USER_SCOPE_DUPLICATE: remove the old user-scope entry with `claude mcp remove --scope user delegate-agent`"]
+    return []
 
 def _luna_report(release: Path, paths: InstallPaths) -> dict | None:
     """Spec 028: the native agents-inc:luna type's status, only when the release ships the mod. Any failure is silent."""
@@ -132,6 +149,7 @@ def check_install(paths: InstallPaths, live_model: str | None = None, runner=sub
     if which("claude", path=WORKER_PATH + os.pathsep + os.environ.get("PATH", "")) is None: codes.append("WB_CLAUDE_NOT_FOUND")
     if sys.platform == "darwin" and not sandbox_probe(): warnings.append("WB_SANDBOX_NESTED")  # inside another sandbox
     warnings.extend(_mod_missing(release, paths.home, runner, which))
+    warnings.extend(_mcp_user_scope(paths.home, runner, which))
     warnings.extend(_luna_warnings(release, paths))
     warnings.extend(_hook_drift(paths))
     warnings.extend(_sandbox_exclusion(paths))

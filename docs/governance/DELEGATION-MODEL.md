@@ -44,6 +44,16 @@ Rungs (Executive, Orchestrator, Workhorse, Grunt) = cost class only, never a rol
 3. Only CoS commits and pushes.
 4. Delegate sees only its slice: never run tree, sibling reports, CEO reasoning.
 
+## Claude Code harness facts (verified 2026-10-28)
+
+Source: issue #123. Harness capabilities only; routing stays D59/D60 (`docs/DECISIONS.md:626-633`): Agent-tool Claude models are not a sub-delegation route, Agent is denied to Leads.
+
+- Agent-tool subagents carry the Agent tool and can nest (verified chain: Opus → Sonnet → Haiku). Capability, not permission to route that way.
+- Subagents lack the Workflow tool; only the main session starts a Workflow.
+- Nested transcripts under the session `subagents/` dir record `model` and per-message `usage` (input, cache_creation, cache_read, output). Real per-agent usage is readable there.
+- Workflow scripts: no filesystem or Node; `Date.now()`, `Math.random()`, argless `new Date()` throw; `agent()` returns no usage; `budget.spent()` counts output tokens only; `workflow()` nests one level.
+- `tools:` frontmatter cannot scope Bash to one script.
+
 ## Chief of Staff charter (D43, D46.5-6)
 
 Operator ruling 2026-09-22: CoS = CEO's right hand; takes Lead report, figures out what matters to CEO. Method = `accelerate` decision-instrument doctrine (optional user-scope skill; rules restated here so they bind w/o it).

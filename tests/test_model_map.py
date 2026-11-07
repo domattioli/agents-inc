@@ -66,17 +66,17 @@ class ModelMapTest(unittest.TestCase):
         stub = Path(self.tmp.name) / "bin"; stub.mkdir()
         (stub / "codex").write_text('#!/bin/bash\nprintf "%s " "$@" > "$STUB_OUT"\nfor a in "$@"; do [ "$prev" = "-o" ] && echo ok > "$a"; prev="$a"; done\n')
         (stub / "codex").chmod(0o755)
-        env = {"PATH": f"{stub}:{os.path.dirname(sys.executable)}:/usr/bin:/bin", "HOME": self.tmp.name, "STUB_OUT": str(Path(self.tmp.name) / "out")}
+        env = {"PATH": f"{stub}:{os.path.dirname(sys.executable)}:/usr/bin:/bin", "HOME": self.tmp.name, "TMPDIR": self.tmp.name, "STUB_OUT": str(Path(self.tmp.name) / "out")}
         bad = subprocess.run(["/bin/bash", str(root), "--model", "nope", "hi"], env=env, capture_output=True, text=True)
         self.assertEqual(bad.returncode, 1); self.assertIn("invalid model", bad.stderr)
-        dflt = subprocess.run(["/bin/bash", str(root), "--model", "terra", "hi"], env=env, capture_output=True, text=True)
+        dflt = subprocess.run(["/bin/bash", str(root), "--model", "nova", "hi"], env=env, capture_output=True, text=True)
         self.assertEqual(dflt.returncode, 1); self.assertIn("invalid model", dflt.stderr)
-        env["CODEXAGENT_MODEL_MAP"] = '{"terra": "gpt-5.6-terra"}'
-        ok = subprocess.run(["/bin/bash", str(root), "--model", "terra", "hi"], env=env, capture_output=True, text=True)
+        env["CODEXAGENT_MODEL_MAP"] = '{"nova": "gpt-5.6-nova"}'
+        ok = subprocess.run(["/bin/bash", str(root), "--model", "nova", "hi"], env=env, capture_output=True, text=True)
         self.assertEqual(ok.returncode, 0, ok.stderr)
-        self.assertIn("-m gpt-5.6-terra", (Path(self.tmp.name) / "out").read_text())
+        self.assertIn("-m gpt-5.6-nova", (Path(self.tmp.name) / "out").read_text())
 
-    def test_mcp_default_enum_luna_only_and_config_adds(self):
+    def test_mcp_default_enum_has_all_four_seats_and_config_adds(self):
         mcp = Path(__file__).resolve().parent.parent / "skills/codex-bridge/mcp/codex_agent_mcp.py"
         req = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n'
 
@@ -87,10 +87,10 @@ class ModelMapTest(unittest.TestCase):
             return tool["inputSchema"]["properties"]["model"]["enum"]
 
         home = Path(self.tmp.name) / "h"; (home / ".config/agents-inc").mkdir(parents=True)
-        self.assertEqual(enum({}, home), ["luna"])
+        self.assertEqual(sorted(enum({}, home)), ["astra", "luna", "sol", "terra"])
         (home / ".config/agents-inc/roster.json").write_text('{"models": {"sol": "gpt-5.6-sol"}}')
-        self.assertEqual(sorted(enum({}, home)), ["luna", "sol"])
-        self.assertEqual(sorted(enum({"AGENTS_INC_MODEL_MAP": '{"astra": "gpt-6-astra"}'}, home)), ["astra", "luna", "sol"])
+        self.assertEqual(sorted(enum({}, home)), ["astra", "luna", "sol", "terra"])
+        self.assertEqual(sorted(enum({"AGENTS_INC_MODEL_MAP": '{"nova": "gpt-6-nova"}'}, home)), ["astra", "luna", "nova", "sol", "terra"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,9 @@
 import contextlib
 import io
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,6 +71,20 @@ def run(argv, fetch, api_holder, env):
 
 
 class ZenodoDepositTests(unittest.TestCase):
+    def test_help_runs_outside_repo_without_pythonpath(self):
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        with tempfile.TemporaryDirectory() as cwd:
+            result = subprocess.run(
+                [sys.executable, str(Path(zd.__file__).resolve()), "--help"],
+                cwd=cwd,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage", result.stdout)
+
     def test_publishes_new_version_with_built_files_and_metadata(self):
         ws, apis = Workspace(), []
         rc, out, _ = run(ws.argv(), fetch_for([PARENT]), apis, {"ZENODO_TOKEN": "t"})

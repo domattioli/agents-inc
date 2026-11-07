@@ -245,7 +245,7 @@ class FanOutTest(unittest.TestCase):
 
     def test_fan_out_message_names_expected_form(self):
         labeled = cdp.label_missing(cdp.check("FAN_OUT: lots"))
-        self.assertTrue(any("FAN_OUT: width <n>, total <n>, depth <n>" in str(m) for m in labeled), labeled)
+        self.assertTrue(any("FAN_OUT: width N, total N, depth N" in str(m) for m in labeled), labeled)
 
 
 class MissingLabelTest(unittest.TestCase):

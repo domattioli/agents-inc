@@ -12,8 +12,11 @@ class McpLunaPinTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("codex_agent_mcp", REPO / "skills/codex-bridge/mcp/codex_agent_mcp.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        pin = json.loads((REPO / "agents_inc/routing.json").read_text())["tiers"]["grunt"]["codex"]
-        self.assertEqual(mod.DEFAULT_MODEL_MAP["luna"], pin)
+        tiers = json.loads((REPO / "agents_inc/routing.json").read_text())["tiers"]
+        self.assertEqual(mod.DEFAULT_MODEL_MAP["luna"], tiers["grunt"]["codex"])
+        for alias, tier in (("luna", "grunt"), ("terra", "workhorse"), ("sol", "orchestrator"), ("astra", "executive")):
+            self.assertEqual(mod.DEFAULT_MODEL_MAP[alias], tiers[tier]["codex"])
+        self.assertEqual(mod._pinned_seats("/nonexistent"), {"luna": "gpt-6-luna"})
         self.assertEqual(mod._pinned_luna("/nonexistent"), "gpt-6-luna")
 
 

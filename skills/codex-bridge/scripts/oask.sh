@@ -74,7 +74,7 @@ oask_report_trap() {
   [[ -n "$retry" ]] && retry_arg=(--retry-after "$retry")
   PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" python3 -m agents_inc.free_health report \
     --provider openrouter --model "$MODEL" --outcome "$outcome" "${retry_arg[@]+${retry_arg[@]}}" \
-    >/dev/null 2>/tmp/oask_report_err.$$ || echo "oask: health report failed" >&2
+    >/dev/null 2>"${TMPDIR:-/tmp}/oask_report_err.$$" || echo "oask: health report failed" >&2
   if [[ "$outcome" != "withdrawn" ]] && [[ "$outcome" != "zdr" ]]; then
     local result="ok"
     [[ "$outcome" != "ok" ]] && result="transient"
@@ -82,7 +82,7 @@ oask_report_trap() {
     [[ -n "${OASK_REPORT_STATUS:-}" ]] && msg="$outcome http $OASK_REPORT_STATUS"
     CODEX_BRIDGE_MODE=standard bash "$SCRIPT_DIR/route.sh" report openrouter "$result" "$msg" >/dev/null 2>&1 || true
   fi
-  rm -f /tmp/oask_report_err.$$ "$OASK_REPORT_BODY_FILE" 2>/dev/null
+  rm -f "${TMPDIR:-/tmp}/oask_report_err.$$" "$OASK_REPORT_BODY_FILE" 2>/dev/null
   exit $ec
 }
 trap oask_report_trap EXIT
@@ -242,7 +242,8 @@ PYTHON
 
 # Make request
 OASK_ATTEMPTED=true
-HTTP_CODE=$(curl -sS -w "%{http_code}" -o /tmp/oask_response.json \
+OASK_RESPONSE_FILE=$(mktemp "${TMPDIR:-/tmp}/oask_response.XXXXXX")
+HTTP_CODE=$(curl -sS -w "%{http_code}" -o "$OASK_RESPONSE_FILE" \
   -m "$OASK_TIMEOUT" \
   --connect-timeout "$OASK_CONNECT_TIMEOUT" \
   -H "Content-Type: application/json" \
@@ -251,11 +252,11 @@ HTTP_CODE=$(curl -sS -w "%{http_code}" -o /tmp/oask_response.json \
   -X POST https://openrouter.ai/api/v1/chat/completions \
   -d "$BODY")
 
-RESPONSE=$(cat /tmp/oask_response.json)
+RESPONSE=$(cat "$OASK_RESPONSE_FILE")
 OASK_REPORT_STATUS="$HTTP_CODE"
 OASK_REPORT_BODY_FILE=$(mktemp ${TMPDIR:+"$TMPDIR/bridge.XXXXXX"})
-cp /tmp/oask_response.json "$OASK_REPORT_BODY_FILE" 2>/dev/null || echo -n "$RESPONSE" > "$OASK_REPORT_BODY_FILE"
-rm -f /tmp/oask_response.json
+cp "$OASK_RESPONSE_FILE" "$OASK_REPORT_BODY_FILE" 2>/dev/null || echo -n "$RESPONSE" > "$OASK_REPORT_BODY_FILE"
+rm -f "$OASK_RESPONSE_FILE"
 
 # Check HTTP status
 if [[ "$HTTP_CODE" != "200" ]]; then

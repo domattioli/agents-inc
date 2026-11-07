@@ -23,6 +23,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Support direct execution from outside the repository, including the release job.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from tools.check_zenodo_concept import CONCEPT_DOI, CONCEPT_RECID, check_once
 
 API = "https://zenodo.org/api"

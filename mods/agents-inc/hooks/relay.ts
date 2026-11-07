@@ -151,7 +151,7 @@ export const register: Register = on => {
       text = `${typeof body === 'string' ? body : ''}\n\n${verdict}`.trim()
     } else {
       const tail = stderr.slice(-20).join('\n')
-      const redacted = await $.process.run(['agents-inc', 'events', 'redact'], { input: `${stdout}\n${tail}` })
+      const redacted = await $.process.run(['agents-inc', 'events', 'redact'], { stdin: `${stdout}\n${tail}` })
         .then(r => r.stdout)
         .catch(() => '[output withheld: redaction failed]')
       text = `dispatch ended without a verdict\n${redacted}`
