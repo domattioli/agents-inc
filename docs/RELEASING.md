@@ -1,6 +1,6 @@
-# Releasing agents_Inc
+# Releasing agents-inc
 
-This runbook covers release 0.6.0: a GitHub tag and release, a Zenodo archive, and the PyPI upload of the `agents-inc` package (import name `agents_inc`). 0.2.0 was the first PyPI upload; 0.3.0 is the first release that installs from pip alone, with no `--source` checkout. Pushing a tag that starts with `v` runs `.github/workflows/release.yml`, which tests, builds, publishes to PyPI, and then creates the GitHub release. The workflow then deposits the release on Zenodo under the concept DOI with the `ZENODO_TOKEN` repository secret (step 8 below).
+This runbook covers release 0.6.1: a GitHub tag and release, a Zenodo archive, and the PyPI upload of the `agents-inc` package (import name `agents_inc`). 0.2.0 was the first PyPI upload; 0.3.0 is the first release that installs from pip alone, with no `--source` checkout. Pushing a tag that starts with `v` runs `.github/workflows/release.yml`, which tests, builds, publishes to PyPI, and then creates the GitHub release. The workflow then deposits the release on Zenodo under the concept DOI with the `ZENODO_TOKEN` repository secret (step 8 below).
 
 ## Decisions
 
@@ -45,11 +45,11 @@ The `LICENSE` file is the PolyForm Small Business License 1.0.0, unmodified, fol
 
 ## Operator steps (before the tag)
 
-1. Keep the Zenodo GitHub integration switch for `domattioli/agents_Inc` off. See the stray record note below.
+1. Keep the Zenodo GitHub integration switch for `domattioli/agents-inc` off. See the stray record note below.
 2. On PyPI, create a pending trusted publisher with these values:
    - Project name: `agents-inc`
    - Owner: `domattioli`
-   - Repository: `agents_Inc`
+   - Repository: `agents-inc`
    - Workflow: `release.yml`
    - Environment: `pypi`
 3. In the GitHub repository settings, create an environment named `pypi`. Adding a required reviewer gives one manual approval before each upload.
@@ -60,12 +60,12 @@ The `LICENSE` file is the PolyForm Small Business License 1.0.0, unmodified, fol
 1. Pre-tag gate. Both commands must pass:
    - `grep -c TODO-operator CITATION.cff .zenodo.json` prints 0 for both files.
    - `python3 -m unittest discover -s tests -p 'test_*.py'` ends with `OK`.
-2. Check that `CHANGELOG.md` has a dated `[0.6.0]` section and that `agents_inc.__version__` is `0.6.0`.
+2. Check that `CHANGELOG.md` has a dated `[0.6.1]` section and that `agents_inc.__version__` is `0.6.1`.
 3. Merge `development` into `main` by pull request.
-4. On `main`, create the tag: `git tag -a v0.6.0 -m "agents_Inc 0.6.0"`.
-5. Push the tag: `git push origin v0.6.0`.
+4. On `main`, create the tag: `git tag -a v0.6.1 -m "agents-inc 0.6.1"`.
+5. Push the tag: `git push origin v0.6.1`.
 6. Watch the `release` workflow in the Actions tab. The `publish` job waits for the `pypi` environment approval if a reviewer was set.
-7. Confirm that https://pypi.org/project/agents-inc/0.6.0/ exists and that the GitHub release lists the wheel and the sdist.
+7. Confirm that https://pypi.org/project/agents-inc/0.6.1/ exists and that the GitHub release lists the wheel and the sdist.
 8. Zenodo. The workflow's `zenodo-concept` job runs `tools/zenodo_deposit.py`: it publishes the built wheel and sdist as a new version of the newest record under the concept, with metadata from `.zenodo.json` at the tag, then `tools/check_zenodo_concept.py` confirms the record. It needs the repository secret `ZENODO_TOKEN` (a Zenodo personal access token with `deposit:write` and `deposit:actions`; Zenodo account settings, Applications). Without the secret the job goes red and the deposit falls back to hand: from a DomI checkout, `python3 skills/zenodo-publish/scripts/zenodo_publish.py --new-version-of <latest record id> --draft`, then review and publish the draft, then rerun the job with `gh run rerun <id> --failed`. Description edits made after the tag happen in the Zenodo editor; the next release carries them in `.zenodo.json`.
 9. Confirm that the `README.md` DOI badge still shows the concept DOI `10.5281/zenodo.22670100`. Version DOIs never go in the README.
 
@@ -107,11 +107,11 @@ Applied in the 0.3.0 docs pass, which rewrote `README.md` to 150 lines or fewer.
 
 5. License section. `README.md` line 547.
    - Current: `No LICENSE file exists yet.`
-   - Proposed: a `### License` heading, then: `agents_Inc is licensed under the PolyForm Small Business License 1.0.0 with one licensor-added term that forbids using the software for AI or machine-learning training. The full terms are in [LICENSE](LICENSE). Small businesses, individuals, and noncommercial users may use it under those terms. For commercial use or AI training rights, contact the address in LICENSE.`
+   - Proposed: a `### License` heading, then: `agents-inc is licensed under the PolyForm Small Business License 1.0.0 with one licensor-added term that forbids using the software for AI or machine-learning training. The full terms are in [LICENSE](LICENSE). Small businesses, individuals, and noncommercial users may use it under those terms. For commercial use or AI training rights, contact the address in LICENSE.`
 
 6. Citation section. `README.md`, a new `### Citation` block after the proposed License section (after line 547).
    - Current: none.
-   - Proposed: `If you use agents_Inc in research, please cite it. GitHub's "Cite this repository" button reads CITATION.cff. The DOI for all versions is <concept DOI>.` Replace `<concept DOI>` once Zenodo confirms it.
+   - Proposed: `If you use agents-inc in research, please cite it. GitHub's "Cite this repository" button reads CITATION.cff. The DOI for all versions is <concept DOI>.` Replace `<concept DOI>` once Zenodo confirms it.
 
 7. Start-here install line. `docs/START-HERE.md` line 5, under "## Cross-project direct Codex install (pre-MVP)".
    - Current: ``From a source checkout: `python3 -m agents_inc.install.cli install --source "$PWD"`.``

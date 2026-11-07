@@ -10,7 +10,7 @@ from pathlib import Path
 from .hook import write_setting
 from .paths import InstallPaths
 from .receipt import InstallReceipt
-from .runtime import load_model_map
+from .runtime import cache_entry, load_model_map
 
 SWITCH_KEY = "luna_type"
 SWITCH_MODES = ("on", "off")
@@ -45,7 +45,7 @@ def catalog_state(paths: InstallPaths, slug: str) -> str:
     """ok when Codex's model cache holds an entry for slug (the source of the host-tools catalog), else missing."""
     try:
         cache = json.loads((paths.home / ".codex" / "models_cache.json").read_text())
-        return "ok" if any(m.get("slug") == slug for m in cache.get("models", [])) else "missing"
+        return "ok" if cache_entry(cache, slug) is not None else "missing"
     except (OSError, ValueError, AttributeError):
         return "missing"
 

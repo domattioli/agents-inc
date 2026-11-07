@@ -66,7 +66,7 @@ def _load(name: str, scripts: Path = SCRIPTS):
     return module
 
 
-# 025 (#104): a dispatch from an agents_Inc checkout is judged by the checkout's workerbee scripts, pinned at launch.
+# 025 (#104): a dispatch from an agents-inc checkout is judged by the checkout's workerbee scripts, pinned at launch.
 PINNED_SCRIPTS = ("check_dispatch_prompt.py", "render_dispatch.py", "dispatch_rungs.py", "pre_dispatch_snapshot.py",
                   "dispatch_schema.py")
 PINNED_TEMPLATES = ("header.md", "slots.md")  # render_dispatch.py reads these from the directory above its own
@@ -1299,7 +1299,15 @@ def _record_ledger_return(spec: dict) -> None:
 def _grants_from_slots(slots: dict, cwd: Path, scripts: Path = SCRIPTS) -> tuple[list | None, list, tuple | None]:
     """Parse GATES and BASH_ALLOW. Return (gates, bash_allow, None) or (None, [], (refused outcome, why))."""
     rd = _load("render_dispatch", scripts)
-    gates, why = rd.parse_gates(slots.get("GATES"))
+    raw = slots.get("GATES")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            decoded = json.loads(raw)
+        except ValueError:
+            decoded = None
+        if not isinstance(decoded, list):
+            return None, [], ("refused-gates", "GATES must be a JSON list, got string")
+    gates, why = rd.parse_gates(raw)
     if why:
         return None, [], ("refused-gates", why)
     for g in gates or []:
@@ -1601,10 +1609,12 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
     prompt_path = run_dir / "prompt.md"
     _wtext(prompt_path, prompt)
     missing, log = lint_prompt(prompt_path, args.tier, model, scripts=sdir)
-    _wtext(lint, ("COMPLIANT\n" if not missing else f"NON-COMPLIANT missing: {missing}\n") + log)
+    named = _load("check_dispatch_prompt", sdir).label_missing(missing) if missing else missing
+    named_text = "[" + ", ".join(str(m) for m in named) + "]"
+    _wtext(lint, ("COMPLIANT\n" if not missing else f"NON-COMPLIANT missing: {named_text}\n") + log)
     if missing:
         spec["outcome"] = "refused-lint"; _write_json(run_dir / "run.json", spec)
-        print(f"dispatch {run_id} {model} refused NON-COMPLIANT:{missing} lint={lint}")
+        print(f"dispatch {run_id} {model} refused NON-COMPLIANT:{named_text} lint={lint}")
         return EXIT_REFUSED
     roster = [] if _BROKER_SAFE_WRITES else lead_roster(model, slots, spec["fan_out"], sdir)
     if kind == "claude" and model in LEAD_RUNGS and not _BROKER_SAFE_WRITES:

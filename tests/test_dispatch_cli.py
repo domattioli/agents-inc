@@ -127,7 +127,7 @@ class DispatchCliTest(CliBase):
             rc, out, _ = self._main("--slots", str(self._slots()), "--model", "haiku", "--cwd", str(self.repo),
                                     "--run-dir", str(self.runs))
         self.assertEqual(rc, 3)
-        self.assertIn("NON-COMPLIANT:[12]", out)
+        self.assertIn("NON-COMPLIANT:[12 out-of-scope]", out)
 
     def test_dry_run(self):
         rc, out, _ = self._main("--slots", str(self._slots()), "--model", "haiku", "--cwd", str(self.repo),
@@ -673,7 +673,7 @@ PROBES = ("agents_inc/install/dispatch.py", "skills/workerbee/scripts/check_disp
 
 
 class ScriptsSourceTest(CliBase):
-    """025 US1 (#104): a dispatch from an agents_Inc checkout is judged by a launch-time copy of its scripts."""
+    """025 US1 (#104): a dispatch from an agents-inc checkout is judged by a launch-time copy of its scripts."""
 
     def setUp(self):
         super().setUp()

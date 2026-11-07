@@ -131,7 +131,7 @@ Every call appends one line to `~/.codex-bridge/at_route.log`: UTC timestamp, al
 
 ## Install
 
-Run `agents-inc install --source <agents_Inc checkout>` or `agents-inc repair --source <agents_Inc checkout>` to install the hook and the alias links. The installer writes the hook entry to `~/.claude/settings.json`, creates the symlinks under `~/.local/bin`, and manages a journal so an interrupted install can be rolled back.
+Run `agents-inc install --source <agents-inc checkout>` or `agents-inc repair --source <agents-inc checkout>` to install the hook and the alias links. The installer writes the hook entry to `~/.claude/settings.json`, creates the symlinks under `~/.local/bin`, and manages a journal so an interrupted install can be rolled back.
 
 The hook runs from the installed release, reached through `~/.local/share/agents-inc/current/skills/codex-bridge/scripts/at_route.sh`. This path survives branch checkouts and is covered by the bundle hash check.
 

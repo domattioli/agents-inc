@@ -1,4 +1,4 @@
-"""Check that Zenodo archived a release under the agents_Inc concept DOI.
+"""Check that Zenodo archived a release under the agents-inc concept DOI.
 
 Run after the GitHub release. Zenodo archives a few minutes later, so the check retries.
 Exit 0: a record for the version sits under the concept. Exit 1: the record is missing
@@ -39,7 +39,7 @@ def check_once(version: str, fetch=_get) -> tuple[str, str]:
             if hit.get("conceptdoi") != CONCEPT_DOI:
                 return "stray", f"record {hit.get('id')} has conceptdoi {hit.get('conceptdoi')}, want {CONCEPT_DOI}"
             return "ok", f"record {hit.get('id')} version {version} under {CONCEPT_DOI}"
-    for hit in fetch({"q": "title:agents_Inc", "all_versions": "true", "sort": "mostrecent", "size": 25}):
+    for hit in fetch({"q": "title:agents-inc", "all_versions": "true", "sort": "mostrecent", "size": 25}):
         if _version(hit) == version and str(hit.get("conceptrecid")) != CONCEPT_RECID:
             return "stray", (f"record {hit.get('id')} version {version} sits under concept "
                              f"{hit.get('conceptdoi')}, not {CONCEPT_DOI}; see docs/RELEASING.md")

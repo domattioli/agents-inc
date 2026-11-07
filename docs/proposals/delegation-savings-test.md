@@ -1,12 +1,12 @@
-# Proposal: token savings test, same task with and without agents_Inc
+# Proposal: token savings test, same task with and without agents-inc
 
 Status: draft, 2026-10-22. Answers the roadmap "Now" item in README §1 ("measure the token cost of delegation against doing the work in one session"). Bound by D5 (metric and quality floor), D9 ($0 incremental, so the unit is tokens and quota, not cash) and D10 (no savings percentage until both workflows reach N≥5).
 
 ## 1. Question
 
-For one fixed build-test-verify task and one fixed prompt, how many tokens does a Claude Code session spend when it does the work itself, versus when agents_Inc is installed and the work is dispatched down the ladder? "Tokens" means every token billed to any model in the trial: the session you talk to, every delegate, and every reviewer.
+For one fixed build-test-verify task and one fixed prompt, how many tokens does a Claude Code session spend when it does the work itself, versus when agents-inc is installed and the work is dispatched down the ladder? "Tokens" means every token billed to any model in the trial: the session you talk to, every delegate, and every reviewer.
 
-The honest expectation is a crossover. agents_Inc adds a fixed per-session cost (hook text, the mandate, a SKILL.md read of about 16k tokens, the dispatch prompt contract) and a per-dispatch cost (rendered prompt, report, review). It can only win when the work moved to cheaper rungs is large enough to repay that overhead, and only if quality holds. The test must be able to show a loss as plainly as a win.
+The honest expectation is a crossover. agents-inc adds a fixed per-session cost (hook text, the mandate, a SKILL.md read of about 16k tokens, the dispatch prompt contract) and a per-dispatch cost (rendered prompt, report, review). It can only win when the work moved to cheaper rungs is large enough to repay that overhead, and only if quality holds. The test must be able to show a loss as plainly as a win.
 
 ## 2. Arms
 
@@ -14,16 +14,16 @@ Each trial is one task run once under one arm, from a clean checkout, in a fresh
 
 | Arm | Session setup | Who does the work |
 |---|---|---|
-| A0. Control, no delegation | Claude Code, no agents_Inc hooks. `Agent` and `Task` disallowed. Session model = the model agents_Inc would make the Lead (opus). | The session alone. Isolates the cost of doing everything at the top rung. |
+| A0. Control, no delegation | Claude Code, no agents-inc hooks. `Agent` and `Task` disallowed. Session model = the model agents-inc would make the Lead (opus). | The session alone. Isolates the cost of doing everything at the top rung. |
 | A1. Control, native delegation | As A0 but `Agent` allowed. | The session plus whatever Claude Code delegates on its own (Explore and other scouts already default to a cheaper model) or is asked to ("use sonnet for the tests"). This is what an uninstalled user actually gets today. |
-| B. agents_Inc, advisory gate (default install) | Hooks installed, `agent gate: advisory`. Same session model. | Session is the CoS; dispatches via `agents-inc dispatch` per the ladder (opus Lead, sonnet or haiku Workers). Native `Agent` still possible for scouts. |
-| C. agents_Inc, enforce gate | As B with `agent gate: enforce`. | As B, but native `Agent` is blocked, so every delegation goes through dispatch and is in the ledger. |
+| B. agents-inc, advisory gate (default install) | Hooks installed, `agent gate: advisory`. Same session model. | Session is the CoS; dispatches via `agents-inc dispatch` per the ladder (opus Lead, sonnet or haiku Workers). Native `Agent` still possible for scouts. |
+| C. agents-inc, enforce gate | As B with `agent gate: enforce`. | As B, but native `Agent` is blocked, so every delegation goes through dispatch and is in the ledger. |
 
-Lower rungs are delegated to in B and C by design; that is the mechanism under test and is never disabled. The important consequence of A1 is that the test does not measure delegation against no delegation. It measures agents_Inc's governed, ladder-routed delegation against the host's native, ungoverned delegation. A0 exists so the two effects can be separated: A1 minus A0 is what native delegation already buys, and B or C minus A1 is what agents_Inc adds on top of it.
+Lower rungs are delegated to in B and C by design; that is the mechanism under test and is never disabled. The important consequence of A1 is that the test does not measure delegation against no delegation. It measures agents-inc's governed, ladder-routed delegation against the host's native, ungoverned delegation. A0 exists so the two effects can be separated: A1 minus A0 is what native delegation already buys, and B or C minus A1 is what agents-inc adds on top of it.
 
 Because arm A1 delegates to cheaper models too, its token accounting must be split by model, not just by source. The session JSONL carries a `model` field on every message, including subagent turns, so the per-model split comes for free in all arms.
 
-Isolation is by `CLAUDE_CONFIG_DIR`, one directory per arm, so the operator's live install is never unwired and rewired between trials. Arm A's directory has no agents_Inc hooks; B and C are `agents-inc install` outputs with the gate set by `agents-inc repair --agent-gate`.
+Isolation is by `CLAUDE_CONFIG_DIR`, one directory per arm, so the operator's live install is never unwired and rewired between trials. Arm A's directory has no agents-inc hooks; B and C are `agents-inc install` outputs with the gate set by `agents-inc repair --agent-gate`.
 
 A fifth arm, A-cheap (control run on sonnet alone), is worth one pass: if sonnet alone passes the quality floor at lower cost than either B or C, that is the finding, and the ladder has to beat it rather than beat opus.
 
@@ -49,7 +49,7 @@ Three sizes of the same shape, so the crossover point can be seen:
 
 The seeded traps are the D5 quality floor. A false accept is a `VERIFICATION.md` that claims a requirement is met when the hidden acceptance cases say it is not, or that stays silent on the contradiction in M.
 
-Why this shape rather than a repo fixture: it is the work every consumer asks for, it needs no setup beyond Python, the acceptance script makes grading mechanical, and the build/test/verify split maps directly onto what agents_Inc claims to improve (Worker builds, Lead checks, independent verification before acceptance).
+Why this shape rather than a repo fixture: it is the work every consumer asks for, it needs no setup beyond Python, the acceptance script makes grading mechanical, and the build/test/verify split maps directly onto what agents-inc claims to improve (Worker builds, Lead checks, independent verification before acceptance).
 
 One prompt per size, written once and fully specified so no grilling is needed in `-p` mode. The same text goes to every arm. Arms B and C append only the ladder phrase from the README quick start ("... opus, haiku.").
 
@@ -84,7 +84,7 @@ Quality gate per trial: hidden acceptance cases passed, false-accept count on se
 - **N and order.** N≥5 per (task, arm) cell, per D10. Interleave arms (A, B, C, A, B, C ...) rather than running all of one arm, so quota state and time of day do not favour one arm.
 - **Fresh state.** New worktree, new session, no `--resume`, per trial. Cache reads are reported, not hidden, because a real user benefits from them in both arms.
 - **Same session model in every arm.** Otherwise the test measures the model, not the infrastructure.
-- **Native delegation is a moving target.** Which model Claude Code picks for a native subagent is set by the host and can change between releases. Record the Claude Code version per trial and report A1's per-model token split, so a later reader can tell whether a difference between A1 and B came from agents_Inc or from the host changing its own defaults.
+- **Native delegation is a moving target.** Which model Claude Code picks for a native subagent is set by the host and can change between releases. Record the Claude Code version per trial and report A1's per-model token split, so a later reader can tell whether a difference between A1 and B came from agents-inc or from the host changing its own defaults.
 - **Prompt parity.** Identical spec and task text. Arms B and C add only the ladder phrase. Do not tune the prompt for one arm after seeing results.
 - **Turn caps.** None. Let each arm finish or hit the existing `AGENTS_INC_TURN_TIMEOUT_S`. A timeout is a failed trial and is reported as such.
 - **Quota pause.** A D9 pause (exit 75) marks the trial `paused`; rerun it after reset and keep the paused row in the raw data.

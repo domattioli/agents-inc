@@ -99,7 +99,8 @@ class ArmHomeInstallFailureTest(unittest.TestCase):
                                             output="partial out\n", stderr="line one\nWB_HOST_UNWIRED: boom\n")
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
-            with mock.patch.object(bench.subprocess, "run", side_effect=err) as run:
+            with mock.patch.object(bench, "install_shim"), \
+                    mock.patch.object(bench.subprocess, "run", side_effect=err) as run:
                 with self.assertRaises(SystemExit) as cm:
                     bench.arm_home(out, "B")
             log = out / "homes" / "B" / "install.log"
@@ -116,7 +117,8 @@ class ArmHomeInstallFailureTest(unittest.TestCase):
 
     def test_non_installed_arm_touches_no_subprocess(self):
         with tempfile.TemporaryDirectory() as td:
-            with mock.patch.object(bench.subprocess, "run", side_effect=AssertionError("no subprocess")):
+            with mock.patch.object(bench, "install_shim"), \
+                    mock.patch.object(bench.subprocess, "run", side_effect=AssertionError("no subprocess")):
                 home = bench.arm_home(Path(td), "A0")
             self.assertTrue((home / ".bench-ready").exists())
 
