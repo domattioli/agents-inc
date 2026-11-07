@@ -147,6 +147,48 @@ class CompoundDispatchTest(unittest.TestCase):
         self._assert_allowed("eval \"$(ssh-agent)\"")
         self._assert_allowed("{ ls; }")
 
+    def test_quoted_operator_argument_allowed(self):
+        self._assert_allowed("agents-inc dispatch s.json --message '&&'")
+        self._assert_allowed("agents-inc dispatch s.json --message '&''&'")
+        self._assert_allowed('agents-inc dispatch s.json --message "&&"')
+        self._assert_allowed("agents-inc dispatch s.json --message=x'&&'")
+
+    def test_quoted_operator_does_not_hide_real_one(self):
+        self._assert_denied("agents-inc dispatch s.json --message '&&' && ls")
+
+    def test_quoted_heredoc_body_allowed(self):
+        self._assert_allowed("cat <<'EOF'\nagents-inc dispatch s.json\nEOF")
+        self._assert_allowed("cat <<'EOF'\nagents-inc dispatch s.json && ls; echo $(x)\n\nEOF")
+        self._assert_allowed("cat <<-EOF\n\tagents-inc dispatch s.json; ls\n\tEOF")
+
+    def test_heredoc_then_real_dispatch_denied(self):
+        self._assert_denied("cat <<'EOF'\nprose\nEOF\nagents-inc dispatch s.json")
+
+    def test_unquoted_heredoc_substitution_denied(self):
+        self._assert_denied("cat <<EOF\n$(agents-inc dispatch s.json)\nEOF")
+
+    def test_quoted_prose_in_substitution_allowed(self):
+        self._assert_allowed("""printf '%s' "$(printf '%s' 'agents-inc dispatch s.json')\"""")
+
+    def test_comment_substitution_allowed(self):
+        self._assert_allowed("printf done # $(agents-inc dispatch s.json)")
+
+    def test_wrapper_running_other_command_allowed(self):
+        self._assert_allowed("env printf '%s' agents-inc dispatch")
+        self._assert_allowed("env -i FOO=1 printf agents-inc dispatch")
+        self._assert_denied("env -u X FOO=1 agents-inc dispatch s.json")
+
+    def test_quoted_assignment_is_command_name(self):
+        self._assert_allowed("'X=1' agents-inc dispatch s.json")
+
+    def test_quoted_paren_in_substitution_is_data(self):
+        self._assert_allowed("""printf '%s' "$(printf ')' )\"""")
+        self._assert_denied("""printf '%s' "$(printf ')'; agents-inc dispatch s.json)\"""")
+
+    def test_reason_names_element_for_premature_close(self):
+        data = json.loads(hook.compound_deny(bash("""printf '%s' "$(printf ')'; agents-inc dispatch s.json)\"""")))
+        self.assertIn("found: command substitution", data["hookSpecificOutput"]["permissionDecisionReason"])
+
     def test_exception_fails_open(self):
         with mock.patch.object(hook, "_tool_input", side_effect=RuntimeError("boom")):
             self.assertEqual(hook.compound_deny(bash("cd x && agents-inc dispatch s")), "")

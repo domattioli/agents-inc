@@ -9,6 +9,7 @@ Short form of `SKILL.md` for routine dispatch. Read the full `SKILL.md` and `ski
 3. Chain resolves by ladder (D46): higher rung manages; same rung, ask the operator one question. State the chain only when surprising.
 
 4. Dispatch through `agents-inc dispatch --slots <json> --model <slug>` (D47). The CoS writes the slots file and pastes nothing: the command renders, lints, snapshots, launches, and verifies, and returns one status line. Files stay in the run directory.
+4a. Default route in Claude Code with the agents-inc mod: the pane. Write the slots file with the Write tool, then spawn Agent `subagent_type: agents-inc:relay` with the model, slots path, and `cwd` (the git repo, inside the session root). The relay calls `mcp__agents-inc__run`: no Bash, so no exit 69. Use Bash `agents-inc dispatch --slots` only when the mod is absent.
 5. Fan-out (D48): slots carry `FAN_OUT: width <n>, total <n>, depth <n>` (default by rung: Executive and Orchestrator 3/6/2, Workhorse 2/4/1, Grunt 0); Workers <= floor(20 / findings cap); report line `WORKERS SPAWNED: n`.
 
 ## Ladder
