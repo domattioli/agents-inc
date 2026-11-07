@@ -417,8 +417,15 @@ class GateRunTest(GrantsBase):
         rc, _, spec = self._gate_run([{"argv": [sys.executable, "-c", "import sys;sys.exit(3)"], "expect_rc": 3}])
         self.assertEqual((rc, spec["outcome"]), (0, "green"))
 
+    def test_missing_binary_is_refused_by_preflight(self):
+        rc, out, spec = self._gate_run([{"argv": ["/nonexistent/bin/xyz"]}])
+        self.assertEqual((rc, spec["outcome"]), (3, "refused-capability"))
+        self.assertIn("gate[0] executable not found", spec["reason_detail"])
+
     def test_missing_binary_is_gate_missing(self):
-        rc, _, spec = self._gate_run([{"argv": ["/nonexistent/bin/xyz"]}])
+        # D72: preflight normally refuses first; a binary that vanishes after preflight is still gate-missing.
+        with mock.patch.object(dispatch, "capability_preflight", return_value=[]):
+            rc, _, spec = self._gate_run([{"argv": ["/nonexistent/bin/xyz"]}])
         self.assertEqual((rc, spec["outcome"], spec["reason"]), (1, "red", "gate-missing"))
         self.assertIsNone(spec["gate_results"][0]["rc"])
         self.assertEqual(spec["gate_results"][0]["error"], "FileNotFoundError")

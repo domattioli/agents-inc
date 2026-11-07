@@ -417,7 +417,8 @@ class LeadCodexHomeTest(unittest.TestCase):
             seen = self._run(run_dir, self.root)
         self.assertIn("CODEX_HOME", seen["env"])
         self.assertFalse([k for k in seen["env"] if dispatch.SECRET_ENV_RE.search(k)])
-        self.assertLessEqual(set(seen["env"]), {"PATH", "HOME", "USER", "TERM", "LANG", "TMPDIR", "CODEX_HOME"})
+        self.assertLessEqual(set(seen["env"]), {"PATH", "HOME", "USER", "TERM", "LANG", "TMPDIR", "CODEX_HOME",
+                                                      "AGENTS_INC_WORKER"})
 
     def test_cleanup_failure_is_reported_and_fails_the_run(self):
         run_dir = self.root / "lead-run"

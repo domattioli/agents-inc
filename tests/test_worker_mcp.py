@@ -458,4 +458,4 @@ class WorkerProtocolHygieneTest(unittest.TestCase):
         self.assertGreaterEqual(runtime.MCP_TOOL_TIMEOUT_SEC - mcp_broker.AWAIT_MAX_SEC, 60)
         self.assertEqual(dispatch.WORKER_ENV_KEYS, ("HOME", "USER", "TERM", "LANG", "TMPDIR"))
         base = {"HOME": "/h", "USER": "u", "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT": "1", "MCP_TIMEOUT": "1"}
-        self.assertEqual(set(dispatch.worker_env("/usr/bin/claude", base)), {"PATH", "HOME", "USER"})
+        self.assertEqual(set(dispatch.worker_env("/usr/bin/claude", base)), {"PATH", "HOME", "USER", "AGENTS_INC_WORKER"})
