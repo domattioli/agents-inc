@@ -8,11 +8,56 @@ const PANE = 'agents-manager'
 const RUN_PANE = 'run-'
 const POLL_MS = 2000
 const KEEP_RUNS = 8
-const EMPTY: ManagerView = { rows: [], note: 'click a row to open it · or type "<row> <message>"' }
+const STALE_MS = 30 * 60 * 1000
+const EMPTY: ManagerView = { rows: [], note: 'click a row to open it · or pick a target and type a message', summary: '' }
+const STOP_TEXT = 'Stop now and report what you have.'
 
-const view = atom({ plugin: 'agents-manager', key: 'view' } as const, EMPTY, { shape: 'view-2' })
+const view = atom({ plugin: 'agents-manager', key: 'view' } as const, EMPTY, { shape: 'view-3' })
 const runs = atom({ plugin: 'agents-manager', key: 'runs' } as const, {} as RunLines, { shape: 'runs-1' })
-const form = atom({ plugin: 'agents-manager', key: 'form' } as const, { model: 'luna', effort: 'low', note: '' } as Form, { shape: 'form-1' })
+const form = atom(
+  { plugin: 'agents-manager', key: 'form' } as const,
+  { model: 'luna', effort: 'low', note: '', target: '', targetLabel: '' } as Form,
+  { shape: 'form-2' },
+)
+
+// One start made from this pane. Lives in memory only; keyed by launch stamp.
+type JobKind = 'native' | 'dispatch' | 'free'
+type Job = {
+  stamp: string
+  kind: JobKind
+  model: string
+  task: string
+  sig: string
+  state: 'starting' | 'running' | 'done' | 'failed'
+  note: string
+  dir: string
+  slots: string
+  before: Set<string>
+}
+const JOBS = new Map<string, Job>()
+// Poll rows (agents and runs) without the job rows; compose() puts the jobs in front and numbers them.
+let BASE: Row[] = []
+let SUMMARY = ''
+// Agent ids seen at the last poll; a native job is done once an id outside this snapshot appears.
+let LAST_AGENTS = new Set<string>()
+// Agents the person asked to stop. The ask is not a stop: the row says "stop requested".
+const STOP_ASKED = new Set<string>()
+// Finished run rows by dir name. A resume appends to events.jsonl, so resuming a run drops it from here.
+const DONE = new Map<string, { row: Row; slots: string; size: number }>()
+
+const compose = (): Row[] => {
+  const jobs: Row[] = [...JOBS.values()].map(j => ({
+    n: 0,
+    depth: 1,
+    kind: 'job' as const,
+    id: j.stamp,
+    label: j.task.replace(/\s+/g, ' ').trim(),
+    state: j.state,
+    meta: `${j.model} · ${j.kind === 'free' ? 'agent.sh' : j.kind}`,
+    note: j.note,
+  }))
+  return [...jobs, ...BASE].map((r, i) => ({ ...r, n: i + 1 }))
+}
 
 // Native: a Claude Code subagent (transcript view, SendMessage, stop). Dispatch: an agents-inc run (resume by message).
 type Pick = { value: string; label: string; native?: { subagentType: string; model?: string } }
@@ -24,10 +69,11 @@ const MODELS: Pick[] = [
   { value: 'terra', label: 'terra · OpenAI (dispatch)' },
   { value: 'sol', label: 'sol · OpenAI (dispatch)' },
   { value: 'astra', label: 'astra · OpenAI (dispatch)' },
-  { value: 'gemini', label: 'gemini · free (dispatch)' },
-  { value: 'mistral', label: 'mistral · free (dispatch)' },
-  { value: 'openrouter', label: 'openrouter · free (dispatch)' },
+  { value: 'gemini', label: 'gemini · free (agent.sh)' },
+  { value: 'mistral', label: 'mistral · free (agent.sh)' },
+  { value: 'openrouter', label: 'openrouter · free (agent.sh)' },
 ]
+const FREE = new Set(['gemini', 'mistral', 'openrouter'])
 const EFFORTS = ['low', 'medium', 'high', 'max'].map(v => ({ value: v, label: v }))
 
 // A read-only 14-field slots file for a task typed in the pane; the report is the one file it may write.
@@ -37,7 +83,8 @@ const slotsFor = (model: string, task: string, dir: string) => ({
   TASK: task,
   CONSTRAINTS: `Read only. Write only ${dir}/report.md. No network. No git writes.`,
   OUT_OF_SCOPE: `Any file outside ${dir}.`,
-  FILES_IN_SCOPE: [`${dir}/report.md`],
+  // A string, not a list: dispatch reads a list's brackets as a glob and refuses the run.
+  FILES_IN_SCOPE: `${dir}/report.md`,
   STOP_RULE: 'Stop after 20 tool calls or once report.md holds the answer.',
   SUCCESS_GATE: `\`test -s report.md\` in ${dir} exits 0.`,
   FAILURE_GATE: `\`test -s report.md\` in ${dir} exits 1.`,
@@ -99,6 +146,33 @@ const parse = (text: string): any[] =>
     })
     .filter(Boolean)
 
+// A free-model start (agent.sh) writes a run-style dir under RUNS: run.json with kind 'free', and
+// events.jsonl with one agent_message row per output line and a closing run.end row. No gates, no ledger row.
+const isoStamp = (): string => new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
+const startFreeRun = async (write: (path: string, text: string) => Promise<unknown>, model: string, task: string, slots: string) => {
+  const base = `${RUNS}/${isoStamp()}-${model}-free${String(Date.now()).slice(-6)}`
+  const rows: string[] = []
+  const row = (event: any) => rows.push(JSON.stringify({ event }))
+  const flush = () => write(`${base}/events.jsonl`, rows.join('\n') + '\n')
+  await write(`${base}/run.json`, JSON.stringify({ model, kind: 'free', slots, task, via: 'agent.sh' }, null, 1))
+  row({ type: 'item.completed', item: { type: 'agent_message', text: `agent.sh submit --backend ${model} (no gates, no ledger row)` } })
+  await flush()
+  let partial = ''
+  return {
+    out: async (text: string) => {
+      const parts = (partial + text).split('\n')
+      partial = parts.pop() ?? ''
+      for (const l of parts) if (l.trim()) row({ type: 'item.completed', item: { type: 'agent_message', text: l } })
+      if (parts.length) await flush()
+    },
+    end: async (code: number | null) => {
+      if (partial.trim()) row({ type: 'item.completed', item: { type: 'agent_message', text: partial } })
+      row({ type: 'run.end', outcome: code === 0 ? 'green' : 'red', rc: code })
+      await flush()
+    },
+  }
+}
+
 // A dispatch run is done once its events.jsonl holds a run.end row.
 const runState = (rows: any[]): string => {
   for (let i = rows.length - 1; i >= 0; i--) if (rows[i]?.event?.type === 'run.end') return String(rows[i].event.outcome ?? 'done')
@@ -106,7 +180,7 @@ const runState = (rows: any[]): string => {
 }
 
 const color = (s: string): string | undefined =>
-  s === 'running' || s === 'waiting' || s === 'resuming'
+  s === 'running' || s === 'waiting' || s === 'resuming' || s === 'starting'
     ? 'yellow'
     : s === 'completed' || s === 'green' || s === 'done' || s === 'idle'
       ? 'green'
@@ -124,6 +198,7 @@ export const register: Register = on => {
     name: string,
     message: string,
   ) => {
+    DONE.delete(name)
     void (async () => {
       const child = spawn(['agents-inc', 'dispatch', '--resume', `${CWD}/${RUNS}/${name}`, '--message', message])
       let tail = ''
@@ -136,6 +211,12 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     CWD = e.cwd
+    JOBS.clear()
+    BASE = []
+    SUMMARY = ''
+    LAST_AGENTS = new Set()
+    STOP_ASKED.clear()
+    DONE.clear()
     await $.command.register({ name: 'agents-manager', description: 'Open the agents manager: a tree of live agents and a message box' })
     void $.ui.open({ id: PANE, title: 'agents-inc manager' })
 
@@ -151,27 +232,80 @@ export const register: Register = on => {
         }
         for (const a of agents.filter(x => !x.parentId || !known.has(x.parentId))) add(a, 1)
 
-        const dirs = (await $.fs.list(RUNS))
-          .filter(d => d.kind === 'dir' && /^\d{8}T\d{6}Z-/.test(d.name))
+        // Every run dir is read: a running run stays listed however old it is; only finished ones are capped.
+        const listed = (await $.fs.list(RUNS)).filter(d => d.kind === 'dir' && /^\d{8}T\d{6}Z-/.test(d.name))
+        const dirAge = new Map(listed.map(d => [d.name, d.mtimeMs] as const))
+        const dirs = listed
           .map(d => d.name)
           .sort()
           .reverse()
-          .slice(0, KEEP_RUNS)
         const fresh: RunLines = {}
+        const runRows: Row[] = []
+        const slotsSeen: string[] = []
         for (const name of dirs) {
+          // A finished run is reused while its events.jsonl size is unchanged; a resume from anywhere grows it.
+          // No size known (listing failed or lacks the file): never cache.
+          const ev = (await $.fs.list(`${RUNS}/${name}`).catch(() => [])).find(x => x.name === 'events.jsonl')
+          const size = typeof ev?.size === 'number' ? ev.size : -1
+          const hit = DONE.get(name)
+          if (hit && size >= 0 && hit.size === size && !open.has(name)) {
+            runRows.push(hit.row)
+            if (hit.slots) slotsSeen.push(hit.slots)
+            continue
+          }
           const evs = parse(await $.fs.read(`${RUNS}/${name}/events.jsonl`).catch(() => ''))
           let meta = name.split('-')[1] ?? ''
+          let slots = ''
           try {
             const rj = JSON.parse(await $.fs.read(`${RUNS}/${name}/run.json`))
-            meta = `${rj.model ?? meta}${rj.effort ? ' · ' + rj.effort : ''} · dispatch`
+            meta = `${rj.model ?? meta}${rj.effort ? ' · ' + rj.effort : ''} · ${rj.kind === 'free' ? 'agent.sh' : 'dispatch'}`
+            if (typeof rj.slots === 'string') slotsSeen.push((slots = rj.slots))
           } catch {}
-          rows.push({ n: rows.length + 1, depth: 1, kind: 'run', id: name, label: runTitle(name), state: runState(evs), meta })
+          // A run with no run.end whose log has not moved in 30 min died without closing: call it stale, not running.
+          let state = runState(evs)
+          // No events.jsonl (refused or dry-run dispatch): judge by the run dir's own time instead.
+          const moved = typeof ev?.mtimeMs === 'number' ? ev.mtimeMs : dirAge.get(name)
+          if ((state === 'running' || state === 'starting') && typeof moved === 'number' && Date.now() - moved > STALE_MS) state = 'stale'
+          const row: Row = { n: 0, depth: 1, kind: 'run', id: name, label: runTitle(name), state, meta }
+          runRows.push(row)
+          if (size >= 0 && row.state !== 'running' && row.state !== 'starting') DONE.set(name, { row, slots, size })
+          else DONE.delete(name)
           if (open.has(name)) fresh[name] = { lines: evs.map(describe).filter(Boolean), note: '' }
         }
+        const live = (r: Row) => r.state === 'running' || r.state === 'starting'
+        const active = runRows.filter(live).length
+        const finishedAll = runRows.length - active
+        let keptFinished = 0
+        const shown = runRows.filter(r => {
+          if (live(r)) return true
+          keptFinished++
+          return keptFinished <= KEEP_RUNS
+        })
+        const summary = `${active} running · ${finishedAll} finished (showing ${shown.length})`
+        rows.push(...shown)
+
+        // A job row ends once the real thing appears in the lists: a new agent (native) or a run dir with its slots path (dispatch).
+        const claimed = new Set<string>()
+        for (const j of [...JOBS.values()]) {
+          if (j.kind === 'native' && j.state !== 'failed') {
+            const fresh1 = agents.find(a => !j.before.has(a.id) && !claimed.has(a.id))
+            if (fresh1) {
+              claimed.add(fresh1.id)
+              JOBS.delete(j.stamp)
+            }
+          } else if (j.kind !== 'native' && slotsSeen.some(s => s.includes(`/${j.stamp}/`))) JOBS.delete(j.stamp)
+        }
+        LAST_AGENTS = new Set(agents.map(a => a.id))
+        BASE = rows
+        SUMMARY = summary
+        const all = compose()
 
         const cur = await read($, view)
-        const same = cur.rows.length === rows.length && cur.rows.every((r, i) => r.id === rows[i]?.id && r.state === rows[i]?.state)
-        if (!same) await update($, view, v => ({ ...v, rows }))
+        const same =
+          cur.summary === summary &&
+          cur.rows.length === all.length &&
+          cur.rows.every((r, i) => r.id === all[i]?.id && r.kind === all[i]?.kind && r.state === all[i]?.state && r.note === all[i]?.note)
+        if (!same) await update($, view, v => ({ ...v, rows: all, summary }))
 
         if (Object.keys(fresh).length) {
           const had = await read($, runs)
@@ -248,9 +382,21 @@ export const register: Register = on => {
     const f = await read($, form)
     const cols = Math.max(20, (e.viewport?.columns ?? 60) - 2)
     const rows = Math.max(3, (e.viewport?.rows ?? 24) - 8)
+    const pick = MODELS.find(m => m.value === f.model) ?? MODELS[0]!
+    const free = FREE.has(pick.value)
+    // Message targets: agent and run rows only, by kind:id so a poll never moves the choice.
+    const targets = v.rows.filter(r => r.kind !== 'job')
+    const key = (r: Row) => `${r.kind}:${r.id}`
+    const tlabel = (r: Row) => clip(`${r.n} ${r.label}`, 44)
+    const first = targets[0]
+    const cur = f.target || (first ? key(first) : '')
+    // A Select takes 1 to 64 options: keep 63 rows, leaving room for the "gone" entry.
+    const topts = targets.slice(0, 63).map(r => ({ value: key(r), label: tlabel(r) }))
+    if (cur && !topts.some(o => o.value === cur)) topts.unshift({ value: cur, label: 'gone: ' + (f.targetLabel || cur) })
     // Agent row: show its transcript in the main view (Enter then talks to it).
-    // Run row: open a pane of its live rows.
+    // Run row: open a pane of its live rows. Job row: nothing to open.
     const press = (r: Row) => async () => {
+      if (r.kind === 'job') return
       if (r.kind === 'agent') {
         const res = await $.ui.view({ agentId: r.id })
         if ((res as any)?.deny) await update($, view, x => ({ ...x, note: 'cannot view: ' + (res as any).deny }))
@@ -267,20 +413,63 @@ export const register: Register = on => {
           {' main session '}
           <Text dimColor>(you · click to return here)</Text>
         </Button>
+        {v.summary ? <Text dimColor>{clip(v.summary, cols)}</Text> : null}
         {v.rows.slice(0, rows).map((r, i, all) => {
           // ├─ unless no later row sits at this depth before the tree climbs back out.
           const later = all.slice(i + 1)
           const stop = later.findIndex(x => x.depth < r.depth)
           const last = !(stop < 0 ? later : later.slice(0, stop)).some(x => x.depth === r.depth)
           const indent = '│  '.repeat(r.depth - 1)
+          const asked = r.kind === 'agent' && STOP_ASKED.has(r.id)
           return (
-            <Button key={r.kind + r.id} onPress={press(r)}>
-              <Text dimColor>{String(r.n).padStart(2) + ' ' + indent + (last ? '└─' : '├─')}</Text>
-              <Text color={color(r.state)}>{r.state === 'running' ? '●' : '○'}</Text>
-              {' ' + clip(r.label, cols - 34 - r.depth * 3) + ' '}
-              <Text color={r.kind === 'run' ? 'magenta' : 'blue'}>{r.meta ?? ''}</Text>
-              <Text dimColor>{' ' + r.state}</Text>
-            </Button>
+            <Box key={r.kind + r.id} flexDirection="column">
+              <Button key={'row-' + r.kind + r.id} onPress={press(r)}>
+                <Text dimColor>{String(r.n).padStart(2) + ' ' + indent + (last ? '└─' : '├─')}</Text>
+                <Text color={color(r.state)}>{r.state === 'running' || r.state === 'starting' ? '●' : '○'}</Text>
+                {' ' + clip(r.label, cols - 34 - r.depth * 3) + ' '}
+                <Text color={r.kind === 'agent' ? 'blue' : 'magenta'}>{r.meta ?? ''}</Text>
+                <Text dimColor>{' ' + (asked ? 'stop requested' : r.state)}</Text>
+              </Button>
+              {r.kind === 'job' && r.note ? <Text dimColor>{clip('      ' + r.note, cols)}</Text> : null}
+              {r.kind === 'run' && r.state === 'running' && !String(r.meta ?? '').endsWith('agent.sh') ? (
+                <Button
+                  key={'cancel-' + r.id}
+                  onPress={async () => {
+                    let note: string
+                    try {
+                      const child = $.process.spawn({ argv: ['agents-inc', 'dispatch', '--cancel', `${CWD}/${RUNS}/${r.id}`] })
+                      let tail = ''
+                      for await (const piece of child as AsyncIterable<{ text: string }>) tail = (tail + piece.text).slice(-400)
+                      const end = await (child as any).result
+                      note = end?.code === 0 ? `cancel sent: ${r.label}` : `cancel failed (exit ${end?.code ?? '?'}): ${clip(tail, 100)}`
+                    } catch (err) {
+                      note = 'cancel failed: ' + String((err as Error)?.message ?? err)
+                    }
+                    await update($, view, x => ({ ...x, note }))
+                  }}
+                >
+                  <Text color="red">{'      cancel'}</Text>
+                </Button>
+              ) : null}
+              {r.kind === 'agent' && r.state === 'running' && !asked ? (
+                <Button
+                  key={'stop-' + r.id}
+                  onPress={async () => {
+                    let note: string
+                    try {
+                      await $.session.send({ to: { agentId: r.id }, text: STOP_TEXT })
+                      STOP_ASKED.add(r.id)
+                      note = `stop requested: ${r.label}`
+                    } catch (err) {
+                      note = 'stop request failed: ' + String((err as Error)?.message ?? err)
+                    }
+                    await update($, view, x => ({ ...x, note }))
+                  }}
+                >
+                  <Text color="yellow">{'      ask to stop'}</Text>
+                </Button>
+              ) : null}
+            </Box>
           )
         })}
         {v.rows.length === 0 ? <Text dimColor>   └─ no delegates yet</Text> : null}
@@ -293,13 +482,18 @@ export const register: Register = on => {
           value={f.model}
           onSelect={(value: string) => update($, form, x => ({ ...x, model: value }))}
         />
-        <Select
-          key="effort"
-          label="effort "
-          options={EFFORTS}
-          value={f.effort}
-          onSelect={(value: string) => update($, form, x => ({ ...x, effort: value }))}
-        />
+        {pick.native || free ? (
+          <Text dimColor>{pick.native ? "effort: session's" : 'effort: backend default'}</Text>
+        ) : (
+          <Select
+            key="effort"
+            label="effort "
+            options={EFFORTS}
+            value={f.effort}
+            onSelect={(value: string) => update($, form, x => ({ ...x, effort: value }))}
+          />
+        )}
+        {pick.native || free ? null : <Text dimColor>read-only · writes only report.md</Text>}
         <Input
           key="task"
           label="task "
@@ -307,63 +501,115 @@ export const register: Register = on => {
           submitLabel="start"
           onSubmit={async (task: string) => {
             if (!task.trim()) return
-            const pick = MODELS.find(m => m.value === f.model) ?? MODELS[0]!
-            let note = ''
+            // One row per start: a second start of the same model+task is ignored while the first is still starting.
+            const sig = pick.value + '\u0000' + task.trim()
+            if ([...JOBS.values()].some(j => j.state === 'starting' && j.sig === sig)) return
+            let stamp = String(Date.now())
+            while (JOBS.has(stamp)) stamp = String(Number(stamp) + 1)
+            const dir = `.scratch/pane/${stamp}`
+            const kind: JobKind = pick.native ? 'native' : free ? 'free' : 'dispatch'
+            const job: Job = {
+              stamp,
+              kind,
+              model: pick.value,
+              task,
+              sig,
+              state: 'starting',
+              note: '',
+              dir,
+              slots: kind === 'dispatch' ? `${CWD}/${dir}/slots.json` : '',
+              before: new Set(LAST_AGENTS),
+            }
+            JOBS.set(stamp, job)
+            const show = () => update($, view, x => ({ ...x, rows: compose(), summary: SUMMARY }))
+            await show()
             try {
               if (pick.native) {
                 await $.agent.spawn({ prompt: task, description: clip(task, 40), subagentType: pick.native.subagentType, model: pick.native.model })
-                note = `started ${pick.value} (native; effort is the session's)`
+                job.state = 'running'
+                job.note = "native; effort is the session's"
               } else {
-                const stamp = String(Date.now())
-                const dir = `.scratch/pane/${stamp}`
-                await $.fs.write(`${dir}/slots.json`, JSON.stringify(slotsFor(pick.value, task, dir), null, 1))
-                const child = $.process.spawn({
-                  argv: ['agents-inc', 'dispatch', '--slots', `${CWD}/${dir}/slots.json`, '--model', pick.value, '--effort', f.effort],
-                })
+                // Free models are not dispatch kinds; they run through the governed agent.sh leg.
+                if (!free) await $.fs.write(`${dir}/slots.json`, JSON.stringify(slotsFor(pick.value, task, dir), null, 1))
+                const argv = free
+                  ? [`${CWD}/skills/codex-bridge/scripts/agent.sh`, 'submit', '--backend', pick.value, '--wait', task]
+                  : ['agents-inc', 'dispatch', '--slots', job.slots, '--model', pick.value, '--effort', f.effort]
+                // A free start also gets a run-style dir, so it lists and opens like a dispatch run.
+                if (free) await $.fs.write(`${dir}/task.txt`, task)
+                const freeRun = free ? await startFreeRun((path, text) => $.fs.write(path, text), pick.value, task, `${CWD}/${dir}/task.txt`) : null
+                const child = $.process.spawn({ argv })
+                job.state = 'running'
+                job.note = `report: ${dir}/report.md`
+                // Drain in the background; the exit code and last output line land on this job's row.
                 void (async () => {
-                  for await (const _ of child) {
+                  let tail = ''
+                  for await (const piece of child as AsyncIterable<{ text: string }>) {
+                    tail = (tail + piece.text).slice(-4000)
+                    if (freeRun) await freeRun.out(piece.text)
                   }
+                  const end = await (child as any).result
+                  const code = end?.code ?? null
+                  if (free) await $.fs.write(`${dir}/report.md`, tail)
+                  if (freeRun) await freeRun.end(code)
+                  job.state = code === 0 ? 'done' : 'failed'
+                  job.note = `exit ${code}: ${tail.trim().split('\n').pop() ?? ''}`
+                  await show()
                 })()
-                note = `started ${pick.value} · ${f.effort} via dispatch (report: ${dir}/report.md)`
               }
             } catch (err) {
-              note = 'start failed: ' + String((err as Error)?.message ?? err)
+              job.state = 'failed'
+              job.note = 'start failed: ' + String((err as Error)?.message ?? err)
             }
-            await update($, form, x => ({ ...x, note }))
+            await show()
           }}
         />
         {f.note ? <Text dimColor>{clip(f.note, cols)}</Text> : null}
         <Text> </Text>
         <Text dimColor>{clip(v.note, cols)}</Text>
+        {topts.length ? (
+          <Select
+            key="target"
+            label="to "
+            options={topts}
+            value={cur}
+            onSelect={(value: string) =>
+              update($, form, x => ({ ...x, target: value, targetLabel: topts.find(o => o.value === value)?.label ?? value }))
+            }
+          />
+        ) : (
+          <Text dimColor>no target yet</Text>
+        )}
         <Input
           key="msg"
           label="message "
-          placeholder="<row> <message>"
+          placeholder="message to the selected target"
           submitLabel="send"
           onSubmit={async (text: string) => {
-            const m = /^\s*(\d+)\s+([\s\S]+)$/.exec(text)
-            let note = 'format: <row> <message>'
-            const msg = m?.[2] ?? ''
-            if (m) {
-              const row = v.rows.find(r => r.n === Number(m[1]))
-              if (!row) note = `no row ${m[1]}`
-              else if (row.kind === 'run') {
-                resume(
-                  argv => $.process.spawn({ argv }),
-                  n => update($, runs, x => ({ ...x, [row.id]: { lines: x[row.id]?.lines ?? [], note: n } })),
-                  row.id,
-                  msg,
-                )
-                open.add(row.id)
-                await $.ui.open({ id: RUN_PANE + row.id, title: runTitle(row.id) })
-                note = `resuming row ${row.n}`
-              } else {
-                try {
-                  await $.session.send({ to: { agentId: row.id }, text: msg })
-                  note = `sent to row ${row.n}`
-                } catch (err) {
-                  note = 'send failed: ' + String((err as Error)?.message ?? err)
-                }
+            const msg = text.trim()
+            if (!msg) return
+            // Re-read the rows: the target is found by kind:id in the current list, never by position.
+            const now = await read($, view)
+            const row = now.rows.find(r => r.kind !== 'job' && key(r) === cur)
+            let note: string
+            if (!cur) note = 'no target'
+            else if (!row) note = `target gone: ${f.targetLabel || cur}`
+            else if (row.kind === 'run' && String(row.meta ?? '').endsWith('agent.sh')) note = 'free-model runs take no messages; start a new one'
+            else if (row.kind === 'run') {
+              resume(
+                argv => $.process.spawn({ argv }),
+                n => update($, runs, x => ({ ...x, [row.id]: { lines: x[row.id]?.lines ?? [], note: n } })),
+                row.id,
+                msg,
+              )
+              open.add(row.id)
+              await $.ui.open({ id: RUN_PANE + row.id, title: runTitle(row.id) })
+              note = `resuming row ${row.n}`
+            } else {
+              try {
+                await $.session.send({ to: { agentId: row.id }, text: msg })
+                note = `sent to row ${row.n}`
+              } catch (err) {
+                note = 'send failed: ' + String((err as Error)?.message ?? err)
               }
             }
             await update($, view, x => ({ ...x, note }))
