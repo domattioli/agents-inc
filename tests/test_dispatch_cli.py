@@ -127,7 +127,7 @@ class DispatchCliTest(CliBase):
             rc, out, _ = self._main("--slots", str(self._slots()), "--model", "haiku", "--cwd", str(self.repo),
                                     "--run-dir", str(self.runs))
         self.assertEqual(rc, 3)
-        self.assertIn("NON-COMPLIANT:[12]", out)
+        self.assertIn("NON-COMPLIANT:[12 out-of-scope]", out)
 
     def test_dry_run(self):
         rc, out, _ = self._main("--slots", str(self._slots()), "--model", "haiku", "--cwd", str(self.repo),

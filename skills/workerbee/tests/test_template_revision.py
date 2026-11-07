@@ -230,6 +230,42 @@ class FanOutTest(unittest.TestCase):
     def test_prompt_without_fan_out_line_passes(self):
         self.assertNotIn("fan-out", cdp.check("ROLE: old prompt before D48"))
 
+    def test_fan_out_trailing_sentence_accepted(self):
+        line = "FAN_OUT: width 0, total 0, depth 0. Spawn no sub-agents."
+        self.assertEqual(cdp.parse_fan_out(line), (0, 0, 0))
+        self.assertNotIn("fan-out", cdp.check(line))
+
+    def test_fan_out_missing_part_still_rejected(self):
+        for line in ("FAN_OUT: width 0, total 0. Spawn none.",
+                     "FAN_OUT: width 0, depth 0. Spawn none.",
+                     "FAN_OUT: total 0, depth 0. Spawn none.",
+                     "FAN_OUT: width 0, total 0, depth 0 spawn none"):
+            with self.subTest(line=line):
+                self.assertIn("fan-out", cdp.check(line))
+
+    def test_fan_out_message_names_expected_form(self):
+        labeled = cdp.label_missing(cdp.check("FAN_OUT: lots"))
+        self.assertTrue(any("FAN_OUT: width <n>, total <n>, depth <n>" in str(m) for m in labeled), labeled)
+
+
+class MissingLabelTest(unittest.TestCase):
+    def test_label_missing_pairs_number_and_name(self):
+        self.assertEqual(cdp.label_missing([2, 3, "stop-rule"]), ["2 success-gate", "3 failure-gate", "stop-rule"])
+
+    def test_every_element_has_a_name(self):
+        self.assertEqual(set(cdp.ELEMENT_NAMES), set(cdp.KEYWORDS))
+
+    def test_cli_prints_number_and_name(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "p.md"
+            p.write_text("nothing useful\n", encoding="utf-8")
+            res = subprocess.run([sys.executable, cdp.__file__, str(p)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("2 success-gate", res.stdout)
+        self.assertIn("3 failure-gate", res.stdout)
+
 class SharedRungSourceTest(unittest.TestCase):
     def test_renderer_and_checker_share_rung_source(self):
         import dispatch_rungs

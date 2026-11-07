@@ -427,6 +427,10 @@ def main() -> int:
                 print(f"PRE_EXISTING_CHANGES invalid: {err}; write the verify gate as one plain command",
                       file=sys.stderr)
                 return 2
+    # a list slot (FILES_IN_SCOPE as a JSON list) renders as space-joined text, as dispatch reads it
+    for slot, value in list(slots_data.items()):
+        if slot != "GATES" and isinstance(value, (list, tuple)) and all(isinstance(v, str) for v in value):
+            slots_data[slot] = " ".join(value)
     for slot, value in SLOT_DEFAULTS.items():
         if not (isinstance(slots_data.get(slot), str) and slots_data[slot].strip()):
             slots_data[slot] = value

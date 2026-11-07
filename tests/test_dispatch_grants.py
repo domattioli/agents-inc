@@ -382,6 +382,16 @@ class GateRefusalTest(GrantsBase):
                 self.calls.clear()
                 self._refused(gates)
 
+    def test_string_gates_message_names_expected_type(self):
+        for name, gates in {"plain-command": "python3 -m unittest", "json-scalar": "5", "json-object": '{"argv": ["x"]}'}.items():
+            with self.subTest(name):
+                self.calls.clear()
+                rc, out, err = self._dispatch(GATES=gates)
+                self.assertEqual(rc, 3, out + err)
+                self.assertIn("GATES must be a JSON list, got string", out)
+                import shutil
+                shutil.rmtree(self.runs, ignore_errors=True)
+
     def test_json_string_accepted(self):
         rc, out, _ = self._dispatch(GATES=json.dumps([{"argv": PASS}]))
         self.assertEqual(rc, 0, out)

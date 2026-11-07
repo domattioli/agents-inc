@@ -129,7 +129,8 @@ def known_rung(text: str, model: str | None = None) -> str | None:
     return None
 
 # D48 fan-out line: `FAN_OUT: width <n>, total <n>, depth <n>`.
-FAN_OUT_RE = re.compile(r"^fan_out:\s*width\s+(\d+),\s*total\s+(\d+),\s*depth\s+(\d+)\s*$")
+FAN_OUT_RE = re.compile(r"^fan_out:\s*width\s+(\d+),\s*total\s+(\d+),\s*depth\s+(\d+)(?:\s*[.;]\s*.*|\s*)$")
+FAN_OUT_FORM = "FAN_OUT: width <n>, total <n>, depth <n>"
 
 
 def _fan_out_line(ln: str) -> str:
@@ -184,6 +185,27 @@ def check_report(text: str) -> list[str]:
     if any(VERIFIED_EXIT_RE.search(ln) and not EXIT_CODE_RE.search(ln) for ln in text.splitlines()):
         missing.append("verified-exit-without-code")
     return missing
+
+
+ELEMENT_NAMES: dict[int, str] = {
+    1: "caveman", 2: "success-gate", 3: "failure-gate", 4: "grill", 5: "provider-message",
+    6: "evidence", 7: "scope-boilerplate", 8: "classification", 9: "effort",
+    10: "second-opinion", 11: "plan-contract", 12: "out-of-scope", 13: "edit-hygiene",
+    14: "lesson-candidate",
+}
+
+
+def label_missing(missing: list) -> list:
+    """Element numbers become `<n> <name>`; `fan-out` names the expected line form; other strings pass through."""
+    out = []
+    for m in missing:
+        if isinstance(m, int) and m in ELEMENT_NAMES:
+            out.append(f"{m} {ELEMENT_NAMES[m]}")
+        elif m == "fan-out":
+            out.append(f"fan-out (expected `{FAN_OUT_FORM}`)")
+        else:
+            out.append(m)
+    return out
 
 
 def _lines_with(text_lower: str, keyword: str) -> list[str]:
@@ -409,7 +431,7 @@ def main() -> int:
     if not missing:
         print("COMPLIANT")
     else:
-        print(f"NON-COMPLIANT missing elements: {missing}")
+        print(f"NON-COMPLIANT missing elements: [{', '.join(str(m) for m in label_missing(missing))}]")
     lint_rc = run_handoff_lint(prompt_file, profile) if with_lint else 0
     return 1 if (missing or lint_rc) else 0
 

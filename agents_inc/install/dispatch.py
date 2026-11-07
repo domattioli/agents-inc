@@ -252,6 +252,13 @@ def snapshot(*args: str, cwd: Path, scripts: Path = SCRIPTS) -> tuple[int, str]:
     return res.returncode, res.stdout + res.stderr
 
 
+def scope_text(value) -> str:
+    """FILES_IN_SCOPE as one string. A JSON list of paths is joined with spaces; str() on a list would add brackets the glob check refuses."""
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(v) for v in value)
+    return str(value or "")
+
+
 def allow_paths(files_in_scope: str) -> list[str]:
     """Paths named in the FILES_IN_SCOPE slot; prose such as "none (read-only)" yields nothing."""
     out = []
@@ -1228,7 +1235,15 @@ def _record_ledger_node(spec: dict, slots: dict) -> None:
 def _grants_from_slots(slots: dict, cwd: Path, scripts: Path = SCRIPTS) -> tuple[list | None, list, tuple | None]:
     """Parse GATES and BASH_ALLOW. Return (gates, bash_allow, None) or (None, [], (refused outcome, why))."""
     rd = _load("render_dispatch", scripts)
-    gates, why = rd.parse_gates(slots.get("GATES"))
+    raw = slots.get("GATES")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            decoded = json.loads(raw)
+        except ValueError:
+            decoded = None
+        if not isinstance(decoded, list):
+            return None, [], ("refused-gates", "GATES must be a JSON list, got string")
+    gates, why = rd.parse_gates(raw)
     if why:
         return None, [], ("refused-gates", why)
     for g in gates or []:
@@ -1470,14 +1485,14 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         shutil.copyfile(slots_path, run_dir / "slots.json")
     spec = {"run_id": run_id, "kind": kind, "slots": str(slots_path), "model": model, "effort": effort,
             "cwd": str(cwd), "chain": ["CoS", model], "snapshot": str(run_dir / "snapshot.json"),
-            "gates": {"tier": args.tier, "allow": allow_paths(str(slots.get("FILES_IN_SCOPE", "")))},
+            "gates": {"tier": args.tier, "allow": allow_paths(scope_text(slots.get("FILES_IN_SCOPE", "")))},
             "permission_mode": slots.get("PERMISSION_MODE") or DEFAULT_PERMISSION_MODE,
             "codex_write": codex_write(slots),
             "codex_network": codex_network(slots),
             "scripts_dir": str(sdir), "scripts_source": ssrc,
             "rc": None, "outcome": None, "session_id": None}
     lint = run_dir / "lint.txt"
-    globs = scope_globs(str(slots.get("FILES_IN_SCOPE", "")))
+    globs = scope_globs(scope_text(slots.get("FILES_IN_SCOPE", "")))
     gates, bash_allow, why = _grants_from_slots(slots, cwd, sdir)
     if globs:
         why = ("refused-scope", f"FILES_IN_SCOPE has glob patterns the scope gate cannot match: {' '.join(globs)}; list exact paths")
@@ -1528,10 +1543,12 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
     prompt_path = run_dir / "prompt.md"
     _wtext(prompt_path, prompt)
     missing, log = lint_prompt(prompt_path, args.tier, model, scripts=sdir)
-    _wtext(lint, ("COMPLIANT\n" if not missing else f"NON-COMPLIANT missing: {missing}\n") + log)
+    named = _load("check_dispatch_prompt", sdir).label_missing(missing) if missing else missing
+    named_text = "[" + ", ".join(str(m) for m in named) + "]"
+    _wtext(lint, ("COMPLIANT\n" if not missing else f"NON-COMPLIANT missing: {named_text}\n") + log)
     if missing:
         spec["outcome"] = "refused-lint"; _write_json(run_dir / "run.json", spec)
-        print(f"dispatch {run_id} {model} refused NON-COMPLIANT:{missing} lint={lint}")
+        print(f"dispatch {run_id} {model} refused NON-COMPLIANT:{named_text} lint={lint}")
         return EXIT_REFUSED
     roster = [] if _BROKER_SAFE_WRITES else lead_roster(model, slots, spec["fan_out"], sdir)
     if kind == "claude" and model in LEAD_RUNGS and not _BROKER_SAFE_WRITES:
