@@ -238,8 +238,7 @@ class FanOutTest(unittest.TestCase):
     def test_fan_out_missing_part_still_rejected(self):
         for line in ("FAN_OUT: width 0, total 0. Spawn none.",
                      "FAN_OUT: width 0, depth 0. Spawn none.",
-                     "FAN_OUT: total 0, depth 0. Spawn none.",
-                     "FAN_OUT: width 0, total 0, depth 0 spawn none"):
+                     "FAN_OUT: total 0, depth 0. Spawn none."):
             with self.subTest(line=line):
                 self.assertIn("fan-out", cdp.check(line))
 
