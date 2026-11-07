@@ -2,7 +2,7 @@
 
 # agents-inc
 
-<p align="center"><strong>Cross-vendor governance for an agentic-AI workforce. It works like a corporate org chart: you ask, the session you talk to dispatches a Lead model, and the Lead runs cheaper Worker models. The aim is more checked work from the AI subscriptions you already pay for.</strong></p>
+<p align="center"><strong>agents-inc runs AI models the way a company runs staff: a Lead takes your request, delegates it down an org chart of cheaper Worker models, and accepts nothing until a reviewer signs off. The aim is more checked work from the AI subscriptions you already pay for.</strong></p>
 
 <p align="center">
 <img alt="Status: experimental" src="https://img.shields.io/badge/status-experimental-orange">
