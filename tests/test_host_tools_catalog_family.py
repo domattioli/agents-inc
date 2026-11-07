@@ -23,6 +23,7 @@ class CacheEntry(unittest.TestCase):
         self.assertIsNone(cache_entry(CACHE, "luna"))
 
     def test_catalog_relabels_the_fallback_as_the_requested_slug(self):
+        (Path.cwd() / ".scratch").mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=Path.cwd() / ".scratch") as home:
             (Path(home) / "models_cache.json").write_text(json.dumps(CACHE))
             path = host_tools_catalog("gpt-6-luna", Path(home))
