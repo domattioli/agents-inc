@@ -6,6 +6,26 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-11-07
+
+Replaces 0.6.0, which was withdrawn from PyPI, Zenodo and GitHub.
+
+### Added
+
+- agents-manager pane: one row per start, a stable message target, cancel on running runs, "ask to stop" on agents, effort control only where it applies, and every running run listed past the newest 8 finished.
+- Free-model starts from the pane (gemini, mistral, openrouter) write a run-style folder, so they list and open like dispatch runs. They have no gates and no ledger row (#141).
+
+### Changed
+
+- Lint output names each missing element, for example `[2 success-gate, 3 failure-gate]` (#135).
+- `GATES` given as a plain string is refused with `GATES must be a JSON list, got string` (#135).
+- sol routes to `gpt-6.1-sol`.
+
+### Fixed
+
+- luna finds its Codex catalog entry when Codex caches an older model of the same family.
+- luna no longer reads the commit-attribution reminder as its own identity.
+
 ## [0.6.0] — 2026-11-06
 
 Version 0.6.0 because PyPI, Zenodo and GitHub all hold 0.5.0 and the merged work since then adds features in 0.x.
