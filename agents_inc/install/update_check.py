@@ -67,4 +67,4 @@ def notice(state: Path, env: dict | None = None, **kw) -> str:
         return ""
     return (f"agents-inc {latest} is available (installed {__version__}). Update: "
             f"`pip install -U agents-inc && agents-inc repair` (from a checkout: `git pull && agents-inc repair --source <checkout>`). "
-            f"Changes: https://github.com/domattioli/agents_Inc/blob/main/CHANGELOG.md")
+            f"Changes: https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md")

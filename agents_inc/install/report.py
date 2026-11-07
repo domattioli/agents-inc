@@ -1,4 +1,4 @@
-"""`agents-inc report bug|feature`: draft a GitHub issue for agents_Inc, file it only with --submit.
+"""`agents-inc report bug|feature`: draft a GitHub issue for agents-inc, file it only with --submit.
 
 Preview first: without --submit the draft is printed and nothing leaves the machine. The draft carries the
 version, the doctor codes, the OS and the Codex CLI version; home paths become `~`, and a body that looks
@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-REPO = "domattioli/agents_Inc"
+REPO = "domattioli/agents-inc"
 LABELS = {"bug": "bug", "feature": "enhancement"}
 HEADINGS = {"bug": "What happened", "feature": "What you want"}
 SECRET_RE = re.compile(

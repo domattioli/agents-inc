@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it using these metadata."
-title: "agents_Inc: Cross-Vendor Governance for an Agentic-AI Workforce"
+title: "agents-inc: Cross-Vendor Governance for an Agentic-AI Workforce"
 abstract: "Governed multi-agent dispatch and verification layer that pools Claude, Codex, Gemini, Mistral, and OpenRouter capacity."
 type: software
 authors:
@@ -11,8 +11,8 @@ version: 0.4.2
 date-released: 2026-10-23
 doi: 10.5281/zenodo.22670100
 license: PolyForm-Small-Business-1.0.0
-license-url: "https://github.com/domattioli/agents_Inc/blob/main/LICENSE"
-repository-code: "https://github.com/domattioli/agents_Inc"
+license-url: "https://github.com/domattioli/agents-inc/blob/main/LICENSE"
+repository-code: "https://github.com/domattioli/agents-inc"
 keywords:
   - claude-code
   - multi-agent

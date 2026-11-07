@@ -49,7 +49,7 @@ class Workspace:
         for name in files:
             (self.dist / name).write_bytes(b"x" * 10)
         self.zj = root / ".zenodo.json"
-        self.zj.write_text(json.dumps({"title": "agents_Inc", "version": version, "license": "polyform-small-business-1.0.0",
+        self.zj.write_text(json.dumps({"title": "agents-inc", "version": version, "license": "polyform-small-business-1.0.0",
                                        "creators": [{"name": "Mattioli, Dominik O."}], "description": "<p>d</p>"}))
 
     def argv(self, version="v0.4.3"):

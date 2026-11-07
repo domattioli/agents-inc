@@ -48,7 +48,7 @@ def session_start(paths: InstallPaths, host: str) -> str:
     text = (f"agents-inc is installed (doctor: {status}). Every delegation in this session routes through agents-inc; "
             f"read {skill} before the first dispatch (full SKILL.md only for a non-Claude rung, a prompt from scratch, "
             f"or a disputed gate). {ROUTE_RULE} Launcher: {paths.launcher}.")
-    if not report.ready: text += " Tell the operator doctor is not READY and suggest `agents-inc repair --source <agents_Inc checkout>`."
+    if not report.ready: text += " Tell the operator doctor is not READY and suggest `agents-inc repair --source <agents-inc checkout>`."
     for warning in report.warnings:
         # An install made --without-codex reports WB_CLI_NOT_FOUND as a warning; say what it means so a session
         # does not read "CLI not found" as "dispatch is broken" and avoid it.
@@ -56,7 +56,7 @@ def session_start(paths: InstallPaths, host: str) -> str:
                  if warning == "WB_CLI_NOT_FOUND" else f" WARNING: {warning}.")
     if "INSTALL_STALE" in report.warnings:
         text += (" INSTALL_STALE means the installed bundle differs from the source checkout, so launcher and docs may"
-                 " disagree. Run `agents-inc repair --source <agents_Inc checkout>`.")
+                 " disagree. Run `agents-inc repair --source <agents-inc checkout>`.")
     if "WB_SANDBOX_EXCLUDE_MISSING" in report.warnings:
         text += (' WB_SANDBOX_EXCLUDE_MISSING: a sandboxed Bash cannot start a dispatch. Ask the operator once, before the'
                  ' first dispatch, to add "agents-inc *" to sandbox.excludedCommands in ~/.claude/settings.json.')

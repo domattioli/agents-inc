@@ -33,10 +33,10 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/domattioli/agents_Inc"
-Repository = "https://github.com/domattioli/agents_Inc"
-Issues = "https://github.com/domattioli/agents_Inc/issues"
-Changelog = "https://github.com/domattioli/agents_Inc/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/domattioli/agents-inc"
+Repository = "https://github.com/domattioli/agents-inc"
+Issues = "https://github.com/domattioli/agents-inc/issues"
+Changelog = "https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md"
 
 [project.scripts]
 agents-inc = "agents_inc.install.cli:main"

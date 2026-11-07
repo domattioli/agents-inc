@@ -66,7 +66,7 @@ def _load(name: str, scripts: Path = SCRIPTS):
     return module
 
 
-# 025 (#104): a dispatch from an agents_Inc checkout is judged by the checkout's workerbee scripts, pinned at launch.
+# 025 (#104): a dispatch from an agents-inc checkout is judged by the checkout's workerbee scripts, pinned at launch.
 PINNED_SCRIPTS = ("check_dispatch_prompt.py", "render_dispatch.py", "dispatch_rungs.py", "pre_dispatch_snapshot.py")
 PINNED_TEMPLATES = ("header.md", "slots.md")  # render_dispatch.py reads these from the directory above its own
 

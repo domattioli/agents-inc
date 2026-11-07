@@ -248,7 +248,7 @@ class ToolGrantTest(GrantsBase):
 class GrantsSectionTest(GrantsBase):
     """#54: dispatch renders the fixed grants into every Claude delegate prompt."""
     HEADER = "GRANTS (fixed by dispatch for this run; the harness allows exactly these tools):"
-    PREFIX = "gh issue view 54 -R domattioli/agents_Inc"
+    PREFIX = "gh issue view 54 -R domattioli/agents-inc"
 
     def _prompt(self) -> str:
         return (self._run_dir() / "prompt.md").read_text()

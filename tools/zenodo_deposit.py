@@ -1,4 +1,4 @@
-"""Deposit a release on Zenodo as a new version under the agents_Inc concept DOI.
+"""Deposit a release on Zenodo as a new version under the agents-inc concept DOI.
 
 Runs in the release workflow after the GitHub release when the record is missing. The
 Zenodo GitHub integration stays off (docs/RELEASING.md), so this is the only archive path.

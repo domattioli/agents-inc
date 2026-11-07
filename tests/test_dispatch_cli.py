@@ -658,7 +658,7 @@ PROBES = ("agents_inc/install/dispatch.py", "skills/workerbee/scripts/check_disp
 
 
 class ScriptsSourceTest(CliBase):
-    """025 US1 (#104): a dispatch from an agents_Inc checkout is judged by a launch-time copy of its scripts."""
+    """025 US1 (#104): a dispatch from an agents-inc checkout is judged by a launch-time copy of its scripts."""
 
     def setUp(self):
         super().setUp()

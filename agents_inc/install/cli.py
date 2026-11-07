@@ -172,7 +172,7 @@ def _install(args, source: Path):
             TransactionJournal.recover(paths.journal)
             raise
 
-NOT_INSTALLED = "WB_NOT_INSTALLED: no install receipt at {}. Run: agents-inc install (add --source <agents_Inc checkout> to install from a checkout), then: agents-inc doctor"
+NOT_INSTALLED = "WB_NOT_INSTALLED: no install receipt at {}. Run: agents-inc install (add --source <agents-inc checkout> to install from a checkout), then: agents-inc doctor"
 
 def verify_installed(paths: InstallPaths) -> None:
     """Post-install self-check (#35): fail loudly if the receipt or launcher is missing."""
@@ -221,7 +221,7 @@ def main(argv=None):
     p = subs.add_parser("hook"); p.add_argument("event", choices=("session-start", "agent-nudge", "agent-done")); p.add_argument("--host", choices=("claude", "codex", "gemini"))
     p = subs.add_parser("ledger", add_help=False); p.add_argument("rest", nargs=argparse.REMAINDER)
     p = subs.add_parser("models"); p.add_argument("verb", nargs="?", choices=("bump", "chain")); p.add_argument("alias", nargs="?"); p.add_argument("slug", nargs="?"); p.add_argument("extra", nargs="*"); p.add_argument("--unpin", action="store_true"); p.add_argument("--clear", action="store_true")
-    p = subs.add_parser("report", help="draft a bug report or feature request for agents_Inc; --submit files it"); p.add_argument("kind", choices=("bug", "feature")); p.add_argument("--title", required=True); p.add_argument("--body", required=True, help="text, or - to read stdin"); p.add_argument("--submit", action="store_true")
+    p = subs.add_parser("report", help="draft a bug report or feature request for agents-inc; --submit files it"); p.add_argument("kind", choices=("bug", "feature")); p.add_argument("--title", required=True); p.add_argument("--body", required=True, help="text, or - to read stdin"); p.add_argument("--submit", action="store_true")
     p = subs.add_parser("luna", help="the native agents-inc:luna subagent type (spec 028)"); p.add_argument("verb", choices=("status", "on", "off", "begin", "end")); p.add_argument("--json", action="store_true"); p.add_argument("--session"); p.add_argument("--agent"); p.add_argument("--cwd", default="."); p.add_argument("--outcome", choices=("done", "failed", "quota-paused", "aborted")); p.add_argument("--usage", help="JSON object of step usage sums (end)"); p.add_argument("--task", help="the Agent description (begin)")
     subs.add_parser("rollback"); subs.add_parser("uninstall")
     args = parser.parse_args(argv); paths = _paths()

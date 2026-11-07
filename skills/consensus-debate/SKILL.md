@@ -9,7 +9,7 @@ description: Run a moderated two-model debate (e.g. fable vs astra) on a fixed s
 
 Session running this = **moderator**. 2 **debaters** answer same questions, see each other's msgs, revise until agree or stall. Moderator relays verbatim, verifies cites, settles checkable facts, enforces stops. Never argues a side.
 
-Evidence base: 1 run (ollama in agents_Inc, fable vs astra @ medium, 2026-09-22). Unproven until run 2.
+Evidence base: 1 run (ollama in agents-inc, fable vs astra @ medium, 2026-09-22). Unproven until run 2.
 
 ## Use / don't
 
@@ -41,7 +41,7 @@ Vendor gate: non-Claude debater needs `workerbee` Step 0.5 gate line (normally (
 1. **Preload verified facts.** Measure before R1. Brief VERIFIED STATE, each bullet `[verified]`/`[inferred]`/`[assumed]`. Describe real mechanisms exactly ("router = fixed provider order, no scoring"), never loose ("router picks X over Y") → debaters design around features that don't exist.
 2. **Probe load-bearing inferences.** `[inferred]` fact a key choice hinges on (e.g. "CLI reads stdin + takes limits") → probe before R1 or mark BLOCKING. Run 1: one such inference cost a round.
 3. **Fix questions.** 2–6 numbered, allowed verdict set each. OUT OF SCOPE list. Out-of-scope → PARKING LOT ≤3 lines, never argued.
-4. **One brief, placeholders** `{SELF}` `{PEER}` caveman line, effort line → render per debater. agents_Inc: brief = dispatch prompt → 14-element contract + `check_dispatch_prompt.py --with-handoff-lint` clean before send.
+4. **One brief, placeholders** `{SELF}` `{PEER}` caveman line, effort line → render per debater. agents-inc: brief = dispatch prompt → 14-element contract + `check_dispatch_prompt.py --with-handoff-lint` clean before send.
 5. **R1 blind, parallel.** Neither sees other.
 6. **Between rounds, moderator:** grep every cite; settle cheap safe facts (`--help`, one-line probe, file read) → MODERATOR NOTES `[verified]` atop relay + list open disputes. Turns fact-fights into judgment-fights.
 7. **R2:** relay peer's latest verbatim. Reply = AGREE/DISPUTE/CONCEDE per item + full PROPOSED CONSENSUS. Concede on evidence only.
