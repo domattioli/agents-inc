@@ -115,6 +115,8 @@ agents-inc models chain supervisor=opus                            # change the 
 
 Every dispatch prompt carries a `REPORTING CHAIN` line derived from the ladder, and every launched dispatch writes one `dispatched` row to the ledger. Codex delegates can write to `--cwd` by default, the same as a Claude subagent; the slot `CODEX_WRITE: no` makes one read-only. A worked slots file is in [skills/workerbee/slots.md](https://github.com/domattioli/agents-inc/blob/main/skills/workerbee/slots.md).
 
+**Narrate (prototype, macOS).** `agents-inc narrate on` enables a watcher; `agents-inc narrate run` follows the active Claude Code transcript and speaks a two-sentence digest of each new assistant message with `say`. luna writes the digest through `agents-inc run`, so message text leaves the machine: messages with a classification marker are skipped, and `--summarizer local` makes no model call. Other options: `--voice`, `--transcript`, `--decide-only`, `--once`, `--dry-run`; `off` and `status` complete the set. Design: [docs/proposals/narrate.md](https://github.com/domattioli/agents-inc/blob/main/docs/proposals/narrate.md).
+
 Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. `@haiku <question>` inside any Claude Code session sends one side question to a cheaper model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>

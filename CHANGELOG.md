@@ -6,6 +6,10 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `agents-inc narrate {on,off,status,run}` (prototype): speaks a short digest of each new Claude Code assistant message with macOS `say`. The luna rung summarizes through `agents-inc run`; `--summarizer local` makes no model call. Classification markers skip a message, a failed or quota-paused luna call falls back to a local digest prefixed "local", and the `narrate-on` flag file gates speech. Design: `docs/proposals/narrate.md`.
+
 ## [0.6.1] — 2026-11-07
 
 Replaces 0.6.0, which was withdrawn from PyPI, Zenodo and GitHub.
