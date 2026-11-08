@@ -43,7 +43,7 @@ let LAST_AGENTS = new Set<string>()
 // Agents the person asked to stop. The ask is not a stop: the row says "stop requested".
 const STOP_ASKED = new Set<string>()
 // Finished run rows by dir name. A resume appends to events.jsonl, so resuming a run drops it from here.
-const DONE = new Map<string, { row: Row; slots: string; size: number }>()
+const DONE = new Map<string, { row: Row | null; slots: string; size: number }>()
 
 const compose = (): Row[] => {
   const jobs: Row[] = [...JOBS.values()].map(j => ({
@@ -249,7 +249,7 @@ export const register: Register = on => {
           const size = typeof ev?.size === 'number' ? ev.size : -1
           const hit = DONE.get(name)
           if (hit && size >= 0 && hit.size === size && !open.has(name)) {
-            runRows.push(hit.row)
+            if (hit.row) runRows.push(hit.row)
             if (hit.slots) slotsSeen.push(hit.slots)
             continue
           }
@@ -266,6 +266,11 @@ export const register: Register = on => {
           // No events.jsonl (refused or dry-run dispatch): judge by the run dir's own time instead.
           const moved = typeof ev?.mtimeMs === 'number' ? ev.mtimeMs : dirAge.get(name)
           if ((state === 'running' || state === 'starting') && typeof moved === 'number' && Date.now() - moved > STALE_MS) state = 'stale'
+          // A dry-run dispatch ran no agent: keep it out of the tree and the counts.
+          if (state === 'dry-run') {
+            if (size >= 0) DONE.set(name, { row: null, slots, size })
+            continue
+          }
           const row: Row = { n: 0, depth: 1, kind: 'run', id: name, label: runTitle(name), state, meta }
           runRows.push(row)
           if (size >= 0 && row.state !== 'running' && row.state !== 'starting') DONE.set(name, { row, slots, size })
