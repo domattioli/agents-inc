@@ -131,3 +131,12 @@ Branch color: `branch_kind_color <branch_name>` selects soft red for main/master
 1. `bash -n` + `shellcheck -S warning` clean on any .sh touched. 2. `python3 -m pytest scripts/tests/test_collect_usage.py -q` all pass.
 3. `bash scripts/tests/statusline_smoke.sh` → `smoke: N/N checks passed`. 4. `time bash scripts/statusline.sh < fixture` real < 0.40s (warm cache).
 5. Missing usage.db / prices / codex sessions → nulls + exit 0, never a traceback.
+
+## Operator rules (moved from machine AGENTS.md, 2026-11-07)
+
+- `scripts/statusline.sh` is the only live status line (moved from DomI on 2026-10-11, operator instruction). `~/.claude/settings.json` runs `bash ~/Projects/agents_Inc/scripts/statusline.sh`.
+- Retired copies: `~/Projects/DomI/scripts/statusline.sh` and `~/.claude/statusline/vaporwave.sh` with its `.bak` copies. Do not edit them or point settings back at them. Do not create a second script.
+- Verify every change yourself with the Gates above. Delegate reports of a working status line have been wrong before.
+- Never drop the box border or the subtable separators.
+- Measure width in terminal columns, not bytes or characters. Box-drawing glyphs are multi-byte; an emoji is one character but two columns.
+- Errors go to `~/.claude/statusline-domi.log` when that file exists. `ingest_usage.py` feeds `~/.codex-bridge/usage.db` in the background on a time throttle and never blocks the render.

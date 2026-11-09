@@ -182,8 +182,11 @@ else
   run_cwd="${cwd:-}"
   [[ -z "$run_cwd" && "$CLI" != "1" ]] && run_cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
   [[ -d "$run_cwd" ]] || run_cwd="$PWD"
+  # D74: AT_ROUTE_CODEX_READ=1 opts in to the read-only tool profile (reads in the canonical cwd only); default stays tool-free.
+  codex_tools_flag="--no-tools"
+  [[ "${AT_ROUTE_CODEX_READ:-0}" == "1" ]] && codex_tools_flag="--tools"
   printf '%s' "$question" | AT_ROUTE_ACTIVE=1 run_with_timeout "${AT_ROUTE_AGENTS_INC:-agents-inc}" run \
-    --model "$alias_name" --no-tools --cwd "$run_cwd" >"$out_f" 2>"$err_f" || rc=$?
+    --model "$alias_name" "$codex_tools_flag" --cwd "$run_cwd" >"$out_f" 2>"$err_f" || rc=$?
   if [[ "$rc" -eq 0 && ! -s "$out_f" ]]; then
     rc=1; echo "empty reply from agents-inc run" >>"$err_f"
   fi

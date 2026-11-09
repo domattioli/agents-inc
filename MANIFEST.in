@@ -39,7 +39,8 @@ prune demo
 prune docs/proposals
 # <<< release-ignore:end
 
-include LICENSE README.md CHANGELOG.md CITATION.cff
+include LICENSE LICENSE-AI.md NOTICE README.md CHANGELOG.md CITATION.cff
+recursive-include LICENSES *
 recursive-include agents_inc *.json
 recursive-include skills/workerbee *
 recursive-include skills/codex-bridge *

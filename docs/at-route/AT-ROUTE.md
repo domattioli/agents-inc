@@ -155,6 +155,8 @@ Requirements: `jq`, `perl` (for the portable 120-second timeout), the `claude` C
 
 ### Read-only tool set for routed Claude calls
 
+Codex aliases (`@@luna`, `@@terra`, `@@sol`, `@@astra`) run tool-free by default, so they cannot read project files. Set `AT_ROUTE_CODEX_READ=1` to let them read files in the current project directory (D74). Writes, network and MCP stay off. For a one-off file question you can also use `@haiku`.
+
 Every Claude alias (`haiku`, `sonnet`, `opus`, `fable`) routes the question through `claude -p` with a read-only tool restriction. The routed model can read any file the caller can read but cannot create files, modify files, or run shell commands. Allowed tools: `Read`, `Grep`, `Glob`. Denied tools: `Edit`, `Write`, `Bash`, `NotebookEdit`. No MCP servers are reachable. This restriction prevents routed calls from leaving partial or corrupted files in your working tree.
 
 ### Timeout behavior

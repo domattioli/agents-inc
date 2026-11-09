@@ -467,12 +467,19 @@ def main() -> int:
     else:
         missing = check(text, tier=tier, model=model)
 
-    if not missing:
+    over = "fan-out-over-ceiling" in missing
+    missing = [m for m in missing if m != "fan-out-over-ceiling"]
+    if over:
+        rung = known_rung(text, model)
+        w, t, d = FAN_OUT_BY_RUNG[rung]
+        print(f"NON-COMPLIANT FAN_OUT exceeds the {rung} ceiling (width {w}, total {t}, depth {d}). "
+              f"Reduce FAN_OUT to that ceiling or lower, or dispatch with the right --model.")
+    if not missing and not over:
         print("COMPLIANT")
-    else:
+    elif missing:
         print(f"NON-COMPLIANT missing elements: [{', '.join(str(m) for m in label_missing(missing))}]")
     lint_rc = run_handoff_lint(prompt_file, profile) if with_lint else 0
-    return 1 if (missing or lint_rc) else 0
+    return 1 if (missing or over or lint_rc) else 0
 
 
 if __name__ == "__main__":
