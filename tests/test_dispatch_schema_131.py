@@ -248,8 +248,10 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
-STOP_LINE = ("STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call, stop and hand back to the "
-             "dispatcher; never switch to another tool to route around the block.")
+STOP_LINE = ("STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, "
+             "stop and hand back to the dispatcher with the work done so far; never switch to another tool to "
+             "route around the block. A denial of an incidental side effect, such as a cache write, is not a "
+             "block: ignore it and continue.")
 
 
 class PinnedTest(DispatchBase):

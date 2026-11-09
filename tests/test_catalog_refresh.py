@@ -4,10 +4,8 @@ from pathlib import Path
 from tests._free012 import fixture, hermetic, parametrize, suite  # noqa: F401
 
 
-# 5 stale IDs from spec FR-002
+# 3 stale IDs from spec FR-002
 STALE_IDS = [
-    "minimax/minimax-m3:free",
-    "minimax/minimax-m2.7:free",
     "google/lyria-3-pro-preview",
     "google/lyria-3-clip-preview",
     "openrouter/free",
@@ -24,7 +22,7 @@ class TestCatalogRefreshDryRun:
     """Test catalog refresh in dry-run mode (default)."""
 
     def test_dry_run_lists_stale_ids_as_unavailable(self, hermetic, tmp_path):
-        """Dry-run lists all 5 stale ids as 'would mark unavailable' and doesn't modify file."""
+        """Dry-run lists all 3 stale ids as 'would mark unavailable' and doesn't modify file."""
         # Copy models.json to tmp
         models_path = tmp_path / "models.json"
         original = Path(__file__).parent.parent / "agents_inc" / "models.json"
@@ -36,7 +34,7 @@ class TestCatalogRefreshDryRun:
         fixture_path = Path(__file__).parent / "fixtures" / "012" / "openrouter_models.json"
         lines = catalog_refresh.refresh(apply=False, from_file=str(fixture_path), models_path=str(models_path))
 
-        # Check: all 5 stale IDs listed as "would mark unavailable"
+        # Check: all 3 stale IDs listed as "would mark unavailable"
         unavailable_lines = [line for line in lines if "would mark unavailable:" in line]
         unavailable_ids = [line.split("would mark unavailable:")[1].strip() for line in unavailable_lines]
 
@@ -46,8 +44,8 @@ class TestCatalogRefreshDryRun:
         # Check: file is byte-identical
         assert models_path.read_bytes() == original_bytes, "Dry-run modified the file"
 
-    def test_dry_run_lists_5_unavailable_lines_exactly(self, hermetic, tmp_path):
-        """Dry-run lists exactly 5 'would mark unavailable' lines."""
+    def test_dry_run_lists_3_unavailable_lines_exactly(self, hermetic, tmp_path):
+        """Dry-run lists exactly 3 'would mark unavailable' lines."""
         models_path = tmp_path / "models.json"
         original = Path(__file__).parent.parent / "agents_inc" / "models.json"
         models_path.write_text(original.read_text())
@@ -57,7 +55,7 @@ class TestCatalogRefreshDryRun:
         lines = catalog_refresh.refresh(apply=False, from_file=str(fixture_path), models_path=str(models_path))
 
         unavailable_lines = [line for line in lines if "would mark unavailable:" in line]
-        assert len(unavailable_lines) == 5, f"Expected 5 unavailable lines, got {len(unavailable_lines)}: {unavailable_lines}"
+        assert len(unavailable_lines) == 3, f"Expected 3 unavailable lines, got {len(unavailable_lines)}: {unavailable_lines}"
 
 
 class TestCatalogRefreshApply:

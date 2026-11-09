@@ -26,6 +26,11 @@ absolute installed `agents-inc` launcher recorded by installation; Claude's
 - **Dependencies**: `codex-bridge` skill for actual dispatch (`agent.sh`, `gask.sh`, `mask.sh`, `oask.sh`). No scripts of its own
 - **Scope**: Supervision discipline only. Transport, routing, retries, timeouts and job state belong to `codex-bridge`
 
+
+## Free models (D75)
+
+Free slugs (see `agents_inc/install/free_launch.py`) are dispatchable. Add `TASK_KIND` (extract, summarize, classify) and an explicit public or internal `CLASSIFICATION`. Judge the reply with a `{report}` gate. A free reply is never self-accepted.
+
 ## When to Use
 
 - Orchestrating work across non-Claude delegate models in budget mode
@@ -166,10 +171,10 @@ which model ids sit on each rung; edit `agents_inc/models.json` or
 | workhorse | codex | `gpt-6.1-terra` | `gpt-5.6-terra`, `gpt-6.1-terra` |
 | grunt | claude | `haiku` | `haiku` |
 | grunt | codex | `gpt-6-luna` | `gpt-5.4-mini`, `gpt-5.6-luna`, `gpt-6-luna` |
-| grunt | gemini | `gemini-flash-lite-latest` | `gemini-2.5-flash`, `gemini-flash-lite`, `gemini-flash-lite-latest` |
-| grunt | mistral | `mistral-small-latest` | `mistral-small-latest` |
+| grunt | gemini | `gemini-flash-lite-latest` | `gemini-2.5-flash`, `gemini-3.8-flash`, `gemini-flash-lite`, `gemini-flash-lite-latest` |
+| grunt | mistral | `ministral-3b-latest` | `codestral-latest`, `ministral-3b-latest` |
 | grunt | ollama | `qwen2.5-coder:3b` | `qwen2.5-coder:3b`, `qwen2.5-coder:7b`, `qwen3:8b` |
-| grunt | openrouter | `openrouter/auto:free` | `cohere/north-mini-code:free`, `dots-studio/dots-3-note-preview:free`, `google/gemma-4-26b-a4b-it:free`, `google/gemma-4-31b-it:free`, `google/lyria-3-clip-preview`, `google/lyria-3-pro-preview`, `inclusionai/ling-3.0-flash-fin:free`, `inclusionai/ling-3.0-flash-sante:free`, `liquid/lfm-2.5-2.6b:free`, `minimax/minimax-m2.7:free`, `minimax/minimax-m3:free`, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`, `nvidia/nemotron-3-super-120b-a12b:free`, `nvidia/nemotron-3-ultra-550b-a55b:free`, `nvidia/nemotron-3.5-content-safety:free`, `nvidia/nemotron-3.5-lightning:free`, `openrouter/auto:free`, `openrouter/free`, `poolside/laguna-s-2.1:free`, `poolside/laguna-xs-2.1:free`, `thinkingmachines/inkling-small:free`, `thinkingmachines/inkling:free`, `z-ai/glm-5.2:free` |
+| grunt | openrouter | `openrouter/auto:free` | `cohere/north-mini-code:free`, `dots-studio/dots-3-note-preview:free`, `google/gemma-4-26b-a4b-it:free`, `google/gemma-4-31b-it:free`, `google/lyria-3-clip-preview`, `google/lyria-3-pro-preview`, `liquid/lfm-2.5-2.6b:free`, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`, `nvidia/nemotron-3-ultra-550b-a55b:free`, `nvidia/nemotron-3.5-lightning:free`, `openrouter/auto:free`, `openrouter/free` |
 <!-- END GENERATED tier-table -->
 
 **Relay for chains the tools cannot build.** `agents-inc run` and
@@ -266,10 +271,10 @@ vendor that isn't wired up here.
 | haiku | Anthropic | n/a — `Agent` tool | `Agent(model="haiku", ...)` | grunt | Claude-side triage, mechanical edits |
 | gemini digest | Google Gemini, free tier | `gemini-3.8-flash` | `skills/codex-bridge/scripts/gask.sh --tier digest "<prompt>"` | grunt | 1M-context bulk digest of one large blob (logs, transcripts) |
 | gemini cheap | Google Gemini, free tier | `gemini-flash-lite-latest` | `skills/codex-bridge/scripts/gask.sh --tier cheap "<prompt>"` | grunt | high-volume shallow triage |
-| gemini deep | Google Gemini, free tier | `gemini-3.1-pro-preview` | `skills/codex-bridge/scripts/gask.sh --tier deep "<prompt>"` | — | **verify quota before use**: `limit: 0` on this account as of 2026-09-02, i.e. currently unusable |
+| gemini deep | Google Gemini, free tier | `gemini-3.1-pro-preview` | `skills/codex-bridge/scripts/gask.sh --tier deep "<prompt>"` | — | not free-tier usable as of 2026-11-09 (free-tier quota 0) |
 | mistral cheap | Mistral API | `ministral-3b-latest` | `skills/codex-bridge/scripts/mask.sh --tier cheap "<prompt>"` | grunt | mechanical transform |
 | mistral code | Mistral API | `codestral-latest` | `skills/codex-bridge/scripts/mask.sh --tier code "<prompt>"` | grunt | code review/critique. Devstral not exposed on this key; codestral is the substitute |
-| mistral deep | Mistral API | `mistral-large-latest` | `skills/codex-bridge/scripts/mask.sh --tier deep "<prompt>"` | grunt | research-style questions |
+| mistral deep | Mistral API | `mistral-large-latest` | `skills/codex-bridge/scripts/mask.sh --tier deep "<prompt>"` | grunt | research-style questions; not free-tier usable as of 2026-11-09 (403, subscription tier) |
 | openrouter free | OpenRouter, free-tier models only | model id from `curl https://openrouter.ai/api/v1/models` | `skills/codex-bridge/scripts/oask.sh "<prompt>"` | grunt | one-shot text/drafts. Hard-coded spend guard refuses non-free models — operator rule is spend nothing on OpenRouter |
 | DelegateAgent | OpenAI (Codex), via MCP | `gpt-6-luna` | `DelegateAgent(model="luna", ...)` | grunt | transcript-return alternative to broken --backend codex --wait for luna; same call shape as Claude `Agent` tool |
 

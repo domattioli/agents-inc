@@ -45,7 +45,7 @@ ROLE: Grunt scout (haiku, Agent tool), dispatched by Supervisor (opus) in /path/
 REPORTING CHAIN: haiku reports to sonnet; sonnet reports to fable; fable reports to the operator
 TASK: Read-only scout. 1. Read agents_inc/policy.py. 2. List every function name that contains the word route, with file:line. 3. Return the list; write nothing.
 CONSTRAINTS: read-only; no file writes; no network; at most 10 tool calls. Stop-on-block: if a hook or permission classifier blocks a tool call, stop and hand back to the dispatcher; never switch tool to route around it.
-STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call, stop and hand back to the dispatcher; never switch to another tool to route around the block.
+STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, stop and hand back to the dispatcher with the work done so far; never switch to another tool to route around the block. A denial of an incidental side effect, such as a cache write, is not a block: ignore it and continue.
 OUT OF SCOPE: editing any file; judging routing design; running unittest suites.
 FILES IN SCOPE:
 none (read-only scout)
@@ -81,7 +81,7 @@ Defaults: when ALLOWLIST, CLASSIFICATION, EFFORT, SECOND_OPINION or PLAN_CONTRAC
 | FAILURE_GATE | 3 | text | conditions that make the task RED; at least one must be a command in backticks, or `check_dispatch_prompt.py` rejects the prompt as element 3 missing |
 | PRE_EXISTING_CHANGES | 7 | text | optional: blank means the renderer writes the default text above. `<snapshot>` placeholder: the dispatch wrapper (`agents_inc/install/dispatch.py`) fills it with the snapshot path after capture; hand-written prompts put the path from `pre_dispatch_snapshot.py capture <out.json>` plus the verify command `pre_dispatch_snapshot.py verify <out.json> --allow <path>...` |
 | ALLOWLIST | 7 | array of string, or text | models the delegate may spawn, or `none — do all work yourself`. With a FAN_OUT total and depth above 0, a Codex delegate (astra, sol, terra) or a Claude delegate (fable, opus, sonnet) runs as a broker Lead with the rung-allowed models from this list (D57, D60). A Worker's FAN_OUT must be zero |
-| FAN_OUT | D48 | `{width,total,depth}` ints, or text | `width <n>, total <n>, depth <n>`; optional: the renderer fills the rung default from a `RUNG` or `MODEL` slot, else Orchestrator (`width 3, total 6, depth 2`); Workhorse `2, 4, 1`; Grunt `0, 0, 0` |
+| FAN_OUT | D48 | `{width,total,depth}` ints, or text | `width <n>, total <n>, depth <n>`; optional: the renderer fills the rung default from a `RUNG` or `MODEL` slot, else Orchestrator (`width 3, total 6, depth 2`); Workhorse `2, 4, 1`; Grunt `0, 0, 0`; a free-model slug (gemini-*, ministral-*, codestral-*, OpenRouter `vendor/name:free`) is always `0, 0, 0` |
 | CLASSIFICATION | 8 | text, first word public, internal or confidential | public, internal, or confidential, with the reason |
 | EFFORT | 9 | text naming low, medium, high, xhigh or max (ultra: Codex only) | intended effort level, and whether the transport can set it |
 | SECOND_OPINION | 10 | text | why this rung, or `not applicable` with the reason |
@@ -96,6 +96,8 @@ Defaults: when ALLOWLIST, CLASSIFICATION, EFFORT, SECOND_OPINION or PLAN_CONTRAC
 | DELEGATE | optional | text | the delegate's alias; precedence: explicit slot, then the `--model` flag, then the `MODEL` slot, then the first model alias named in `ROLE`, else the word `delegate` |
 | NOTES | optional | text | default `none`; a path must sit under the dispatch scratchpad, never the repo or home |
 | STYLE | optional | text | empty by default; see below |
+| TASK_KIND | optional (required for a free model) | text | `extract`, `summarize` or `classify`: the task kind of a free-model run (spec 037). Becomes the wrapper's `TASK`. Never rendered into the prompt; other models ignore it |
+| INPUT_FILES | optional | array of string | repo-relative text files whose content a free-model run receives, because it has no tools (spec 037). Never rendered into the prompt text by the renderer; other models ignore it |
 
 The REPORTING CHAIN line is rendered from the three optional slots and always has the fixed form shown in the template. The settings file is `~/.config/agents-inc/settings.json`, key `chain` (`supervisor`, `executive`); set it with `agents-inc models chain supervisor=opus executive=fable`, never by hand. The renderer prints one `chain:` line on stderr that shows what it derived. `check_dispatch_prompt.py` fails a chain whose seat ranks above the seat it reports to.
 

@@ -33,8 +33,10 @@ from dispatch_rungs import ALIAS_VENDOR, FAN_OUT_BY_RUNG, LADDER, MODEL_RUNG  # 
 import dispatch_schema  # noqa: E402  (#131: loaded from this directory, so a pinned copy is the one that runs)
 
 # #131 (H7): one fixed line after CONSTRAINTS, so the stop-on-block clause never depends on the slot author.
-STOP_ON_BLOCK_LINE = ("STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call, stop and hand back "
-                      "to the dispatcher; never switch to another tool to route around the block.")
+STOP_ON_BLOCK_LINE = ("STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, "
+                      "stop and hand back to the dispatcher with the work done so far; never switch to another tool to "
+                      "route around the block. A denial of an incidental side effect, such as a cache write, is not a "
+                      "block: ignore it and continue.")
 
 
 # 026 US4 (#109): C0 controls except tab, LF and CR, DEL, and bidirectional controls never reach a prompt.
@@ -64,9 +66,21 @@ def control_char_hit(slots) -> tuple[str, str, int] | None:
     return None
 
 
+_FREE_PREFIXES = ("gemini-", "ministral-", "codestral-")
+
+
+def _is_free_slug(word: str) -> bool:
+    """Shape of a free-model slug (spec 037): gemini-*, ministral-*, codestral-*, or an OpenRouter `vendor/name:free`.
+    Shape only; dispatch holds the exact allowed-slug map (agents_inc/install/free_launch.py)."""
+    return word.startswith(_FREE_PREFIXES) or ("/" in word and word.endswith(":free"))
+
+
 def default_fan_out(slots: dict, model: str | None = None) -> str:
     """Return the D48 FAN_OUT line value from a RUNG or MODEL slot, else Orchestrator defaults."""
     rung = "orchestrator"
+    for value in (model, slots.get("MODEL")):  # spec 037: a free-model slug never fans out
+        if isinstance(value, str) and _is_free_slug(value.strip().lower()):
+            return "width 0, total 0, depth 0"
     for key, value in (("RUNG", slots.get("RUNG")), ("MODEL", slots.get("MODEL")), ("--model", model)):
         if isinstance(value, str) and value.strip():
             word = value.strip().lower()

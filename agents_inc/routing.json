@@ -2,7 +2,7 @@
   "required": ["claude", "codex"],
   "optional": ["gemini", "mistral", "openrouter", "ollama"],
   "tiers": {
-    "grunt":       {"claude": "haiku",  "codex": "gpt-6-luna", "gemini": "gemini-flash-lite-latest", "mistral": "mistral-small-latest", "openrouter": "openrouter/auto:free", "ollama": "qwen2.5-coder:3b"},
+    "grunt":       {"claude": "haiku",  "codex": "gpt-6-luna", "gemini": "gemini-flash-lite-latest", "mistral": "ministral-3b-latest", "openrouter": "openrouter/auto:free", "ollama": "qwen2.5-coder:3b"},
     "workhorse":   {"claude": "sonnet", "codex": "gpt-6.1-terra"},
     "orchestrator":{"claude": "opus",   "codex": "gpt-6.1-sol"},
     "executive":   {"claude": "fable",  "codex": "gpt-6-astra"}
