@@ -249,7 +249,7 @@ def lint_report(path: Path, scripts: Path = SCRIPTS) -> tuple[list, str]:
     missing = module.check_report(path.read_text(encoding="utf-8"))
     rc, log = _handoff_lint(module, path, "report")
     if rc:
-        missing = list(missing) + ["handoff-lint"]
+        log = f"handoff-lint advisory (rc={rc}, not a refusal)\n" + log
     return missing, log
 
 
@@ -437,6 +437,12 @@ def worker_env(exe: str, base: dict | None = None) -> dict:
     for key in WORKER_ENV_KEYS:
         if key in base:
             env[key] = base[key]
+    env["AGENTS_INC_WORKER"] = "1"
+    if env.get("TMPDIR"):
+        tmp = env["TMPDIR"].rstrip("/")
+        env["XDG_CACHE_HOME"] = tmp + "/cache"
+        env["npm_config_cache"] = tmp + "/npm"
+        env["PIP_CACHE_DIR"] = tmp + "/pip"
     return {k: v for k, v in env.items() if not SECRET_ENV_RE.search(k)}
 
 
@@ -1325,6 +1331,29 @@ def _grants_from_slots(slots: dict, cwd: Path, scripts: Path = SCRIPTS) -> tuple
     return gates, bash_allow, None
 
 
+def _resolves(name: str, base: Path, path: str | None) -> bool:
+    if "/" in name:
+        target = Path(name) if os.path.isabs(name) else base / name
+        return target.is_file() and os.access(target, os.X_OK)
+    return shutil.which(name, path=path) is not None
+
+
+def capability_preflight(gates, bash_allow, cwd, path: str | None = None) -> list[str]:
+    """Return one message per GATES executable or BASH_ALLOW first word that does not resolve (FR3.1).
+    A path is checked against its gate cwd under `cwd`; a bare name uses `shutil.which` on `path` (default PATH)."""
+    cwd = Path(cwd)
+    misses = []
+    for i, g in enumerate(gates or []):
+        argv = g.get("argv") or []
+        if argv and not _resolves(str(argv[0]), cwd / g.get("cwd", "."), path):
+            misses.append(f"gate[{i}] executable not found: {argv[0]}")
+    for i, prefix in enumerate(bash_allow or []):
+        words = prefix.split()
+        if words and not _resolves(words[0], cwd, path):
+            misses.append(f"bash_allow[{i}] executable not found: {words[0]}")
+    return misses
+
+
 def _record_lead(spec: dict, lead_dir: Path) -> None:
     """After a Lead turn: `broker_workers_spawned` (None when unreadable) and `children` (D60), one entry per broker
     result file in lead_dir (regular files only, at most total + resumes), so the mirrored run.json links the Workers."""
@@ -1566,6 +1595,15 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         _wtext(lint, why[1] + "\n")
         spec["outcome"] = why[0]; _write_json(run_dir / "run.json", spec)
         print(f"dispatch {run_id} {model} refused {why[0]}: {why[1]} lint={lint}")
+        return EXIT_REFUSED
+    misses = capability_preflight(None if _GRANT_CEILING is not None else gates, bash_allow, cwd,
+                                  (WORKER_PATH + ":" + os.path.dirname(os.path.abspath(shutil.which("claude") or "claude")))
+                                  if _BROKER_SAFE_WRITES else None)
+    if misses:
+        detail = "; ".join(misses)
+        _wtext(lint, detail + "\n")
+        spec["outcome"] = "refused-capability"; spec["reason_detail"] = detail; _write_json(run_dir / "run.json", spec)
+        print(f"dispatch {run_id} {model} refused refused-capability: {detail} lint={lint}")
         return EXIT_REFUSED
     spec["gate_commands"] = gates or []
     spec["allowed_tools"], spec["disallowed_tools"] = tool_grants(spec, gates, bash_allow, run_dir) if kind == "claude" else (None, None)

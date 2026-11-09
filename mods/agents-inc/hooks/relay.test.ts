@@ -75,6 +75,26 @@ test('a slots path outside the session cwd is refused', async ($, on) => {
   expect(out.deny).toBeDefined()
 })
 
+test('a cwd outside the session root is refused', async ($, on) => {
+  on('fs.stat', STAT)
+  await start($, on)
+  const out = await $.tool.call({ tool: TOOL, model: 'sonnet', slots: '/work/s.md', cwd: '/etc', agentId: 'a1' })
+  expect(out.deny).toContain('cwd must be')
+})
+
+test('a cwd inside the session root reaches dispatch --cwd (#147)', async ($, on) => {
+  const seen: string[][] = []
+  fakeProcesses(on, seen)
+  on('fs.stat', STAT)
+  on('fs.read', () => ({ value: 'delegate answer' }))
+  mock.clock(on)
+  mock.session(on)
+  await start($, on)
+  await $.tool.call({ tool: TOOL, model: 'sonnet', slots: '/work/s.md', cwd: '/work/repo', agentId: 'a1' })
+  const d = seen.find(a => a.includes('dispatch'))
+  expect(d?.[d.indexOf('--cwd') + 1]).toBe('/work/repo')
+})
+
 test('happy path: rows reach the subagent and the verdict comes back', async ($, on) => {
   const seen: string[][] = []
   fakeProcesses(on, seen)
