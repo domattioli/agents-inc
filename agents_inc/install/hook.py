@@ -103,15 +103,204 @@ COMPOUND_MARKERS = ("&&", ";", "|", "cd ", "<<", ">", "$(")
 COMPOUND_DENY_REASON = ("agents-inc must be the whole Bash call. Write the slots file in one call, dispatch in the next. "
                         "Never set dangerouslyDisableSandbox.")
 
+COMPOUND_SAFE_FORM = " Run it as: agents-inc dispatch --slots <file> --model <alias>"
+_OPERATOR_CHARS = ";<>|&"
+# Wrapper options that take a separate argument word (env -u VAR, nice -n 5, xargs -I {}); the argument is not the wrapped command.
+_WRAP_OPT_ARG = frozenset({"-u", "-n", "-C", "-P", "-S", "-I", "-a", "-g", "-s", "-L", "-d", "-E"})
+_WRAPPERS = frozenset({"env", "exec", "command", "nohup", "time", "nice", "xargs"})
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# Command heads that run or re-evaluate what follows; shlex cannot see through them, so they fail closed.
+_HIDING_HEADS = frozenset({"{", "}", "if", "then", "do", "else", "elif", "while", "until", "eval", "alias", "source", "."})
+
+def _unquote(text: str) -> str:
+    """Drop quote chars and backslashes so a quoted launcher word ('agents-inc') still matches the dispatch regex."""
+    return re.sub(r"['\"\\]", "", text)
+
+class _Word:
+    """One shell word. `text` has quotes and escapes removed; the flags keep what the quoting hid."""
+    def __init__(self):
+        self.text, self.prefix = "", ""  # prefix: leading chars that were plain (unquoted, unescaped, unexpanded)
+        self.broke = self.expands = self.quoted = False
+    def plain(self, c: str) -> None:
+        self.text += c
+        if not self.broke: self.prefix += c
+    def lit(self, text: str) -> None:  # quoted or escaped: literal data, never an operator or an assignment
+        self.text += text; self.broke = self.quoted = True
+    def expand(self, text: str) -> None:  # `$`, a backtick or a substitution: the real value is unknown here
+        self.text += text; self.broke = self.expands = True
+    @property
+    def assign(self) -> bool: return bool(_ASSIGN_RE.match(self.prefix))
+
+def _body_subs(body: str, subs: list) -> None:
+    """Substitutions inside an unquoted heredoc body run; the rest of the body is data."""
+    k = 0
+    while k < len(body):
+        c = body[k]
+        if c == "\\": k += 2
+        elif c == "$" and body[k + 1:k + 2] == "(": res, k = _parse(body, k + 2, "paren"); subs.append(res)
+        elif c == "`": res, k = _parse(body, k + 1, "tick"); subs.append(res)
+        else: k += 1
+
+def _heredocs(s: str, i: int, pending: list, subs: list) -> int:
+    """Skip the bodies of the pending heredocs, from line start `i` to each delimiter line; return the new index."""
+    for delim, strip, quoted in pending:
+        body = []
+        while i < len(s):
+            j = s.find("\n", i)
+            j = len(s) if j < 0 else j
+            line, i = s[i:j], min(j + 1, len(s))
+            if (line.lstrip("\t") if strip else line) == delim: break
+            body.append(line)
+        if not quoted: _body_subs("\n".join(body), subs)
+    return i
+
+def _parse(s: str, i: int, mode: str):
+    """Split bash text into ((commands, operators, substitutions), next index). `commands` is a list of _Word lists,
+    `operators` every operator seen at this level in order, `substitutions` the parsed `$( )` and backtick bodies.
+    Tracks single and double quotes, backslash escapes, mid-word quoting, `#` comments at a word start, heredoc bodies
+    and nested substitutions with quote-aware closing. mode is "" (top level), "paren" (after `$(`) or "tick" (after a
+    backtick). Raises ValueError on an unterminated quote. A heuristic, not a full shell grammar."""
+    cmds, ops, subs, cur = [], [], [], []
+    word, depth, pending, delim, n = None, 0, [], None, len(s)
+    def end_word():
+        nonlocal word, delim
+        if word is None: return
+        cur.append(word)
+        if delim is not None: pending.append((word.text, delim, word.quoted)); delim = None
+        word = None
+    def end_cmd():
+        nonlocal cur
+        end_word()
+        if cur: cmds.append(cur)
+        cur = []
+    while i < n:
+        c = s[i]
+        if (mode == "tick" and c == "`") or (mode == "paren" and c == ")" and depth == 0):
+            end_cmd(); return (cmds, ops, subs), i + 1
+        if c in " \t": end_word(); i += 1
+        elif c == "\n":
+            end_cmd(); ops.append(";"); i += 1
+            if pending: i = _heredocs(s, i, pending, subs); pending = []
+        elif c == "#" and word is None:
+            i = s.find("\n", i)
+            i = n if i < 0 else i
+        elif c in "()":
+            depth += 1 if c == "(" else -(depth > 0)
+            end_cmd(); ops.append(c); i += 1
+        elif c in _OPERATOR_CHARS:
+            j = i
+            while j < n and s[j] in _OPERATOR_CHARS: j += 1
+            op = s[i:j]
+            if op == "<<" and s[j:j + 1] == "-": op, j = "<<-", j + 1
+            end_cmd(); ops.append(op); i = j
+            if op in ("<<", "<<-"): delim = op == "<<-"
+        else:
+            if word is None: word = _Word()
+            if c == "\\":
+                if s[i + 1:i + 2] == "\n": i += 2
+                elif i + 1 < n: word.lit(s[i + 1]); i += 2
+                else: word.plain(c); i += 1
+            elif c == "'":
+                j = s.find("'", i + 1)
+                if j < 0: raise ValueError("unterminated quote")
+                word.lit(s[i + 1:j]); i = j + 1
+            elif c == '"':
+                word.lit(""); i += 1
+                while True:
+                    if i >= n: raise ValueError("unterminated quote")
+                    d = s[i]
+                    if d == '"': i += 1; break
+                    if d == "\\" and i + 1 < n:
+                        e = s[i + 1]
+                        if e in '$`"\\': word.text += e
+                        elif e != "\n": word.text += d + e
+                        i += 2
+                    elif d == "$" and s[i + 1:i + 2] == "(":
+                        res, i = _parse(s, i + 2, "paren"); subs.append(res); word.expand("$()")
+                    elif d == "`":
+                        res, i = _parse(s, i + 1, "tick"); subs.append(res); word.expand("$()")
+                    else:
+                        if d == "$": word.expands = True
+                        word.text += d; i += 1
+            elif c == "$" and s[i + 1:i + 2] == "(":
+                res, i = _parse(s, i + 2, "paren"); subs.append(res); word.expand("$()")
+            elif c == "`":
+                res, i = _parse(s, i + 1, "tick"); subs.append(res); word.expand("$()")
+            elif c == "$": word.expand(c); i += 1
+            else: word.plain(c); i += 1
+    end_cmd()
+    return (cmds, ops, subs), i
+
+def _words_dispatch(words: list) -> bool:
+    return (len(words) >= 2 and os.path.basename(words[0].text) == "agents-inc"
+            and words[1].text in ("dispatch", "run", "luna"))
+
+def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
+    """(offending element or "", an agents-inc dispatch runs at this level or below, env prefix on it)."""
+    cmds, _ops, subs = level
+    dispatch = env_prefix = False
+    for words in cmds:
+        rest, skipped = list(words), 0
+        while rest and rest[0].assign: rest.pop(0); skipped += 1
+        if not rest: continue
+        if could_hide:
+            if rest[0].expands or "\n" in rest[0].text: return f"expanded command word {rest[0].text!r}", False, False
+            if rest[0].text in _HIDING_HEADS: return f"shell keyword {rest[0].text}", False, False
+        wrapped, name = rest, os.path.basename(rest[0].text)
+        while name in _WRAPPERS:  # the wrapped command is the first word after the wrapper's own options
+            k = 1
+            while k < len(wrapped):
+                t = wrapped[k].text
+                if t in _WRAP_OPT_ARG: k += 2
+                elif t.startswith("-") or wrapped[k].assign or t.isdigit() or t == "{}": k += 1
+                else: break
+            wrapped = wrapped[k:]
+            if not wrapped: break
+            if _words_dispatch(wrapped): return f"{os.path.basename(rest[0].text)} wrapper", False, False
+            name = os.path.basename(wrapped[0].text)
+        if wrapped and name in _SHELLS and any(re.fullmatch(r"-[a-z]*c[a-z]*", w.text) for w in wrapped[1:]) \
+                and any(COMPOUND_DISPATCH_RE.search(_unquote(w.text)) for w in wrapped[1:]): return f"{name} -c string", False, False
+        if _words_dispatch(rest):
+            dispatch = True; env_prefix = env_prefix or bool(skipped)
+    for sub in subs:
+        found, ran, _ = _judge(sub, could_hide)
+        if found: return found, False, False
+        if ran: return "command substitution", False, False
+    return "", dispatch, env_prefix
+
+def _dispatch_shape(command: str) -> str:
+    """Return the offending element when an executed `agents-inc dispatch|run|luna` shares the call with a shell
+    operator, cd, command substitution or an env prefix; else "". Quoted text, comments and heredoc bodies that only
+    mention the command never count, but a dispatch inside a `$(...)` or backtick substitution, a `sh -c` string, or
+    behind a wrapper word (env, exec, command, nohup, time, nice, xargs) does. Unbalanced quotes fall back to the
+    raw-substring rule."""
+    try:
+        level, _ = _parse(command, 0, "")
+    except ValueError:
+        if not COMPOUND_DISPATCH_RE.search(command): return ""
+        return next((m for m in COMPOUND_MARKERS if m in command), "")
+    # Fail closed on shapes that can hide a launcher, but only when the call could involve agents-inc at all.
+    flat = re.sub(r"\\\n", "", command)
+    could_hide = "agents-inc" in flat or "agents-inc" in re.sub(r"\$\{[^}]*\}|[\\'\"`]", "", flat)
+    found, dispatch, env_prefix = _judge(level, could_hide)
+    if found: return found
+    if not dispatch: return ""
+    if env_prefix: return "env prefix"
+    if level[1]: return level[1][0]
+    if level[2]: return "command substitution"
+    return ""
+
 def compound_deny(payload: object) -> str:
     """Deny a Bash call that wraps an agents-inc dispatch in a compound command. Fails open on anything unexpected."""
     try:
         if not isinstance(payload, dict) or payload.get("tool_name") != "Bash": return ""
         command = str(_tool_input(payload).get("command") or "")
-        if not COMPOUND_DISPATCH_RE.search(command): return ""
-        if not any(m in command for m in COMPOUND_MARKERS): return ""
+        found = _dispatch_shape(command)
+        if not found: return ""
+        reason = f"{COMPOUND_DENY_REASON}{COMPOUND_SAFE_FORM} (found: {found})."
         return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                  "permissionDecisionReason": COMPOUND_DENY_REASON}})
+                                                  "permissionDecisionReason": reason}})
     except Exception:
         return ""
 

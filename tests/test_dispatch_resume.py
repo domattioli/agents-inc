@@ -211,8 +211,12 @@ class DefaultParentTest(unittest.TestCase):
         repo = self._repo("b", ignore=False)
         self.assertEqual(dispatch.default_parent(repo), self.root / "tmpdir" / "agents-inc-runs")
 
-    def test_missing_scratch_and_non_repo_fall_back(self):
+    def test_missing_scratch_ignored_still_preferred(self):
         repo = self._repo("c", ignore=True, scratch=False)
+        self.assertEqual(dispatch.default_parent(repo), repo / ".scratch" / "agents-inc-runs")
+
+    def test_missing_scratch_unignored_and_non_repo_fall_back(self):
+        repo = self._repo("c2", ignore=False, scratch=False)
         self.assertEqual(dispatch.default_parent(repo), self.root / "tmpdir" / "agents-inc-runs")
         plain = self.root / "plain"
         (plain / ".scratch").mkdir(parents=True)

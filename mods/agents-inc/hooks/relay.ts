@@ -4,13 +4,14 @@ const TOOL = 'mcp__agents-inc__run'
 const MODELS = ['fable', 'opus', 'sonnet', 'haiku', 'astra', 'sol', 'terra', 'luna']
 const FREE = ['gemini', 'mistral', 'openrouter']
 const MAX_NOTICES = 600 // notices per call before the throttle (FR-018)
+const MAX_DIRECT_NOTICES = 40 // main-session calls (no relay subagent): keep the transcript small
 const THROTTLE_MS = 60_000
 const DRAIN_MS = 3_000
 const RUN_DIR_LINE = /^agents-inc dispatch: run \S+ dir (.+)$/
 const VERDICT_LINE = /^dispatch \S+ \S+ \S+/
 
 const RELAY_PROMPT =
-  'Call the mcp__agents-inc__run tool once with the model and slots path you were given. ' +
+  'Call the mcp__agents-inc__run tool once with the model and slots path you were given, and the cwd if one was given. ' +
   'Then answer with the tool text exactly, and add nothing.'
 
 let sessionCwd = ''
@@ -40,7 +41,12 @@ export async function registerRelay(
     description: 'Run one agents-inc dispatch and stream its rows into the subagent transcript.',
     inputSchema: {
       type: 'object',
-      properties: { model: { type: 'string' }, slots: { type: 'string' }, effort: { type: 'string' } },
+      properties: {
+        model: { type: 'string' },
+        slots: { type: 'string' },
+        effort: { type: 'string' },
+        cwd: { type: 'string', description: 'Run directory (a git repo) inside the session root. Default: the session root.' },
+      },
       required: ['model', 'slots'],
     },
     isDeferred: false,
@@ -55,14 +61,21 @@ export const register: Register = on => {
     const slots = String(e.slots ?? '')
     const effort = e.effort === undefined ? undefined : String(e.effort)
 
-    if (!agentId) return { deny: 'call through Agent subagent_type agents-inc:relay' }
+    // No agentId: the main session called the tool directly (no haiku relay). Rows go to the main transcript, capped lower.
+    const cap = agentId ? MAX_NOTICES : MAX_DIRECT_NOTICES
     if (FREE.includes(model)) return { deny: `${model} is a free model: dispatch it with agent.sh, not the relay` }
     if (!MODELS.includes(model)) return { deny: `unknown model ${model}; use one of ${MODELS.join(' ')}` }
     const slotsReal = (await $.fs.stat(slots, { resolve: true }).catch(() => undefined))?.realPath
     const rootReal = (await $.fs.stat(sessionCwd, { resolve: true }).catch(() => undefined))?.realPath
     if (!isInside(slotsReal, rootReal)) return { deny: `slots must be a file inside ${sessionCwd}` }
 
-    const argv = ['agents-inc', 'dispatch', '--model', model, '--slots', slots, '--cwd', sessionCwd]
+    const runCwd = e.cwd === undefined ? sessionCwd : String(e.cwd)
+    if (runCwd !== sessionCwd) {
+      const cwdReal = (await $.fs.stat(runCwd, { resolve: true }).catch(() => undefined))?.realPath
+      if (!isInside(cwdReal, rootReal)) return { deny: `cwd must be a directory inside ${sessionCwd}` }
+    }
+
+    const argv = ['agents-inc', 'dispatch', '--model', model, '--slots', slots, '--cwd', runCwd]
     if (effort) argv.push('--effort', effort)
 
     let runDir: string | undefined
@@ -81,7 +94,7 @@ export const register: Register = on => {
         .catch(() => undefined)
 
     const relayBatch = async (batch: string) => {
-      if (sent >= MAX_NOTICES) {
+      if (sent >= cap) {
         held++
         const now = await $.clock.now()
         if (now - lastNotice >= THROTTLE_MS) {
@@ -119,7 +132,7 @@ export const register: Register = on => {
     next.signal.addEventListener('abort', onAbort)
 
     try {
-      for await (const piece of $.process.spawn({ argv, cwd: sessionCwd })) {
+      for await (const piece of $.process.spawn({ argv, cwd: runCwd })) {
         if (aborted) break
         if (piece.stream === 'stdout') {
           stdout += piece.text

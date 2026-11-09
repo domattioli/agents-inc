@@ -64,11 +64,10 @@ def control_char_hit(slots) -> tuple[str, str, int] | None:
     return None
 
 
-def default_fan_out(slots: dict) -> str:
+def default_fan_out(slots: dict, model: str | None = None) -> str:
     """Return the D48 FAN_OUT line value from a RUNG or MODEL slot, else Orchestrator defaults."""
     rung = "orchestrator"
-    for key in ("RUNG", "MODEL"):
-        value = slots.get(key)
+    for key, value in (("RUNG", slots.get("RUNG")), ("MODEL", slots.get("MODEL")), ("--model", model)):
         if isinstance(value, str) and value.strip():
             word = value.strip().lower()
             if word in FAN_OUT_BY_RUNG:
@@ -418,7 +417,7 @@ def main() -> int:
         slots_data["SUCCESS_GATE"] = (_text(slots_data.get("SUCCESS_GATE")) + " " + gate_text(gates)).strip()
 
     if not (isinstance(slots_data.get("FAN_OUT"), str) and slots_data["FAN_OUT"].strip()):
-        slots_data["FAN_OUT"] = default_fan_out(slots_data)
+        slots_data["FAN_OUT"] = default_fan_out(slots_data, model)
 
     if not (isinstance(slots_data.get("NOTES"), str) and slots_data["NOTES"].strip()):
         slots_data["NOTES"] = "none"

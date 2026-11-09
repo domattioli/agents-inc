@@ -104,7 +104,7 @@ done <<EOF
 $dump
 EOF
 # No cache at all: placeholder roster (dashes). Cache without enough models: blank rows.
-if [ -z "$dump" ]; then mids=(claude-fable-5-1 claude-opus-5-5 claude-sonnet-5-5 claude-haiku-4-5 gpt-6-astra gpt-5.6-sol gpt-5.6-terra gpt-5.6-luna)
+if [ -z "$dump" ]; then mids=(claude-fable-5-1 claude-opus-5-5 claude-sonnet-5-5 claude-haiku-4-5 gpt-6-astra gpt-6.1-sol gpt-6.1-terra gpt-6-luna)
 else for k in 0 1 2 3 4 5 6 7; do [ -n "${mids[k]}" ] || { mtok[k]=—; mcost[k]=—; h5tok[k]=—; h5cost[k]=—; d1tok[k]=—; d1cost[k]=—; dtok[k]=—; dcost[k]=—; motok[k]=—; mocost[k]=—; altok[k]=—; alcost[k]=—; }; done; fi
 : "${ch5_reset:-}" "${cd7_reset:-}" "${dur_ms:-}" "${ftok[0]}" "${total_cost:-}"
 
@@ -309,7 +309,7 @@ cpu_val=$(pad_left 15 "$cpu_val")
 # Column labels live in the top border (see hdr below).
 # Display names come from the exact model id: claude-opus-5-5 -> "Opus 5.5", gpt-5.6-sol -> "GPT-5.6 Sol". Unknown ids pass through.
 # OAI's longest (GPT-5.6 Terra, 13) sets that table's name column to 13.
-# Terra stays on 5.6: gpt-6-terra is rejected for Codex on a ChatGPT account (checked 2026-10-01).
+# Terra runs as gpt-6.1-terra (gpt-6-terra was rejected on a ChatGPT account, 2026-10-01); 5.6 rows remain while history ranks them.
 onw=13
 model_label(){ local id=${1%%\[*} f re1='^claude-([a-z]+)-([0-9]+)(-([0-9]+))?$' re2='^gpt-([0-9]+(\.[0-9]+)?)(-([a-z0-9]+))?$'
  case "$id" in *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) id=${id%-*};; esac
