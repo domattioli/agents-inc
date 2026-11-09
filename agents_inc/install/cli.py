@@ -1,6 +1,6 @@
 """Command line for user-scoped direct Codex installation."""
 from __future__ import annotations
-import argparse, json, os, re, shutil, subprocess, sys, tempfile
+import argparse, datetime, json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 from .. import datafiles
 from .bundle import activate, stage_bundle
@@ -83,12 +83,16 @@ def _packaged_source(tmp: Path) -> Path:
     shim = datafiles.repo_root() / "workerbees"
     if shim.is_dir():
         shutil.copytree(shim, tmp / "workerbees", ignore=shutil.ignore_patterns("__pycache__"))
-    mod = datafiles.repo_root() / "mods/agents-inc"
-    if mod.is_dir():
-        shutil.copytree(mod, tmp / "mods/agents-inc", ignore=shutil.ignore_patterns("__pycache__", "node_modules"))
+    for name in ("agents-inc", *(m[0] for m in PANE_MODS)):
+        mod = datafiles.repo_root() / "mods" / name
+        if mod.is_dir():
+            shutil.copytree(mod, tmp / "mods" / name, ignore=shutil.ignore_patterns("__pycache__", "node_modules"))
     return tmp
 
 MOD_PLUGIN, MOD_MARKETPLACE = "agents-inc@agents-inc-local", "agents-inc-local"
+# Pane mods (name, plugin, marketplace): a live pane per delegate model, and the agent tree. On by default with the install; each is skipped when the release does not ship it.
+PANE_MODS = (("delegate-pane", "delegate-pane@delegate-pane-local", "delegate-pane-local"),
+             ("agents-manager", "agents-manager@agents-manager-local", "agents-manager-local"))
 
 def _claude(home: Path, *argv, timeout=60):
     """Run the Claude CLI quietly against the install's own HOME; returns the CompletedProcess, or None when it cannot run.
@@ -118,7 +122,28 @@ def install_mod(paths: InstallPaths, notices: list) -> None:
     if done is None or done.returncode != 0:
         notices.append(f"warning: mod install failed ({'unavailable' if done is None else done.returncode}); the live view is off, delegation still works")
 
-MOD_UNINSTALL_ARGVS = (("plugin", "uninstall", MOD_PLUGIN), ("plugin", "marketplace", "remove", MOD_MARKETPLACE))
+def install_pane_mods(paths: InstallPaths, notices: list) -> None:
+    """Register the bundled pane mods. Same contract as install_mod: a problem is a warning, never a failed install."""
+    listed = None
+    for name, plugin, market in PANE_MODS:
+        mod = paths.current / "mods" / name
+        if not (mod / ".claude-plugin/plugin.json").is_file(): continue
+        if listed is None:
+            listed = _claude(paths.home, "plugin", "list")
+            if listed is None: return
+        if plugin in (listed.stdout or ""):
+            for argv in (("plugin", "marketplace", "update", market), ("plugin", "update", plugin)):
+                done = _claude(paths.home, *argv, timeout=300)
+                if done is None or done.returncode != 0:
+                    notices.append(f"warning: `claude {' '.join(argv)}` failed; the {name} pane may be out of date"); break
+            continue
+        added = _claude(paths.home, "plugin", "marketplace", "add", str(mod.resolve()))
+        done = _claude(paths.home, "plugin", "install", plugin) if added is not None and added.returncode == 0 else added
+        if done is None or done.returncode != 0:
+            notices.append(f"warning: {name} pane install failed ({'unavailable' if done is None else done.returncode}); delegation still works")
+
+MOD_UNINSTALL_ARGVS = (("plugin", "uninstall", MOD_PLUGIN), ("plugin", "marketplace", "remove", MOD_MARKETPLACE),
+                       *[a for _, p, m in PANE_MODS for a in (("plugin", "uninstall", p), ("plugin", "marketplace", "remove", m))])
 
 def uninstall_mod(paths: InstallPaths) -> list:
     notices = []
@@ -128,14 +153,42 @@ def uninstall_mod(paths: InstallPaths) -> list:
     return notices
 
 def install(args):
-    """Install from --source, or from the installed package's own data when --source is omitted."""
-    if getattr(args, "source", None):
-        return _install(args, Path(args.source))
-    tmp = Path(tempfile.mkdtemp(prefix="agents-inc-src-"))
+    """Install from --source, or from the installed package's own data when --source is omitted.
+    A failure is loud (FAIL line, exit 1) and leaves a marker that doctor reports (#155)."""
+    command = getattr(args, "command", None) or "install"
+    paths = _paths()
     try:
-        return _install(args, _packaged_source(tmp))
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        if getattr(args, "source", None):
+            code = _install(args, Path(args.source))
+        else:
+            tmp = Path(tempfile.mkdtemp(prefix="agents-inc-src-"))
+            try:
+                code = _install(args, _packaged_source(tmp))
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+    except Exception as exc:
+        _report_install_failure(paths, command, exc)
+        return 1
+    if code == 0:
+        try: (paths.state.joinpath(REPAIR_MARKER)).unlink(missing_ok=True)
+        except OSError: pass
+    return code
+
+REPAIR_MARKER = "repair-failed.json"
+
+def _report_install_failure(paths: InstallPaths, command: str, exc: Exception) -> None:
+    detail = f"{exc.strerror} ({exc.filename})" if isinstance(exc, OSError) and exc.strerror else str(exc) or type(exc).__name__
+    print(f"FAIL: agents-inc {command}: {detail}", file=sys.stderr)
+    if isinstance(exc, OSError) and exc.errno in (1, 13):
+        print("the file is not writable from here; inside the Claude Code sandbox run `agents-inc repair` from a normal terminal", file=sys.stderr)
+    try:
+        paths.state.mkdir(parents=True, exist_ok=True)
+        marker = paths.state.joinpath(REPAIR_MARKER)
+        stamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+        marker.write_text(json.dumps({"command": command, "at": stamp, "error": detail}) + "\n")
+        marker.chmod(0o600)
+    except OSError as err:
+        print(f"FAIL: could not record the failure for doctor: {err}", file=sys.stderr)
 
 def _install(args, source: Path):
     paths = _paths()
@@ -175,7 +228,7 @@ def _install(args, source: Path):
             journal.commit()
             if getattr(args, "agent_gate", None): host_hook.write_agent_gate(paths, args.agent_gate)
             if not getattr(args, "no_host_wiring", False) and (paths.home / ".claude").is_dir(): notices.append(host_hook.gate_notice(paths))
-            if not getattr(args, "no_mod", False): install_mod(paths, notices)  # after commit: a mod problem never rolls the install back
+            if not getattr(args, "no_mod", False): install_mod(paths, notices); install_pane_mods(paths, notices)  # after commit: a mod problem never rolls the install back
             for line in notices: print(line)
             return 0
         except Exception:
@@ -318,6 +371,10 @@ def main(argv=None):
                 print(json.dumps(report.as_dict()))
             else:
                 print(" ".join(report.codes or ("READY",)))
+                if "WB_REPAIR_FAILED" in report.codes:
+                    try: info = json.loads(paths.state.joinpath(REPAIR_MARKER).read_text())
+                    except (OSError, ValueError): info = {}
+                    print(f"WB_REPAIR_FAILED: last {info.get('command', 'repair')} failed at {info.get('at', '?')}: {info.get('error', '?')}; run agents-inc repair from a normal terminal")
                 print("agent gate: {} ({})".format(*host_hook.agent_gate_mode(paths)))
                 line = luna_line(paths)
                 if line: print(line)

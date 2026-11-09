@@ -1,0 +1,5 @@
+{
+  "name": "delegate-pane-local",
+  "owner": { "name": "agents-inc" },
+  "plugins": [{ "name": "delegate-pane", "source": "./" }]
+}

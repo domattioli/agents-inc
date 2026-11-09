@@ -238,3 +238,60 @@ class RuntimeTest(unittest.TestCase):
                 stdout_output = stdout_capture.getvalue()
                 self.assertIn("REVIEW-OK", stdout_output)
                 mock_report.assert_not_called()
+
+
+FLAG = "include_collaboration_mode_instructions=false"
+
+
+class ToolsOnCollaborationFlagTest(unittest.TestCase):
+    """#160: every tools-on Codex rung turns off collaboration-mode instructions, once, resume included."""
+
+    def _argv(self, model, **kw):
+        efforts = {slug: ["medium"] for slug in MODEL_ALIASES.values()}
+        return build_codex_argv(Path("/x/codex"), model, "medium", Path("/work"), efforts, **kw)
+
+    def test_flag_once_on_every_tools_on_rung(self):
+        for model in ("luna", "sol", "terra", "astra"):
+            argv = self._argv(model, tools=True)
+            self.assertEqual(argv.count(FLAG), 1, model)
+            self.assertEqual(argv[argv.index(FLAG) - 1], "-c", model)
+
+    def test_flag_absent_when_tools_off(self):
+        self.assertEqual(self._argv("luna").count(FLAG), 0)
+
+    def test_resume_inherits_flag_once(self):
+        from agents_inc.install.runtime import build_codex_resume_argv
+        efforts = {slug: ["medium"] for slug in MODEL_ALIASES.values()}
+        argv = build_codex_resume_argv(Path("/x/codex"), "t-1", "hi", "luna", "medium", Path("/work"), efforts, tools=True)
+        self.assertEqual(argv.count(FLAG), 1)
+
+
+class EmptyReplyReasonTest(unittest.TestCase):
+    def _run(self, rollout_lines, tid="thr-1"):
+        from agents_inc.install import runtime
+        with tempfile.TemporaryDirectory() as raw:
+            raw = Path(raw)
+            fake = raw / "codex"
+            event = json.dumps({"type": "thread.started", "thread_id": tid}) if tid else "{}"
+            fake.write_text(f"#!/bin/sh\necho '{event}'\nexit 0\n")
+            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+            rollout = raw / "rollout.jsonl"
+            rollout.write_text("".join(json.dumps(l) + "\n" for l in rollout_lines))
+            receipt = InstallReceipt(release_hash="a" * 64, python_path=Path("/usr/bin/python3"), codex_path=fake)
+            err = io.StringIO()
+            prompt = raw / "p"; prompt.write_text("x")
+            with mock.patch.object(runtime, "thread_rollout", return_value=rollout), \
+                 contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()), open(prompt) as stdin:
+                rc = run_codex("luna", "medium", raw, stdin, receipt, {"gpt-6-luna": ["medium"]}, tools=True, thread_out={})
+            return rc, err.getvalue()
+
+    def test_red_line_counts_request_user_input_calls(self):
+        call = {"payload": {"type": "function_call", "name": "request_user_input", "arguments": "{}"}}
+        rc, err = self._run([call, call, call])
+        self.assertEqual(rc, 1)
+        self.assertIn("returned an empty reply (request_user_input calls: 3)", err)
+
+    def test_red_line_says_unknown_without_thread_id(self):
+        rc, err = self._run([], tid=None)
+        self.assertEqual(rc, 1)
+        self.assertIn("returned an empty reply (request_user_input calls: unknown)", err)

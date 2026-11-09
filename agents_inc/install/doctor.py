@@ -158,6 +158,7 @@ def check_install(paths: InstallPaths, live_model: str | None = None, runner=sub
         models = catalog.load(catalog_path or default) or []
     warnings.extend(_model_drift(models))
     warnings.extend(_install_stale(paths, receipt.release_hash))
+    if paths.state.joinpath("repair-failed.json").exists(): codes.append("WB_REPAIR_FAILED")  # before the live probe: no model ping after a failed repair
     live = None
     if live_model and not codes and receipt.codex_path is not None:
         models = json.loads((release / "agents_inc/models.json").read_text()).get("models", {})

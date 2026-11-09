@@ -14,7 +14,7 @@ from .paths import InstallPaths
 from .receipt import InstallReceipt
 
 ALLOWLIST = ("agents_inc", "skills/workerbee", "skills/codex-bridge")
-OPTIONAL_ALLOWLIST = ("workerbees", "mods/agents-inc")  # the mod (spec 027) ships from a checkout, not from package data
+OPTIONAL_ALLOWLIST = ("workerbees", "mods/agents-inc", "mods/delegate-pane", "mods/agents-manager")  # the mod (spec 027) ships from a checkout, not from package data
 # Single files the runtime reads; agents_inc/schema.py parses the 3NF doc.
 FILE_ALLOWLIST = ("docs/governance/SCHEMA-3NF.md",)
 EXCLUDED = {".git", ".env", ".workerbees", "__pycache__", "bridge.py", "node_modules"}

@@ -110,8 +110,10 @@ _WRAP_OPT_ARG = frozenset({"-u", "-n", "-C", "-P", "-S", "-I", "-a", "-g", "-s",
 _WRAPPERS = frozenset({"env", "exec", "command", "nohup", "time", "nice", "xargs"})
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-# Command heads that run or re-evaluate what follows; shlex cannot see through them, so they fail closed.
-_HIDING_HEADS = frozenset({"{", "}", "if", "then", "do", "else", "elif", "while", "until", "eval", "alias", "source", "."})
+# Grammar keywords: the command after one is judged as a normal command (#152 F1, F2).
+_KEYWORD_HEADS = frozenset({"{", "}", "if", "then", "do", "else", "elif", "while", "until"})
+# Heads that load or rename what follows; shlex cannot see through them, so they fail closed.
+_HIDING_HEADS = frozenset({"alias", "source", "."})
 
 def _unquote(text: str) -> str:
     """Drop quote chars and backslashes so a quoted launcher word ('agents-inc') still matches the dispatch regex."""
@@ -236,6 +238,19 @@ def _words_dispatch(words: list) -> bool:
     return (len(words) >= 2 and os.path.basename(words[0].text) == "agents-inc"
             and words[1].text in ("dispatch", "run", "luna"))
 
+def _script_runs_dispatch(script: str) -> str:
+    """Judge a script string run by eval or sh -c: "" when it only mentions agents-inc, else the offending element.
+    Any executed dispatch/run/luna inside denies, compound or not (D72). An unparsable string falls back to the
+    raw-substring rule."""
+    script = _unquote(script)
+    try:
+        level, _ = _parse(script, 0, "")
+    except ValueError:
+        return "unparsable script string" if COMPOUND_DISPATCH_RE.search(script) else ""
+    found, ran, _ = _judge(level, True)
+    if found: return found
+    return "executed dispatch in script string" if ran else ""
+
 def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
     """(offending element or "", an agents-inc dispatch runs at this level or below, env prefix on it)."""
     cmds, _ops, subs = level
@@ -243,10 +258,15 @@ def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
     for words in cmds:
         rest, skipped = list(words), 0
         while rest and rest[0].assign: rest.pop(0); skipped += 1
+        while rest and rest[0].text in _KEYWORD_HEADS: rest.pop(0)
         if not rest: continue
         if could_hide:
             if rest[0].expands or "\n" in rest[0].text: return f"expanded command word {rest[0].text!r}", False, False
             if rest[0].text in _HIDING_HEADS: return f"shell keyword {rest[0].text}", False, False
+            if rest[0].text == "eval":
+                if any(w.expands for w in rest[1:]): return "eval string", False, False
+                inner = _script_runs_dispatch(" ".join(w.text for w in rest[1:]))
+                if inner: return "eval string", False, False
         wrapped, name = rest, os.path.basename(rest[0].text)
         while name in _WRAPPERS:  # the wrapped command is the first word after the wrapper's own options
             k = 1
@@ -259,8 +279,12 @@ def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
             if not wrapped: break
             if _words_dispatch(wrapped): return f"{os.path.basename(rest[0].text)} wrapper", False, False
             name = os.path.basename(wrapped[0].text)
-        if wrapped and name in _SHELLS and any(re.fullmatch(r"-[a-z]*c[a-z]*", w.text) for w in wrapped[1:]) \
-                and any(COMPOUND_DISPATCH_RE.search(_unquote(w.text)) for w in wrapped[1:]): return f"{name} -c string", False, False
+        if wrapped and name in _SHELLS:
+            c_at = next((k for k, w in enumerate(wrapped) if k and re.fullmatch(r"-[a-z]*c[a-z]*", w.text)), None)
+            if c_at is not None and c_at + 1 < len(wrapped):  # words after the script are positional parameters, not code
+                script = wrapped[c_at + 1]
+                if script.expands and "agents-inc" in "".join(w.text for w in wrapped): return f"{name} -c string", False, False
+                if _script_runs_dispatch(script.text): return f"{name} -c string", False, False
         if _words_dispatch(rest):
             dispatch = True; env_prefix = env_prefix or bool(skipped)
     for sub in subs:

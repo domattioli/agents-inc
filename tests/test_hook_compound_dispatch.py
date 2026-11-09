@@ -193,6 +193,32 @@ class CompoundDispatchTest(unittest.TestCase):
         with mock.patch.object(hook, "_tool_input", side_effect=RuntimeError("boom")):
             self.assertEqual(hook.compound_deny(bash("cd x && agents-inc dispatch s")), "")
 
+    # #152 F1-F4: a literal mention after for/if/eval/bash -c is allowed; an executed dispatch there is denied.
+    def test_f1_for_literal_allowed_executable_denied(self):
+        self._assert_allowed('for w in agents-inc dispatch; do echo "$w"; done')
+        self._assert_denied("for w in a; do agents-inc dispatch s.json; done")
+        self._assert_denied("for w in agents-inc; do $w dispatch s.json; done")
+
+    def test_f2_if_literal_allowed_executable_denied(self):
+        self._assert_allowed("if grep -q 'agents-inc dispatch' notes.md; then echo yes; fi")
+        self._assert_denied("if true; then agents-inc dispatch s.json; printf done; fi")
+        self._assert_denied("while true; do agents-inc run s.json; done")
+
+    def test_f3_eval_literal_allowed_executable_denied(self):
+        self._assert_allowed("eval \"echo 'agents-inc dispatch'\"")
+        self._assert_denied("eval 'agents-inc dispatch s.json; printf done'")
+        self._assert_denied("eval 'agents-inc dispatch s.json'")
+        self._assert_denied('eval "$cmd" agents-inc')
+
+    def test_f4_shell_c_literal_allowed_executable_denied(self):
+        self._assert_allowed('bash -c "grep \'agents-inc dispatch\' log.txt"')
+        self._assert_denied('bash -c "agents-inc dispatch s.json"')
+        self._assert_denied('bash -c "echo hi; agents-inc dispatch s.json"')
+        self._assert_denied("sh -c 'agents-inc luna x'")
+
+    def test_opaque_heads_still_fail_closed(self):
+        self._assert_denied("source env.sh; agents-inc dispatch s.json")
+
 
 if __name__ == "__main__":
     unittest.main()

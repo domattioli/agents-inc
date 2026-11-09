@@ -494,7 +494,8 @@ def build_codex_argv(executable: Path, model: str, effort: str, cwd: Path, suppo
                    ["-c", f"shell_environment_policy.set.TMPDIR={_toml_str(str(tool_tmp))}",
                     "-c", f"shell_environment_policy.set.TMPPREFIX={_toml_str(str(Path(tool_tmp) / 'zsh'))}"])
         # ~/.gitconfig is unreadable in the profile and git aborts on it; tool commands get an empty global config
-        argv = ([str(executable), "exec", "-m", slug] + common + ["-c", f'shell_environment_policy.set.PATH="{tool_path()}"',
+        argv = ([str(executable), "exec", "-m", slug] + common + ["-c", "include_collaboration_mode_instructions=false",  # #160: tools-on runs ended empty after request_user_input
+                                                              "-c", f'shell_environment_policy.set.PATH="{tool_path()}"',
                                                               "-c", 'shell_environment_policy.set.GIT_CONFIG_GLOBAL="/dev/null"']
                 + tmp_env
                 + permission_args(cwd, write, write_dir=write_dir, extra_deny=extra_deny, extra_read=extra_read,
@@ -612,6 +613,7 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
     if resume_thread is not None and lead_dir is not None:
         raise ValueError("--lead runs cannot be resumed")
     json_mode = thread_out is not None or resume_thread is not None
+    tid = None
     host_catalog = None
     if host_tools:
         # Fail closed before anything is created: no cache entry means no stripped catalog (spec 028 FR-011), and
@@ -745,7 +747,12 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
 
     # Check for empty output with success exit code
     if result.returncode == 0 and not stdout.strip():
-        sys.stderr.write(f"agents-inc run: codex {slug} returned an empty reply\n")
+        asked = "unknown"
+        rid = tid or resume_thread
+        if rid:
+            rollout = thread_rollout(rid)
+            if rollout is not None: asked = str(len(rui_calls(rollout)))
+        sys.stderr.write(f"agents-inc run: codex {slug} returned an empty reply (request_user_input calls: {asked})\n")
         sys.stderr.flush()
         return 1
 

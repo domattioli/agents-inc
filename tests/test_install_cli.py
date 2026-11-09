@@ -124,6 +124,44 @@ class RepairTest(unittest.TestCase):
             self.assertIn(home / ".claude/AGENTS.md", owned)
 
 
+class RepairFailureTest(unittest.TestCase):
+    def _fixture(self, raw):
+        import argparse
+        source = Path(raw) / "source"; (source / "agents_inc").mkdir(parents=True)
+        (source / "agents_inc" / "models.json").write_text("{}")
+        for name in ("workerbee", "codex-bridge"):
+            (source / "skills" / name).mkdir(parents=True); (source / "skills" / name / "SKILL.md").write_text("x")
+        home = Path(raw) / "home"; (home / ".claude").mkdir(parents=True)
+        paths = InstallPaths.for_home(home)
+        args = argparse.Namespace(command="repair", source=str(source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False, no_mod=True)
+        return paths, args
+
+    def test_failed_repair_is_loud_and_marks_doctor_then_clears(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest import mock
+        from agents_inc.install import cli
+        from agents_inc.install.doctor import check_install
+        with tempfile.TemporaryDirectory() as raw:
+            paths, args = self._fixture(raw)
+            with mock.patch.object(cli, "_paths", return_value=paths):
+                self.assertEqual(cli.install(args), 0)
+                err = io.StringIO()
+                boom = PermissionError(1, "Operation not permitted", str(paths.home / ".claude/settings.json"))
+                with mock.patch.object(cli, "install_host_wiring", side_effect=boom), redirect_stderr(err), redirect_stdout(io.StringIO()):
+                    self.assertEqual(cli.install(args), 1)
+                self.assertIn("FAIL: agents-inc repair", err.getvalue())
+                self.assertIn("Operation not permitted", err.getvalue())
+                marker = paths.state / "repair-failed.json"
+                self.assertTrue(marker.is_file())
+                report = check_install(paths, which=lambda *a, **k: '/x/claude', sandbox_probe=lambda: True)
+                self.assertIn("WB_REPAIR_FAILED", report.codes)
+                self.assertFalse(report.ready)
+                self.assertEqual(cli.install(args), 0)
+                self.assertFalse(marker.exists())
+                self.assertNotIn("WB_REPAIR_FAILED", check_install(paths, which=lambda *a, **k: '/x/claude', sandbox_probe=lambda: True).codes)
+
+
 class PackagedInstallTest(unittest.TestCase):
     def test_install_without_source_uses_package_data(self):
         import argparse
