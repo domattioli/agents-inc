@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from agents_inc.install import cli, dispatch
@@ -552,6 +553,75 @@ class DispatchCliTest(CliBase):
         self.assertTrue(lint.startswith("COMPLIANT"))
         self.assertIn("advisory", lint)
         self.assertIn("H2:provenance:L3", lint)
+
+    def _report_log(self, rc, report):
+        path = self.root / "report.md"
+        path.write_text(report)
+        with mock.patch.object(dispatch, "_handoff_lint", return_value=(rc, "H2:x\n" if rc else "")):
+            return dispatch.lint_report(path)
+
+    def test_report_handoff_lint_is_advisory(self):
+        path = self.root / "r.md"
+        path.write_text("anything")
+        module = SimpleNamespace(check_report=lambda text: [])
+        with mock.patch.object(dispatch, "_load", return_value=module), \
+                mock.patch.object(dispatch, "_handoff_lint", return_value=(1, "H2:...\n")):
+            missing, log = dispatch.lint_report(path)
+        self.assertEqual(missing, [])
+        self.assertIn("advisory", log)
+
+    def test_report_contract_missing_still_blocks(self):
+        for rc in (0, 1):
+            missing, _ = self._report_log(rc, "no mandatory elements here\n")
+            self.assertTrue(missing, rc)
+            self.assertNotIn("handoff-lint", missing)
+
+    def _preflight_run(self, **extra):
+        slots = self._slots(**extra)
+        with mock.patch.object(dispatch, "launch", side_effect=_fake_launch()) as launch:
+            rc, out, _ = self._main("--slots", str(slots), "--model", "haiku", "--cwd", str(self.repo),
+                                    "--run-dir", str(self.runs))
+        return rc, out, launch
+
+    def test_preflight_missing_gate_refused(self):
+        rc, out, launch = self._preflight_run(GATES=[{"argv": ["no-such-tool-xyz", "--x"]}])
+        self.assertEqual(rc, 3, out)
+        self.assertIn("refused-capability", out)
+        self.assertIn("gate[0] executable not found: no-such-tool-xyz", out)
+        launch.assert_not_called()
+        spec = json.loads((self._run_dir() / "run.json").read_text())
+        self.assertEqual(spec["outcome"], "refused-capability")
+
+    def test_preflight_present_gate_passes(self):
+        self.assertEqual(dispatch.capability_preflight([{"argv": ["sh"], "cwd": "."}], [], self.repo), [])
+
+    def test_preflight_missing_bash_allow_refused(self):
+        self.assertEqual(dispatch.capability_preflight([], ["no-such-tool-xyz -v"], self.repo),
+                         ["bash_allow[0] executable not found: no-such-tool-xyz"])
+
+    def test_preflight_relative_gate_resolves_in_cwd(self):
+        sub = self.repo / "sub"
+        sub.mkdir(exist_ok=True)
+        tool = sub / "run.sh"
+        tool.write_text("#!/bin/sh\n")
+        gates = [{"argv": ["./run.sh"], "cwd": "sub"}]
+        self.assertEqual(dispatch.capability_preflight(gates, [], self.repo)[0],
+                         "gate[0] executable not found: ./run.sh")
+        tool.chmod(0o755)
+        self.assertEqual(dispatch.capability_preflight(gates, [], self.repo), [])
+
+    def test_preflight_skips_gates_under_ceiling(self):
+        with mock.patch.object(dispatch, "_GRANT_CEILING", ([], [])):
+            rc, out, _ = self._main("--slots", str(self._slots(GATES=[{"argv": ["no-such-tool-xyz"]}])),
+                                    "--model", "haiku", "--cwd", str(self.repo), "--run-dir", str(self.runs),
+                                    "--dry-run")
+        self.assertNotIn("refused-capability", out)
+
+    def test_preflight_runs_on_dry_run(self):
+        rc, out, _ = self._main("--slots", str(self._slots(GATES=[{"argv": ["no-such-tool-xyz"]}])),
+                                "--model", "haiku", "--cwd", str(self.repo), "--run-dir", str(self.runs), "--dry-run")
+        self.assertEqual(rc, 3, out)
+        self.assertIn("gate[0] executable not found", out)
 
     def test_real_snapshot_path_injected_before_lint(self):
         seen = {}
