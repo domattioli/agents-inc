@@ -50,7 +50,7 @@ class RungArgvTest(unittest.TestCase):
             self.assertNotIn("-s", argv)
             self.assertIn('"/w"="read"', argv[-2])
             self.assertIn('web_search="disabled"', argv)
-            self.assertIn('shell_environment_policy.set.PATH="/usr/bin:/bin:/usr/sbin:/sbin"', argv)
+            self.assertIn(f'shell_environment_policy.set.PATH="{runtime.tool_path()}"', argv)
             self.assertIn('shell_environment_policy.inherit="none"', argv)
             self.assertEqual(argv[-1], "-")
 
@@ -730,3 +730,12 @@ class SkillLoopTest(unittest.TestCase):
             for i in range(20):
                 (skills / f"loop{i}").symlink_to(skills)
             self.assertEqual(runtime._denied_skill_args(home)[1].count("enabled=false"), 1)
+
+
+class ToolPathTest(unittest.TestCase):
+    def test_homebrew_bin_first_when_present(self):
+        from agents_inc.install import runtime
+        with mock.patch.object(runtime.os.path, "isdir", return_value=True):
+            self.assertTrue(runtime.tool_path().startswith("/opt/homebrew/bin:/usr/bin"))
+        with mock.patch.object(runtime.os.path, "isdir", return_value=False):
+            self.assertEqual(runtime.tool_path(), runtime.TOOL_PATH)

@@ -157,9 +157,9 @@ _INHERITED_SCRIPTS: tuple | None = None
 def default_parent(cwd: Path | None = None) -> Path:
     """<cwd>/.scratch/agents-inc-runs when git ignores <cwd>/.scratch: a delegate under acceptEdits can write
     there, never outside cwd. Else the session scratchpad, TMPDIR, or /tmp."""
-    if cwd is not None and (Path(cwd) / ".scratch").is_dir():
+    if cwd is not None and Path(cwd).is_dir():  # #154: .scratch need not exist yet; the pane lists it under cwd
         with contextlib.suppress(OSError):
-            res = subprocess.run(["git", "-C", str(cwd), "check-ignore", "-q", ".scratch"], capture_output=True)
+            res = subprocess.run(["git", "-C", str(cwd), "check-ignore", "-q", ".scratch/"], capture_output=True)
             if res.returncode == 0:
                 return Path(cwd) / ".scratch" / "agents-inc-runs"
     base = os.environ.get("CLAUDE_SCRATCHPAD") or os.environ.get("TMPDIR") or "/tmp"
@@ -1861,8 +1861,9 @@ SCOPE_LINE = "SCOPE BOILERPLATE: repo-scoped writes only"
 _HOME_CRED = r"(~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.(claude(?!/skills/(?!\S*\.\.))|codex|ssh|config|aws|gnupg|netrc|local|codex-bridge)\b"
 # 025 (#85, #87): the slot text screen matches locations, never bare words such as credentials, token or api_key.
 # A home directory matches only with a further non-glob segment, so deny-list prose (`~/.claude/**`) passes;
-# ~/.local/bin/ and ~/.local/share/agents-inc/ are exempt like ~/.claude/skills/.
-_HOME_CRED_TEXT = (r"(~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.(claude(?!/skills/(?!\S*\.\.))|codex|ssh"
+# ~/.local/bin/ and ~/.local/share/agents-inc/ are exempt like ~/.claude/skills/; so is the instruction file ~/.claude/AGENTS.md
+# when it ends the path (#146).
+_HOME_CRED_TEXT = (r"(~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.(claude(?!/skills/(?!\S*\.\.))(?!/AGENTS\.md(?=$|[\s'\"`,;)]))|codex|ssh"
                    r"|config|aws|gnupg|netrc|local(?!/(?:bin|share/agents-inc)/(?!\S*\.\.))|codex-bridge)\b"
                    r"/(?![^\s/]*[*?\[])[^\s/'\"`,;)]+")
 _ENV_READ_VERBS = r"cat|read|print|open|source|dump|echo|show|less|head|tail"

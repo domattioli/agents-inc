@@ -13,10 +13,10 @@ import time
 DEFAULT_CONFIG = {
     # Padding roster only: the displayed rows are the top 4 exact model ids per provider by ALL-time tokens.
     "claude_models": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"],
-    "openai_models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    "openai_models": ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"],
     "subscriptions": {"claude": 100, "openai": 100},
     "prices_json": ["~/Projects/agents_for_dummies/skills/codex-bridge/reference/prices.json"],
-    "openai_price_estimates": {"gpt-6-astra": "claude-fable-5-1", "gpt-5.6-sol": "claude-opus-5", "gpt-5.6-terra": "claude-sonnet-5", "gpt-5.6-luna": "claude-haiku-4-5"},
+    "openai_price_estimates": {"gpt-6-astra": "claude-fable-5-1", "gpt-5.6-sol": "claude-opus-5", "gpt-5.6-terra": "claude-sonnet-5", "gpt-5.6-luna": "claude-haiku-4-5", "gpt-6.1-sol": "claude-opus-5", "gpt-6.1-terra": "claude-sonnet-5", "gpt-6-luna": "claude-haiku-4-5"},
     "free_price_estimate": "claude-haiku-4-5",
     "cum_default_estimate": "claude-sonnet-5",
     "usage_db": "~/.codex-bridge/usage.db",

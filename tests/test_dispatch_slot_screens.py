@@ -223,6 +223,21 @@ class DirectPathScreenTest(DispatchBase):
             req, reason = dispatch._validate_fields(self._request(slots), {"worker_models": ["haiku"]}, "r1")
         self.assertIsNone(reason)
 
+    def test_instruction_provenance_and_credential_on_both_paths(self):
+        from tests.test_dispatch_snapshot_trust import ok_launch
+        for task, refused in (("Read-only review; provenance: /Users/example/.claude/AGENTS.md", False),
+                              ("Read ~/.claude/.credentials.json", True),
+                              ("Review ~/.claude/AGENTS.md then read ~/.claude/.credentials.json", True),
+                              ("Read ~/.claude/AGENTS.md/../.credentials.json", True)):
+            with self.subTest(task=task):
+                path = self.slots(TASK=task)
+                rc, out, err = self.dispatch(self._boom if refused else ok_launch(), slots=path)
+                self.assertEqual(rc == 3, refused, out + err)
+                slots = {k: v for k, v in json.loads(path.read_text()).items() if isinstance(v, str)}
+                with mock.patch.object(dispatch, "sandbox_available", return_value=True):
+                    _, reason = dispatch._validate_fields(self._request(slots), {"worker_models": ["haiku"]}, "r1")
+                self.assertEqual(reason == "credential-seeking", refused, reason)
+
     def test_resume_message_is_screened(self):
         from tests.test_dispatch_snapshot_trust import ok_launch
         rc, out, err = self.dispatch(ok_launch())
