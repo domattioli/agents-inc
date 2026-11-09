@@ -10,7 +10,7 @@
       "orcid": "0000-0002-7327-6337"
     }
   ],
-  "notes": "Licensed under the PolyForm Small Business License 1.0.0 plus a licensor-added term that forbids AI/ML training use. The combined text is in the LICENSE file, and the licensor-added no-AI-training term in that file applies.",
+  "notes": "Licensed under the PolyForm Small Business License 1.0.0 (LICENSE, unmodified) plus additional terms that forbid AI training (LICENSE-AI.md). Both apply. Notices: NOTICE.",
   "related_identifiers": [
     {
       "identifier": "https://github.com/domattioli/agents-inc",
