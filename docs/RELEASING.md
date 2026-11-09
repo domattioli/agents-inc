@@ -27,14 +27,14 @@ D55 in `docs/DECISIONS.md` records this.
 
 ### License identifiers
 
-The `LICENSE` file is the PolyForm Small Business License 1.0.0, unmodified, followed by a licensor-added term that forbids AI and machine-learning training use. The combined text is therefore not the plain SPDX license, and each file says so in the form it supports:
+`LICENSE` is the official PolyForm Small Business License 1.0.0, byte for byte (polyform-licenses tag 1.0.0). The no-AI-training terms are a separate file, `LICENSE-AI.md` (`LicenseRef-Mattioli-NoAI-Training-1.0`), and `NOTICE` carries the Required Notice lines. Rules: DomI `.claude/policies/licensing.md`; the release gate runs DomI `scripts/license_audit.py --repo .`.
 
-| File | Value | Why |
-|---|---|---|
-| `pyproject.toml` | `license = "LicenseRef-PolyForm-Small-Business-1.0.0-NoAI-Training"` | PEP 639 needs an SPDX expression. A `LicenseRef-` id marks a custom license, and the plain `PolyForm-Small-Business-1.0.0` id would misstate the terms. No license classifier is used, because PEP 639 replaces them and none fits. |
-| `pyproject.toml` | `license-files = ["LICENSE"]` | The wheel carries the full text under `dist-info/licenses/`. |
-| `CITATION.cff` | `license: PolyForm-Small-Business-1.0.0` plus `license-url` to `LICENSE` | The CFF schema accepts only SPDX ids. The URL points readers to the full terms, including the added term. |
-| `.zenodo.json` | no `license` field; a `notes` field names the added term | No network access was available while preparing this release, so the Zenodo license id for PolyForm Small Business 1.0.0 could not be checked in the Zenodo documentation. Before tagging, check https://help.zenodo.org and https://developers.zenodo.org. Add a `license` field only if a documented id exists. |
+| File | Value |
+|---|---|
+| `pyproject.toml` | `license = "PolyForm-Small-Business-1.0.0 AND LicenseRef-Mattioli-NoAI-Training-1.0"`, `license-files = ["LICENSE", "LICENSE-AI.md", "NOTICE", "LICENSES/*"]` |
+| `CITATION.cff` | `license: PolyForm-Small-Business-1.0.0` (CFF takes SPDX list ids only) |
+| `.zenodo.json` | `notes` names both files |
+| `REUSE.toml` | one `**` annotation with the same expression |
 
 ### DOI handling
 

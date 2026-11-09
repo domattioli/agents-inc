@@ -1,5 +1,6 @@
 """Release metadata and packaging checks for the agents-inc distribution."""
 import glob
+import hashlib
 import importlib.metadata
 import importlib.util
 import json
@@ -25,7 +26,7 @@ PACKAGE = ROOT / "agents_inc"
 DIST = ROOT / ".scratch" / "release" / "dist"
 POLYFORM_TITLE = "PolyForm Small Business License 1.0.0"
 # Files the build needs; tests and docs stay out of the wheel.
-BUILD_INPUTS = ("pyproject.toml", "MANIFEST.in", "README.md", "LICENSE", "CHANGELOG.md", "CITATION.cff")
+BUILD_INPUTS = ("pyproject.toml", "MANIFEST.in", "README.md", "LICENSE", "LICENSE-AI.md", "NOTICE", "CHANGELOG.md", "CITATION.cff")
 
 
 def _pyproject():
@@ -82,14 +83,22 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(zenodo["version"], agents_inc.__version__)
 
     def test_license_text(self):
+        # LICENSE is the official PolyForm Small Business 1.0.0 text, unmodified (DomI licensing policy).
         text = (ROOT / "LICENSE").read_text(encoding="utf-8")
         first = text.splitlines()[0]
         self.assertEqual(first.removeprefix("# "), POLYFORM_TITLE)
-        self.assertEqual(text.count("NO AI/ML TRAINING"), 1)
-        self.assertGreater(text.index("NO AI/ML TRAINING"), text.index("## Definitions"))
+        self.assertNotIn("AI/ML TRAINING", text)
+        self.assertEqual(hashlib.sha256((ROOT / "LICENSE").read_bytes()).hexdigest(),
+                         "03eea824bff13316b767424b3e8f49538b46e52d897aecc87d6344343364aa56")
+        addendum = (ROOT / "LICENSE-AI.md").read_text(encoding="utf-8")
+        self.assertIn("SPDX-" "License-Identifier: LicenseRef-Mattioli-NoAI-Training-1.0", addendum)
+        self.assertIn("PolyForm\nSmall Business License 1.0.0, unmodified", addendum)
+        notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
+        self.assertIn("Required Notice: This software is also subject to the additional terms in LICENSE-AI.md", notice)
         # Operator ruling 2026-10-07: the licensing contact is the GitHub profile, never an email address.
-        self.assertRegex(text, r"(?m)^For commercial use, or for AI/ML training rights, contact: https://github\.com/domattioli$")
-        self.assertNotRegex(text, r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+        self.assertIn("https://github.com/domattioli", addendum)
+        for t in (text, addendum, notice):
+            self.assertNotRegex(t, r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
     def test_package_data_covers_every_json(self):
         package_data = self.pyproject["tool"]["setuptools"]["package-data"]
@@ -155,7 +164,7 @@ class BuildTests(unittest.TestCase):
         with zipfile.ZipFile(wheels[0]) as wheel:
             names = set(wheel.namelist())
             metadata = next(n for n in names if n.endswith(".dist-info/METADATA"))
-            self.assertIn("License-Expression: LicenseRef-PolyForm-Small-Business-1.0.0-NoAI-Training", wheel.read(metadata).decode())
+            self.assertIn("License-Expression: PolyForm-Small-Business-1.0.0 AND LicenseRef-Mattioli-NoAI-Training-1.0", wheel.read(metadata).decode())
         self.assertLessEqual(_all_json(), names)
         self.assertTrue(any(re.fullmatch(r"[^/]+\.dist-info/(licenses/)?LICENSE", n) for n in names), sorted(names))
         tops = {n.split("/")[0] for n in names if not n.split("/")[0].endswith(".dist-info")}

@@ -8,8 +8,8 @@ dynamic = ["version"]
 description = "agents-inc runs AI models the way a company runs staff: a Lead takes your request, delegates it down an org chart of cheaper Worker models, and accepts nothing until a reviewer signs off."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "LicenseRef-PolyForm-Small-Business-1.0.0-NoAI-Training"
-license-files = ["LICENSE"]
+license = "PolyForm-Small-Business-1.0.0 AND LicenseRef-Mattioli-NoAI-Training-1.0"
+license-files = ["LICENSE", "LICENSE-AI.md", "NOTICE", "LICENSES/*"]
 authors = [{ name = "Dominik O. Mattioli" }]
 keywords = [
     "claude-code",

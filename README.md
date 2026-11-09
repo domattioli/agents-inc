@@ -9,7 +9,7 @@
 <a href="https://github.com/domattioli/agents-inc/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/domattioli/agents-inc/actions/workflows/tests.yml/badge.svg"></a>
 <a href="https://pypi.org/project/agents-inc/"><img alt="PyPI" src="https://img.shields.io/pypi/v/agents-inc?cacheSeconds=3600"></a>
 <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue">
-<a href="https://github.com/domattioli/agents-inc/blob/main/LICENSE"><img alt="License: PolyForm Small Business 1.0.0 + no AI training" src="https://img.shields.io/badge/license-PolyForm%20Small%20Business%201.0.0%20%2B%20no%20AI%20training-lightgrey"></a>
+<a href="https://github.com/domattioli/agents-inc/blob/main/LICENSE"><img alt="License: PolyForm Small Business 1.0.0 + no-AI terms" src="https://img.shields.io/badge/license-PolyForm%20SB%201.0.0%20%2B%20no--AI%20terms-lightgrey"></a>
 <a href="https://github.com/domattioli/agents-inc/issues"><img alt="Open issues" src="https://img.shields.io/github/issues/domattioli/agents-inc"></a>
 <a href="https://doi.org/10.5281/zenodo.22670100"><img alt="DOI" src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.22670100-blue"></a>
 </p>
@@ -170,6 +170,6 @@ The DOI for all versions is [10.5281/zenodo.22670100](https://doi.org/10.5281/ze
 
 > Cite as: DO Mattioli (2026). agents-inc: Cross-Vendor Governance for an Agentic-AI Workforce. Zenodo. https://doi.org/10.5281/zenodo.22670100
 
-agents-inc is licensed under the PolyForm Small Business License 1.0.0, with one added term that forbids use for AI or machine-learning training. The full terms are in [LICENSE](https://github.com/domattioli/agents-inc/blob/main/LICENSE).
+agents-inc is licensed under the PolyForm Small Business License 1.0.0 ([LICENSE](https://github.com/domattioli/agents-inc/blob/main/LICENSE)) **plus** additional terms that forbid AI training ([LICENSE-AI.md](https://github.com/domattioli/agents-inc/blob/main/LICENSE-AI.md)). Both apply. Notices: [NOTICE](https://github.com/domattioli/agents-inc/blob/main/NOTICE).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
