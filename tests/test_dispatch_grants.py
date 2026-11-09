@@ -264,6 +264,12 @@ class GrantsSectionTest(GrantsBase):
         self.assertIn("DENIED: " + ", ".join(spec["disallowed_tools"]), prompt)
         self.assertIn("requires approval", prompt)
 
+    def setUp(self):
+        super().setUp()  # `gh` is absent in the docker CI image; the preflight is not under test here
+        patch = mock.patch.object(dispatch, "_resolves", return_value=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_bash_allow_prefix_rendered_with_its_rules(self):
         self._dispatch(BASH_ALLOW=[self.PREFIX])
         prompt = self._prompt()

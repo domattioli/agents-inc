@@ -11,6 +11,17 @@ All notable changes to this project are recorded here. The format follows
 ### Changed
 
 - License files only, no code change. LICENSE is now the official PolyForm Small Business 1.0.0 text, unmodified; the no-AI-training terms moved to LICENSE-AI.md and the required notices to NOTICE, and both still apply (#157).
+### Fixed
+
+- Dispatch runs go to `.scratch/agents-inc-runs` under the session directory when git ignores `.scratch`, even before that directory exists, so the agents-manager pane lists Codex delegates (#154).
+- The renderer's default `FAN_OUT` follows the `--model` rung, so a default slots file passes the lint. The ceiling error names the ceiling and the fix instead of saying `missing` (#156).
+- The dispatch credential screen no longer refuses a slot that names the user's `.claude/AGENTS.md` instruction file. Every credential location stays refused, and a `..` after the file name is still refused (#146).
+- `AT_ROUTE_CODEX_READ=1` lets `@@` Codex aliases read files in the project directory. The default stays tool-free (D74, #148).
+- Codex tool commands find Homebrew `python3` first. The system `/usr/bin/python3` is Apple's `xcrun` stub, which writes a cache the sandbox denies, so every Python call failed with `Operation not permitted`. Bare `mktemp` still fails there; use `mktemp -d "$TMPDIR/x.XXXXXX"`.
+
+### Added
+
+- `agents-inc narrate {on,off,status,run}` (prototype): speaks a short digest of each new Claude Code assistant message with macOS `say`. The luna rung summarizes through `agents-inc run`; `--summarizer local` makes no model call. Classification markers skip a message, a failed or quota-paused luna call falls back to a local digest prefixed "local", and the `narrate-on` flag file gates speech. Design: `docs/proposals/narrate.md`.
 
 ## [0.6.2] — 2026-11-07
 

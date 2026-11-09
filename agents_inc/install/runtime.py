@@ -97,6 +97,13 @@ HARD_DENY = (".ssh", ".config", ".claude", ".codex-bridge", ".local", ".aws", ".
 CODEX_READABLE = ("generated_images", "skills")  # under ~/.codex; linked into the isolated home too
 PROFILE = "agents_inc_d49"
 TOOL_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+# The profile grants read on /opt/homebrew, but /usr/bin/python3 is Apple's xcrun stub: it writes an xcrun_db cache under
+# /var/folders, which the profile denies, so every python3 call fails (Operation not permitted). Put the Homebrew bin first.
+HOMEBREW_BIN = "/opt/homebrew/bin"
+
+
+def tool_path() -> str:
+    return f"{HOMEBREW_BIN}:{TOOL_PATH}" if os.path.isdir(HOMEBREW_BIN) else TOOL_PATH
 # Nested seatbelts fail on macOS (sandbox_apply: Operation not permitted), so an outer sandbox-exec would disable
 # Codex's own seatbelt. The read deny therefore rides Codex's permission profile, which its seatbelt enforces.
 
@@ -487,7 +494,7 @@ def build_codex_argv(executable: Path, model: str, effort: str, cwd: Path, suppo
                    ["-c", f"shell_environment_policy.set.TMPDIR={_toml_str(str(tool_tmp))}",
                     "-c", f"shell_environment_policy.set.TMPPREFIX={_toml_str(str(Path(tool_tmp) / 'zsh'))}"])
         # ~/.gitconfig is unreadable in the profile and git aborts on it; tool commands get an empty global config
-        argv = ([str(executable), "exec", "-m", slug] + common + ["-c", f'shell_environment_policy.set.PATH="{TOOL_PATH}"',
+        argv = ([str(executable), "exec", "-m", slug] + common + ["-c", f'shell_environment_policy.set.PATH="{tool_path()}"',
                                                               "-c", 'shell_environment_policy.set.GIT_CONFIG_GLOBAL="/dev/null"']
                 + tmp_env
                 + permission_args(cwd, write, write_dir=write_dir, extra_deny=extra_deny, extra_read=extra_read,

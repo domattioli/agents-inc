@@ -41,6 +41,35 @@ def render(data, home=None, *extra):
 
 
 class ValidateTest(unittest.TestCase):
+    def test_sonnet_default_fan_out_passes_lint(self):
+        names = ("ROLE", "TASK", "CONSTRAINTS", "OUT_OF_SCOPE", "FILES_IN_SCOPE", "STOP_RULE",
+                 "SUCCESS_GATE", "FAILURE_GATE")
+        slots = {name: example()[name] for name in names}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "slots.json"
+            prompt = Path(tmp) / "prompt.txt"
+            path.write_text(json.dumps(slots))
+            env = {"HOME": tmp, "PATH": "/usr/bin:/bin"}
+            rendered = subprocess.run([sys.executable, str(RENDER), "--slots", str(path), "--model", "sonnet"],
+                                      capture_output=True, text=True, env=env)
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            prompt.write_text(rendered.stdout)
+            lint = subprocess.run([sys.executable, str(LINT), str(prompt), "--model", "sonnet"],
+                                  capture_output=True, text=True, env=env)
+            self.assertEqual(lint.returncode, 0, lint.stdout + lint.stderr)
+
+    def test_ceiling_error_names_limit_and_fix(self):
+        from tests.test_dispatch_contract import COMPLIANT_PROMPT
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt = Path(tmp) / "prompt.txt"
+            prompt.write_text(COMPLIANT_PROMPT + "FAN_OUT: width 3, total 6, depth 2\n")
+            lint = subprocess.run([sys.executable, str(LINT), str(prompt), "--model", "sonnet"],
+                                  capture_output=True, text=True, env={"HOME": tmp, "PATH": "/usr/bin:/bin"})
+            self.assertEqual(lint.returncode, 1)
+            self.assertIn("width 2, total 4, depth 1", lint.stdout)
+            self.assertIn("reduce", lint.stdout.lower())
+            self.assertNotIn("missing", lint.stdout.lower())
+
     def test_example_is_valid(self):
         self.assertEqual(ds.validate_record(example()), [])
 

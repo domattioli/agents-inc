@@ -47,6 +47,10 @@ export CODEX_BRIDGE_TOKEN=$(openssl rand -hex 32)
 python3 bridge.py --port 8787
 ```
 
+## Develop and stress-test in docker
+
+Operator rule, 2026-11-09. Develop, run the full suite, and stress-test in the docker images (`docker/Dockerfile.dev`, `docker/Dockerfile.ci`). The Mac is the consumer: it installs agents-inc and runs it, nothing more. A fix must work with no setup beyond `agents-inc install`. Stress run: `docker run --rm --network none -v "$PWD:/src:ro" -v "$PWD/docker/stress_check.sh:/stress.sh:ro" agents-inc-ci bash /stress.sh`. Docker commands need the sandbox off on the Mac (the socket is blocked).
+
 ## Project rules
 
 - Incremental spend is capped at $0 per task. Pause and report quota exhaustion. Do not add a paid API fallback.

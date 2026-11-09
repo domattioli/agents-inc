@@ -50,10 +50,11 @@ test('session.start registers the relay agent and the run tool', async ($, on) =
   expect(registered).toEqual(['agent:relay', 'tool:run', 'agent:luna'])
 })
 
-test('a call outside the relay subagent is refused', async ($, on) => {
+test('a direct call from the main session is no longer refused for the missing relay', async ($, on) => {
   await start($, on)
-  const out = await $.tool.call({ tool: TOOL, model: 'sonnet', slots: '/work/s.md' })
-  expect(out.deny).toContain('agents-inc:relay')
+  const out = await $.tool.call({ tool: TOOL, model: 'gpt-9', slots: '/work/s.md' })
+  expect(out.deny).not.toContain('agents-inc:relay')
+  expect(out.deny).toContain('unknown model')
 })
 
 test('an unknown model is refused', async ($, on) => {

@@ -205,8 +205,8 @@ class AtRouteCodexRouteTest(unittest.TestCase):
                              'cat >> "' + str(self.log) + '"\necho "fake answer"\n')
         self.fake.chmod(0o755)
 
-    def _route(self, *argv, stdin=""):
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.root),
+    def _route(self, *argv, stdin="", extra_env=None):
+        env = {**(extra_env or {}), "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.root),
                "TMPDIR": str(self.root),
                "AT_ROUTE_AGENTS_INC": str(self.fake), "AT_ROUTE_LOG": str(self.root / "at_route.log"),
                "AT_ROUTE_COLOR": "0"}
@@ -220,6 +220,12 @@ class AtRouteCodexRouteTest(unittest.TestCase):
         args, prompt = self.log.read_text().split("\n", 1)
         self.assertEqual(args, f"run --model luna --no-tools --cwd {self.root}")
         self.assertEqual(prompt, "say hi")
+
+    def test_codex_read_opt_in_selects_tools(self):
+        res = self._route("luna", "read it", extra_env={"AT_ROUTE_CODEX_READ": "1"})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        args, _ = self.log.read_text().split("\n", 1)
+        self.assertEqual(args, f"run --model luna --tools --cwd {self.root}")
 
     def test_hook_mode_uses_payload_cwd(self):
         work = self.root / "work"
