@@ -33,15 +33,15 @@ class LegacyRoutesTest(unittest.TestCase):
         self.assertIs(native.status_all(self.paths)["legacy_routes"], True)
 
     def test_flag_on_install_and_repair_defaults_to_none(self):
-        seen = {}
-        orig = cli.install
-        try:
-            cli.install = lambda args: seen.setdefault(args.command, args.legacy_routes) and 0 or 0
-            for argv, want in ((["install"], None), (["repair", "--legacy-routes"], True), (["install", "--no-legacy-routes"], False)):
-                seen.clear(); cli.main(argv); self.assertEqual(seen[argv[0]], want, argv)
-        finally:
-            cli.install = orig
-
+        from unittest import mock
+        seen = []
+        with mock.patch.object(cli, "_paths", return_value=self.paths), \
+                mock.patch.object(cli, "install", side_effect=lambda args: seen.append(args.legacy_routes) or 0):
+            for argv in (["install"], ["install", "--legacy-routes"], ["install", "--no-legacy-routes"]):
+                self.assertEqual(cli.main(argv), 0, argv)
+            # repair parses the same flag (argparse would exit 2 on an unknown one); with no receipt it stops early.
+            cli.main(["repair", "--legacy-routes"])
+        self.assertEqual(seen[:3], [None, True, False])
 
 if __name__ == "__main__":
     unittest.main()
