@@ -1,6 +1,6 @@
 {
   "name": "agents-inc",
-  "version": "0.2.0",
+  "version": "0.6.2",
   "description": "Live view of agents-inc delegates: a relay subagent whose transcript shows the delegate's events.",
   "mcpServers": {
     "delegate-agent": {

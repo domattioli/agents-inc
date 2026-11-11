@@ -102,7 +102,29 @@ def _mod_missing(release: Path, home: Path, runner, which) -> list[str]:
                             env=dict(os.environ, HOME=str(home)))  # the install's home, never the caller's
     except (OSError, subprocess.SubprocessError): return []
     if listed.returncode != 0: return []
-    return [] if "agents-inc@agents-inc-local" in (listed.stdout or "") else ["MOD_NOT_INSTALLED"]
+    if "agents-inc@agents-inc-local" not in (listed.stdout or ""): return ["MOD_NOT_INSTALLED"]
+    return mod_version_warnings(listed.stdout or "")
+
+
+def installed_mod_version(plugin_list: str, plugin: str = "agents-inc@agents-inc-local") -> str | None:
+    """The `Version:` line of plugin's block in `claude plugin list` output, or None when it has none."""
+    block = False
+    for line in plugin_list.splitlines():
+        text = line.strip().lstrip("❯").strip()
+        if "@" in text and ":" not in text:  # a plugin header line, `name@marketplace`
+            block = text == plugin
+        elif block and text.startswith("Version:"):
+            return text.split(":", 1)[1].strip() or None
+    return None
+
+
+def mod_version_warnings(plugin_list: str) -> list[str]:
+    """Spec 038 FR-018: the mod is versioned with the package. The version Claude Code lists for the installed mod must
+    equal this package's __version__ (the shipped plugin.json carries the same number). Warning only."""
+    from .. import __version__
+    installed = installed_mod_version(plugin_list)
+    if installed is None or installed == __version__: return []
+    return [f"MOD_VERSION_MISMATCH: installed mod {installed}, package {__version__}; run agents-inc repair"]
 
 def _mcp_user_scope(home: Path, runner, which) -> list[str]:
     """Spec 031 FR-015: the plugin ships delegate-agent now; a user-scope entry from the old install.sh doubles it.
