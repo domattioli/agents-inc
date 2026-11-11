@@ -78,37 +78,41 @@ OUTCOMES = ("done", "failed", "quota-paused", "aborted")
 CHANGED_PATH_CAP = 20
 
 
-def _run_dir(paths: InstallPaths, session: str, agent: str) -> Path:
-    """<state>/luna-runs/<session>/<agent>: outside cwd, so a luna step cannot rewrite its own baseline."""
+def _run_dir(paths: InstallPaths, session: str, agent: str, root: str = "luna-runs") -> Path:
+    """<state>/<root>/<session>/<agent>: outside cwd, so a luna step cannot rewrite its own baseline. Spec 038 guest
+    agents of other models use root `native-runs/<nickname>`."""
     for part in (session, agent):
         if not part or Path(part).name != part or part in (".", ".."): raise ValueError(f"not a usable id: {part!r}")
-    return paths.state / "luna-runs" / session / agent
+    return paths.state / root / session / agent
 
 
-def begin(paths: InstallPaths, session: str, agent: str, cwd: str, task: str | None = None) -> dict:
+def begin(paths: InstallPaths, session: str, agent: str, cwd: str, task: str | None = None, *,
+          slug: str | None = None, source: str = "native-luna", root: str = "luna-runs") -> dict:
     """Spec 028 D6 item 1: pin the working tree and write the agent's dispatch row. A cwd outside git records
     snapshot 'no-repo' and goes on. Returns {"snapshot": "captured"|"no-repo"}."""
     from .. import host_ledger
     from . import dispatch  # lazy: dispatch is heavy, and status/on/off must not load it
-    folder = _run_dir(paths, session, agent)
+    folder = _run_dir(paths, session, agent, root)
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     target = folder / "snapshot.json"
     target.unlink(missing_ok=True)
     rc, _ = dispatch.snapshot("capture", str(target), cwd=Path(cwd))
     snapshot = "captured" if rc == 0 and target.is_file() else "no-repo"
-    slug = load_model_map(roster=paths.roster, env={"HOME": str(paths.home)})["luna"]
-    host_ledger.record_native_luna(paths.state, host_ledger.native_luna_dispatch_row(agent, session, slug, task, cwd, snapshot))
+    if slug is None: slug = load_model_map(roster=paths.roster, env={"HOME": str(paths.home)})["luna"]
+    row = host_ledger.native_luna_dispatch_row(agent, session, slug, task, cwd, snapshot)
+    host_ledger.record_native_luna(paths.state, {**row, "source": source})
     return {"snapshot": snapshot}
 
 
-def end(paths: InstallPaths, session: str, agent: str, outcome: str, cwd: str = ".", usage: dict | None = None) -> dict:
+def end(paths: InstallPaths, session: str, agent: str, outcome: str, cwd: str = ".", usage: dict | None = None, *,
+        source: str = "native-luna", root: str = "luna-runs") -> dict:
     """Spec 028 D6 item 2: verify the tree against the begin snapshot with no allow list and append a return row. Each
     hand-back appends one row to the agent's node. 'changed' means the tree changed while the agent ran, not that this
     agent changed it. Returns {"snapshot": str, "changed": [paths]}."""
     from .. import host_ledger
     from . import dispatch
     if outcome not in OUTCOMES: raise ValueError(f"outcome must be one of {', '.join(OUTCOMES)}: {outcome!r}")
-    target = _run_dir(paths, session, agent) / "snapshot.json"
+    target = _run_dir(paths, session, agent, root) / "snapshot.json"
     changed: list[str] = []
     if not target.is_file(): snapshot = "no-repo"
     else:
@@ -118,8 +122,8 @@ def end(paths: InstallPaths, session: str, agent: str, outcome: str, cwd: str = 
             changed = [line[len("CHANGED "):].strip() for line in text.splitlines() if line.startswith("CHANGED ")]
             snapshot = f"changed:{len(changed)}"
         else: snapshot = "unverified"
-    host_ledger.record_native_luna(paths.state, host_ledger.native_luna_return_row(
-        agent, session, outcome, usage or {}, snapshot, changed))
+    row = host_ledger.native_luna_return_row(agent, session, outcome, usage or {}, snapshot, changed)
+    host_ledger.record_native_luna(paths.state, {**row, "source": source})
     return {"snapshot": snapshot, "changed": changed[:CHANGED_PATH_CAP]}
 
 

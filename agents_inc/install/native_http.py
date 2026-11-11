@@ -1,0 +1,123 @@
+"""Spec 038 T022: one provider call for a stateless guest agent (Gemini first), standard library only.
+
+The key is read in-process from the 0600 key store (`~/.config/workerbees/.env`, D75 operator storage rule) and sent
+only as a request header. It never goes in argv, a child env, a prompt, stdout, stderr or a file: nothing here spawns a
+child, and every text this module prints passes `scrub` first.
+
+Exit codes (contracts/step-adapter.md): 0 ok; 75 quota; 69 provider host unreachable; 3 not offered (no key, no
+workspace authorization, unknown model); 2 usage or context over the model limit; 124 timeout; 1 other failure.
+"""
+from __future__ import annotations
+import json
+import socket
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_NOT_OFFERED, EXIT_BLOCKED, EXIT_QUOTA, EXIT_TIMEOUT = 0, 1, 2, 3, 69, 75, 124
+KEY_VARS = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+HOSTS = {"gemini": "https://generativelanguage.googleapis.com"}
+# Tests point a provider at the fake server. Only a loopback URL is honoured, so the variable cannot send a key elsewhere.
+URL_ENV = {"gemini": "AGENTS_INC_NATIVE_GEMINI_URL"}
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+PROGRESS = "agents-inc run:"
+
+
+class StepError(Exception):
+    def __init__(self, code: int, text: str):
+        super().__init__(text)
+        self.code, self.text = code, text
+
+
+def key_store(home: Path) -> Path:
+    return Path(home) / ".config" / "workerbees" / ".env"
+
+
+def read_key(home: Path, provider: str) -> str | None:
+    """The provider key from the key store, or None. The value is returned to the caller only, never printed."""
+    try:
+        lines = key_store(home).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    found = {}
+    for line in lines:
+        name, sep, value = line.strip().partition("=")
+        if sep and name.strip() in KEY_VARS.get(provider, ()):
+            value = value.strip().strip('"').strip("'")
+            if value: found.setdefault(name.strip(), value)
+    for var in KEY_VARS.get(provider, ()):
+        if var in found: return found[var]
+    return None
+
+
+def scrub(text: str, key: str | None) -> str:
+    return text.replace(key, "[key]") if key else text
+
+
+def base_url(provider: str, env: dict) -> str:
+    raw = env.get(URL_ENV.get(provider, ""), "")
+    if raw:
+        host = urllib.parse.urlsplit(raw).hostname or ""
+        if host in LOOPBACK: return raw.rstrip("/")
+    return HOSTS[provider]
+
+
+def _gemini_request(base: str, slug: str, prompt: str, key: str) -> urllib.request.Request:
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"}}
+    url = f"{base}/v1beta/models/{urllib.parse.quote(slug, safe='.-_')}:generateContent"
+    return urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                  headers={"Content-Type": "application/json", "x-goog-api-key": key})
+
+
+def _gemini_reply(data: dict) -> tuple[str, dict]:
+    cands = data.get("candidates") or []
+    parts = ((cands[0] or {}).get("content") or {}).get("parts") or [] if cands else []
+    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict) and not p.get("thought"))
+    meta = data.get("usageMetadata") or {}
+    usage = {"input_tokens": int(meta.get("promptTokenCount") or 0),
+             "cached_input_tokens": int(meta.get("cachedContentTokenCount") or 0),
+             "output_tokens": int(meta.get("candidatesTokenCount") or 0) + int(meta.get("thoughtsTokenCount") or 0)}
+    if not text.strip():
+        reason = (cands[0] or {}).get("finishReason") if cands else (data.get("promptFeedback") or {}).get("blockReason")
+        raise StepError(EXIT_FAIL, f"WB_NATIVE_EMPTY_REPLY: the provider returned no text ({reason or 'no candidate'})")
+    return text, usage
+
+
+def ask(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, timeout: float,
+        env: dict | None = None) -> tuple[str, dict]:
+    """One request. Returns (reply text, usage). Raises StepError with the exit code and a scrubbed line."""
+    if provider not in HOSTS: raise StepError(EXIT_NOT_OFFERED, f"WB_NATIVE_UNKNOWN_PROVIDER: {provider}")
+    if len(prompt) > max_chars:
+        raise StepError(EXIT_USAGE, f"WB_NATIVE_CONTEXT_OVER: context over {max_chars} chars (prompt {len(prompt)} chars); not sent")
+    import os
+    base = base_url(provider, os.environ if env is None else env)
+    host = urllib.parse.urlsplit(base).hostname
+    req = _gemini_request(base, slug, prompt, key)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = scrub(exc.read().decode("utf-8", "replace")[:300].replace("\n", " "), key)
+        if exc.code == 429: raise StepError(EXIT_QUOTA, f"{provider} {slug} hit a usage or rate limit (HTTP 429): {detail}") from None
+        raise StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP {exc.code}: {detail}") from None
+    except (TimeoutError, socket.timeout):
+        raise StepError(EXIT_TIMEOUT, f"WB_NATIVE_TIMEOUT: no reply from {host} within {timeout:g} s") from None
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise StepError(EXIT_TIMEOUT, f"WB_NATIVE_TIMEOUT: no reply from {host} within {timeout:g} s") from None
+        raise StepError(EXIT_BLOCKED, f"WB_NATIVE_HOST_BLOCKED: cannot reach {host}: {scrub(str(exc.reason), key)}") from None
+    except OSError as exc:
+        raise StepError(EXIT_BLOCKED, f"WB_NATIVE_HOST_BLOCKED: cannot reach {host}: {scrub(str(exc), key)}") from None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise StepError(EXIT_FAIL, f"WB_NATIVE_BAD_RESPONSE: {provider} answered with no JSON body") from None
+    return _gemini_reply(data if isinstance(data, dict) else {})
+
+
+def progress(err, kind: str, data: dict) -> None:
+    """One line in the format native/loop.ts parses (`agents-inc run: event|usage|record <json>`)."""
+    err.write(f"{PROGRESS} {kind} {json.dumps(data)}\n")
+    err.flush()
