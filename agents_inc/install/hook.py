@@ -2,18 +2,26 @@
 from __future__ import annotations
 import hashlib, json, os, re, sys, tempfile, time
 from datetime import datetime
+from .. import role_defaults
 from .doctor import check_install
 from .paths import InstallPaths
 
 # The rung is the model; the route is always `agents-inc dispatch` (D59, QUICKREF step 2). The earlier wording
 # ("keep this Agent call only if routing selects a Claude rung") approved every Agent call on a Claude-only
 # install, since sonnet and haiku are Claude rungs (token bench dry run, 2026-10-22).
+# D78 R3 (2026-11-11): a small edit (role_defaults.SMALL_TASK_CALLS tool calls or fewer) may go to a native workhorse
+# subagent; the supervisor then runs one check itself. Read-only scouts are unchanged. gate_deny is not changed:
+# enforce mode still denies that native edit route (D61).
+_NATIVE_EDIT = (f"an edit of {role_defaults.SMALL_TASK_CALLS} or fewer tool calls on a native workhorse subagent "
+                f"(model {role_defaults.NATIVE_EDIT_MODEL}) with a short brief")
 NUDGE = ("agents-inc reminder: this Agent call bypasses agents-inc routing, the ledger and verification. Use Agent "
-         "only for a read-only foreground scout (Explore, Plan). Any other delegation, including to a Claude rung "
+         f"only for a read-only foreground scout (Explore, Plan) or for {_NATIVE_EDIT}; after that edit, run one check "
+         "yourself, because no harness ran gates. Any other delegation, including to a Claude rung "
          "such as sonnet or haiku, goes through `agents-inc dispatch --slots <json> --model <rung>`: naming a model "
          "picks the rung, not the route.")
 ROUTE_RULE = ("Naming a model (opus, sonnet, haiku) picks the rung, not the route: delegate through "
-              "`agents-inc dispatch`, and use the Agent tool only for read-only foreground scouts (Explore, Plan).")
+              "`agents-inc dispatch`. Use the Agent tool only for read-only foreground scouts (Explore, Plan) and "
+              f"for {_NATIVE_EDIT}, then run one check yourself.")
 # Spec 015 FR-002: a Codex persona name at the start of a Claude subagent description mislabels the model.
 PERSONA_RE = re.compile(r"(?i)\A(?:astra|sol|terra|luna)(?=\s|:|/|\Z)")
 PERSONA_DENY_REASON = ("FR-002: Agent/Task descriptions cannot begin with a Codex persona name. For Codex execution, "
@@ -48,8 +56,13 @@ def session_start(paths: InstallPaths, host: str) -> str:
     report = check_install(paths)
     status = "READY" if report.ready else " ".join(report.codes)
     skill = paths.current / "skills/workerbee/QUICKREF.md"
+    # D78 R4: on Claude the PreToolUse hook injects QUICKREF on the first Agent, Task, DelegateAgent or Bash dispatch
+    # (D53), so the read instruction stays only for the route it does not cover (a direct mcp__agents-inc__run call).
+    # Codex has no PreToolUse hook, so its session keeps the read instruction.
+    read = (f"the first Agent, Task or Bash dispatch loads the quick reference; read {skill} yourself only before a "
+            "direct mcp__agents-inc__run call" if host == "claude" else f"read {skill} before the first dispatch")
     text = (f"agents-inc is installed (doctor: {status}). Every delegation in this session routes through agents-inc; "
-            f"read {skill} before the first dispatch (full SKILL.md only for a non-Claude rung, a prompt from scratch, "
+            f"{read} (full SKILL.md only for a non-Claude rung, a prompt from scratch, "
             f"or a disputed gate). {ROUTE_RULE} Launcher: {paths.launcher}.")
     if not report.ready: text += " Tell the operator doctor is not READY and suggest `agents-inc repair --source <agents-inc checkout>`."
     for warning in report.warnings:

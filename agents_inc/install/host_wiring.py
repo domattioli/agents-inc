@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib, json, os, shutil, tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from .. import role_defaults
 from .paths import InstallPaths
 from .receipt import InstallReceipt, OwnedPath
 
@@ -42,19 +43,17 @@ def detected(home: Path) -> tuple[Host, ...]:
     return tuple(host for host in HOSTS if (home / host.root).is_dir())
 
 def block_text(paths: InstallPaths) -> str:
-    skills = paths.current / "skills"
+    """Heading plus at most 5 body lines (D78 R4). Launcher, health and repair text come from the SessionStart hook;
+    the rules come from role_defaults, the one place a settings loader will replace."""
     return "\n".join((
         BEGIN,
         "## agents-inc delegation (mandatory, every session, every provider)",
-        "",
-        f"agents-inc is installed on this machine. Launcher: `{paths.launcher}`. Health: `agents-inc doctor`, expect `READY`.",
-        "",
-        "- Before delegating any task, route it through agents-inc. It pools Claude, Codex (astra, sol, terra, luna), Gemini, Mistral, and OpenRouter capacity and picks the cheapest capable rung.",
-        "- Never call the Codex, Gemini, Mistral, or OpenRouter CLIs or APIs directly for delegated work. Never add a paid API fallback.",
-        "- Claude's `Agent` tool spawns Claude subagents only. Use it only when agents-inc routing selects a Claude rung.",
-        f"- Before the first dispatch in a session, read `{skills / 'workerbee/QUICKREF.md'}` (gates, ladder, verification, 14-field prompt contract; about 2k tokens). Read the full `{skills / 'workerbee/SKILL.md'}` and `{skills / 'codex-bridge/SKILL.md'}` (about 20k tokens together) only for a non-Claude rung, a prompt written from scratch, or a disputed gate.",
-        "- A delegate's self-reported PASS is not evidence. Verify the output yourself before accepting it.",
-        "- If doctor does not print `READY`, say so to the operator and run `agents-inc repair --source <agents-inc checkout>`.",
+        f"- {role_defaults.ROUTE_LINE}",
+        f"- {role_defaults.EXECUTIVE_LINE}",
+        f"- {role_defaults.ROLES_LINE}",
+        f"- {role_defaults.GATE_LINE}",
+        "- The session hook supplies health status and the quick reference; with no hook (Gemini), run "
+        f"`agents-inc doctor` and read `{paths.current / 'skills/workerbee/QUICKREF.md'}` first.",
         END,
         "",
     ))

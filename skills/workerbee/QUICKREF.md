@@ -4,8 +4,8 @@ Short form of `SKILL.md` for routine dispatch. Read the full `SKILL.md` and `ski
 
 ## Before any dispatch
 
-1. Dispatch gate. Estimate the direct tool calls the task needs. Three or fewer: do it yourself. Exceptions: one of three or more parallel tasks, large output you should not hold, or code work under a repo dispatch policy. Bare-API wrappers (`gask.sh`, `mask.sh`, `oask.sh`) have no filesystem, shell or repo access. Paste real source into the prompt or pick a delegate that has them.
-2. Vendor gate picks the rung; the route is always `agents-inc dispatch`. Naming a model chooses the rung, not the route. The `Agent` tool is only for read-only foreground scouts (Explore, Plan); the agent gate may block other uses (D61). Claude is the default vendor. Codex (astra, sol, terra, luna), Gemini, Mistral and OpenRouter open only when the operator names one, a stated capability needs it, or the operator declared budget mode (free grunts only). State one line: `vendor gate: <gate> -> <delegate>`.
+1. Dispatch gate (D78). Estimate the direct tool calls the task needs. Three or fewer that write nothing: do it yourself. Three or fewer that edit files: a native workhorse subagent with a short brief (Claude Code: `Agent` with model `sonnet`; Codex: its native subagent), then run one check yourself, because no harness ran gates. Anything larger: `agents-inc dispatch`. Exceptions that send a small task to `agents-inc dispatch`: one of three or more parallel tasks, large output you should not hold, or code work under a repo dispatch policy. Bare-API wrappers (`gask.sh`, `mask.sh`, `oask.sh`) have no filesystem, shell or repo access. Paste real source into the prompt or pick a delegate that has them.
+2. Vendor gate picks the rung; the route is always `agents-inc dispatch`. Naming a model chooses the rung, not the route. The `Agent` tool is only for read-only foreground scouts (Explore, Plan) and the item 1 native edit; the agent gate in enforce mode blocks every other use, the native edit included (D61, D78). Claude is the default vendor. Codex (astra, sol, terra, luna), Gemini, Mistral and OpenRouter open only when the operator names one, a stated capability needs it, or the operator declared budget mode (free grunts only). State one line: `vendor gate: <gate> -> <delegate>`.
 3. Chain resolves by ladder (D46): higher rung manages; same rung, ask the operator one question. State the chain only when surprising.
 
 4. Dispatch through `agents-inc dispatch --slots <json> --model <slug>` (D47). The CoS writes the slots file and pastes nothing: the command renders, lints, snapshots, launches, and verifies, and returns one status line. Files stay in the run directory.
@@ -16,12 +16,12 @@ Short form of `SKILL.md` for routine dispatch. Read the full `SKILL.md` and `ski
 
 | rung | Anthropic | Codex | use |
 |---|---|---|---|
-| executive | fable | astra | hardest reasoning, last resort |
-| orchestrator | opus | sol | orchestration, review, gates |
-| workhorse | sonnet | terra | implementation |
-| grunt | haiku | luna | triage, mechanical work |
+| executive | fable | astra | judgment only: operator dialogue, decisions, briefs, verification, final acceptance; delegates all writing |
+| orchestrator | opus | sol | briefs that need design or scope judgment, review, gates |
+| workhorse | sonnet | terra | default for anything that writes: code, docs, git and PR mechanics |
+| grunt | haiku | luna | read-only: scouts, summaries, triage; writes no code |
 
-Pick the cheapest rung that will not get the answer wrong. Escalate on evidence of failure. State the effort level on every dispatch (default medium; `ultra` only if the operator names it).
+Roles by rung per D78. The executive (the session that talks to the operator) delegates any task a well-briefed orchestrator or workhorse delegate can do. Pick the cheapest rung that will not get the answer wrong. Escalate on evidence of failure. State the effort level on every dispatch (default medium; `ultra` only if the operator names it).
 
 ## Verification
 

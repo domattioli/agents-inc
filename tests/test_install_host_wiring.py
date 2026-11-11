@@ -16,6 +16,59 @@ def _receipt():
     return InstallReceipt("a" * 64, Path("/usr/bin/python3"), None)
 
 
+class ManagedBlockTextTest(unittest.TestCase):
+    """D78 R4: heading plus at most 5 body lines; the rules come from role_defaults."""
+    def setUp(self):
+        from agents_inc.install.host_wiring import block_text
+        self.text = block_text(InstallPaths.for_home(Path("/home/u")))
+        lines = self.text.splitlines()
+        self.body = lines[lines.index(BEGIN) + 1:lines.index(END)]
+
+    def test_body_is_heading_plus_at_most_five_lines(self):
+        self.assertTrue(self.body[0].startswith("## agents-inc delegation"))
+        self.assertLessEqual(len(self.body[1:]), 5, self.body)
+        self.assertNotIn("", self.body)
+
+    def test_no_quickref_read_instruction_in_parenthesis_form(self):
+        self.assertNotIn("QUICKREF.md` (", self.text)
+        self.assertNotIn("Before the first dispatch in a session, read", self.text)
+
+    def test_block_carries_each_ruling_from_role_defaults(self):
+        from agents_inc import role_defaults
+        for line in (role_defaults.ROUTE_LINE, role_defaults.EXECUTIVE_LINE, role_defaults.ROLES_LINE, role_defaults.GATE_LINE):
+            self.assertIn(f"- {line}", self.body)
+        self.assertIn("session hook supplies health status and the quick reference", self.text)
+        self.assertNotIn("Launcher:", self.text)  # SessionStart prints launcher and health
+
+    def test_block_is_smaller_than_before(self):
+        from agents_inc.install.host_wiring import block_text
+        text = block_text(InstallPaths.for_home(Path("/Users/domattioli")))
+        self.assertLessEqual(len(text.encode()), 1200)  # 1466 bytes for this home before D78, 1153 after
+
+    def test_block_still_replaces_an_old_block(self):
+        old = f"# mine\n\n{BEGIN}\nold rule\n{END}\n"
+        self.assertEqual(upsert_block(old, self.text), "# mine\n\n" + self.text)
+
+
+class RoleDefaultsTest(unittest.TestCase):
+    def test_writing_defaults_to_workhorse_not_grunt(self):
+        from agents_inc import role_defaults
+        self.assertEqual(role_defaults.WRITE_RUNG, "workhorse")
+        self.assertEqual(role_defaults.NATIVE_EDIT_MODEL, "sonnet")
+        self.assertEqual(role_defaults.SMALL_TASK_CALLS, 3)
+        self.assertIn("read-only", role_defaults.RUNG_ROLES["grunt"])
+        self.assertIn("writes", role_defaults.RUNG_ROLES["workhorse"])
+        self.assertEqual(role_defaults.RUNG_ROLES["executive"], "judgment only")
+
+    def test_gate_line_has_three_outcomes(self):
+        from agents_inc import role_defaults
+        gate = role_defaults.GATE_LINE
+        self.assertIn("no writes: do it yourself", gate)
+        self.assertIn("with edits: native workhorse subagent", gate)
+        self.assertIn("one check yourself", gate)
+        self.assertIn("`agents-inc dispatch`", gate)
+
+
 class HostWiringTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.home = Path(self.tmp.name) / "home"

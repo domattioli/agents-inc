@@ -71,15 +71,27 @@ A correctly-written dispatch prompt (Step 11: role, reporting chain, verified
 state, constraints, gates, output shape) costs roughly 600-1,200 tokens to
 write plus the delegate's own floor (measured: 3,181 tokens for a one-word
 ultra-tier reply). For a small task that fixed cost exceeds doing the work
-directly. Answer both questions below before writing the prompt. Either
-answer `no` means do the work in the orchestrating session.
+directly. Answer both questions below before writing the prompt.
 
-**Q1 — Volume.** Estimate the direct tool calls this task would take you
-(read / grep / glob / single edit / one command). **If the estimate is 3 or
-fewer, do not dispatch.** Count the calls, do not estimate the difficulty;
-a one-file lookup, a single grep, a known-path edit, and a one-line config
-change are all under the line regardless of how important they are.
-Exceptions, each of which must be stated out loud when used:
+**Q1 — Volume (D78).** Estimate the direct tool calls this task would take you
+(read / grep / glob / single edit / one command). Count the calls, do not
+estimate the difficulty. Three outcomes:
+- **3 or fewer, writes nothing:** do it yourself in the orchestrating session
+  (a one-file lookup, a single grep).
+- **3 or fewer, edits files:** a native workhorse subagent with a short brief
+  (Claude Code: `Agent` with model `sonnet`; Codex: its native subagent
+  equivalent). No harness ran gates, so the supervisor runs one check itself
+  (the test, or a read of the diff). The agent gate in `enforce` mode denies
+  this route (D61); there, use `agents-inc dispatch`.
+- **More than 3:** `agents-inc dispatch`.
+
+The executive (fable, astra; the session that talks to the operator) keeps
+judgment only: operator dialogue, decisions, briefs, verification and final
+acceptance. It delegates all writing and any task a well-briefed orchestrator
+or workhorse delegate can do.
+
+Exceptions that send a small task to `agents-inc dispatch`, each of which
+must be stated out loud when used:
 - the task is one of N≥3 independent tasks being fanned out in parallel;
 - the calls are individually cheap but return large output the orchestrator
   should not hold in context (log sweeps, whole-file dumps);
@@ -147,10 +159,10 @@ vendor column you may use** — the ladder tells you the rung, not the vendor.
 
 | tier | Anthropic | OpenAI | use for |
 |---|---|---|---|
-| executive | fable | astra | hardest reasoning, last resort |
-| orchestrator | opus | sol | orchestration, adversarial review, gates |
-| workhorse | sonnet | terra | implementation, supervising a pair |
-| grunt | haiku | luna | triage, mechanical edits, high volume |
+| executive | fable | astra | judgment only: operator dialogue, decisions, briefs, verification, final acceptance (D78) |
+| orchestrator | opus | sol | briefs that need design or scope judgment, adversarial review, gates |
+| workhorse | sonnet | terra | default for anything that writes: code, docs, git and PR mechanics; supervising a pair |
+| grunt | haiku | luna | read-only: scouts, summaries, triage; writes no code (D78) |
 | grunt | — | oss / free | one-shot text, drafts, sounding boards, well-scoped small coding (high volume of small diffs, never a large or architecturally significant change) |
 
 Rung names follow D27/D36: executive, orchestrator, workhorse, grunt. Older
@@ -203,11 +215,12 @@ Pick the cheapest rung that will not get the answer wrong. Consequence and
 verifiability round up; reasoning depth and context span may round down when
 the other four are L1. No mechanical check alone is not L3: low-stakes prose
 without a check stays L1-L2. File count is not a dimension. Code writing or
-editing goes to grunt unless the operator directs another rung; a code task
-that seems to need more is an operator question, not a silent round-up.
+editing goes to workhorse unless the operator directs another rung; a code
+task that needs design or scope judgment goes to orchestrator. The Claude and
+Codex grunts (haiku, luna) are read-only and write no code (D78).
 Ported from DomI `subagent-dispatch-policy` v1.4.0 (#27).
 
-Coding at flash/bottom-rung is scope-gated, not banned: small, narrow, high-volume jobs only. A task needing scope/design judgment is workhorse+, dispatch it there.
+Coding by free bottom-rung models (not haiku or luna) is scope-gated, not banned: small, narrow, high-volume jobs only. A task needing scope/design judgment is workhorse+, dispatch it there.
 
 Under a mandate, dispatch Codex rows via `agent.sh submit --backend codex --model <slug> --mandate <run_id> --role <rung>`; bare `codex exec` is stateless and must not be used for Executive/Supervisor re-engagement (spec-010, `skills/codex-bridge/SKILL.md` `agent.sh` mandate flags).
 
@@ -264,11 +277,11 @@ vendor that isn't wired up here.
 | astra | OpenAI (Codex) | `gpt-6-astra` | `@AGENTS_INC_LAUNCHER@ run --model astra --cwd <dir>` | executive | hardest reasoning |
 | sol | OpenAI (Codex) | `gpt-5.6-sol` | `@AGENTS_INC_LAUNCHER@ run --model sol --cwd <dir>` | orchestrator | orchestration, review |
 | terra | OpenAI (Codex) | `gpt-6.1-terra` | `@AGENTS_INC_LAUNCHER@ run --model terra --cwd <dir>` | workhorse | implementation |
-| luna | OpenAI (Codex) | `gpt-6-luna` | `@AGENTS_INC_LAUNCHER@ run --model luna --cwd <dir>` | grunt | triage, mechanical work |
+| luna | OpenAI (Codex) | `gpt-6-luna` | `@AGENTS_INC_LAUNCHER@ run --model luna --cwd <dir>` | grunt | read-only triage, scouts, summaries |
 | fable | Anthropic | n/a — `Agent` tool | `Agent(model="fable", ...)` | executive | Claude-side hardest reasoning, last resort |
 | opus | Anthropic | n/a — `Agent` tool | `Agent(model="opus", ...)` | orchestrator | Claude-side orchestration, adversarial review, gates |
 | sonnet | Anthropic | n/a — `Agent` tool | `Agent(model="sonnet", ...)` | workhorse | Claude-side implementation |
-| haiku | Anthropic | n/a — `Agent` tool | `Agent(model="haiku", ...)` | grunt | Claude-side triage, mechanical edits |
+| haiku | Anthropic | n/a — `Agent` tool | `Agent(model="haiku", ...)` | grunt | Claude-side read-only triage, scouts, summaries |
 | gemini digest | Google Gemini, free tier | `gemini-3.8-flash` | `skills/codex-bridge/scripts/gask.sh --tier digest "<prompt>"` | grunt | 1M-context bulk digest of one large blob (logs, transcripts) |
 | gemini cheap | Google Gemini, free tier | `gemini-flash-lite-latest` | `skills/codex-bridge/scripts/gask.sh --tier cheap "<prompt>"` | grunt | high-volume shallow triage |
 | gemini deep | Google Gemini, free tier | `gemini-3.1-pro-preview` | `skills/codex-bridge/scripts/gask.sh --tier deep "<prompt>"` | — | not free-tier usable as of 2026-11-09 (free-tier quota 0) |
