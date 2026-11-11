@@ -141,6 +141,25 @@ const ungroundedPush = (pairs: readonly string[]) =>
   `Your report gives ${pairs.join(', ')}, but no tool result in this conversation contains ${pairs.length > 1 ? 'those values' : 'that value'}. ` +
   'A reported value must come from a tool result in this conversation, never from a guess. Run the missing tool calls now: name them in "tools". ' +
   'Reply with exactly one JSON object.\n'
+// Admitted gap (steps5 run 5, 2026-11-11): luna ran one wc -l and handed back "A=173 ... Results for b.txt through e.txt were not
+// included in the messages available to me; their counts remain unverified." The value was grounded, so nothing else fired.
+// A hand-back that says a result is not obtained gets one push. Cue: a result noun followed, in the same clause, by a
+// not-obtained phrase, or the word "unverified". Guard: when the task has countable KEY=<n> tokens and the hand-back gives
+// a grounded value for every one, whatever it says stands.
+const NOUN = '(?:results?|counts?|outputs?|values?|files?)'
+const GAP = new RegExp(`\\b${NOUN}\\b[^\\n;]{0,80}?\\b(?:not (?:included|provided|available|obtained)|unavailable)\\b|\\bunverified\\b`, 'i')
+const TASK_KEY = /\b([A-Za-z][A-Za-z0-9_]*)=<n>/g
+export function admitsGap(reply: Reply | string | null, messages: readonly Msg[], task: string): boolean {
+  if (reply === null || typeof reply === 'string' || !reply.tools.every(t => t.name === HANDBACK)) return false
+  const text = handbackText(reply)
+  if (text.trim() === '' || !GAP.test(text)) return false
+  const keys = [...new Set([...task.matchAll(TASK_KEY)].map(m => m[1]))]
+  if (keys.length === 0) return true
+  const bad = ungroundedValues(reply, messages, task).map(p => p.split('=')[0])
+  const given = new Set([...text.matchAll(KEYED_NUMBER)].map(m => m[1]))
+  return !keys.every(k => given.has(k) && !bad.includes(k))
+}
+const GAP_PUSH = 'You said some results are missing. Run the missing tool calls now, then hand back. Reply with exactly one JSON object.\n'
 type Block = { type: string; [field: string]: unknown }
 type Msg = { role: 'user' | 'assistant'; content: Block[] }
 type Tool = { name: string; description: string; mcp?: boolean }
@@ -790,6 +809,12 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     } else if (!run.failed && !S.chatOnly && ungroundedValues(run.reply, messages, taskText(messages)).length > 0) {
       // One push naming the pairs (built here, since it needs the list); a second ungrounded report stands as the answer.
       prompt = more(ungroundedPush(ungroundedValues(run.reply, messages, taskText(messages))))
+      chars += prompt.length
+      const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
+      if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
+    } else if (!run.failed && !S.chatOnly && admitsGap(run.reply, messages, taskText(messages))) {
+      // One push; a second admitting reply stands as the answer. The chain is else-if: at most one push per step.
+      prompt = more(GAP_PUSH)
       chars += prompt.length
       const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again

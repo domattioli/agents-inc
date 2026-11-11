@@ -2,7 +2,7 @@
 // The hooks are captured from registerLoop through a stand-in `on` and driven with a stand-in `$`.
 import { expect, test } from 'claude-code/testing'
 import type { Adapter } from './adapter'
-import { buildPrompt, catalog, guestTools, outsideWrites, ranTool, registerAgent, registerLoop, registerLoops, skipsTools, stopsEarly, ungroundedValues } from './loop'
+import { admitsGap, buildPrompt, catalog, guestTools, outsideWrites, ranTool, registerAgent, registerLoop, registerLoops, skipsTools, stopsEarly, ungroundedValues } from './loop'
 
 type Run = { out?: string; code?: number; hang?: boolean }
 type Chunk = { kind: string; [k: string]: unknown }
@@ -425,4 +425,36 @@ test('a stateless guest agent is offered only the core tools, so step 0 of a rea
   const a = fakeAdapter({ kind: 'stateless' })
   const prompt = buildPrompt(a, 'codestral-latest', system, catalog(offered, ''), turn as never)
   expect(prompt.length).toBeLessThan(48000)
+})
+
+const ADMIT = 'Verified result received: `wc -l a.txt` returned 173, so A=173. Results for b.txt through e.txt were not included in the messages available to me; their counts remain unverified.'
+const ONE = ran(['wc -l a.txt', '173 a.txt'])
+
+test('admitsGap: run 5 fixture fires; a fully grounded five-key report never does; no keys lets the cue decide', () => {
+  expect(admitsGap(hb(ADMIT), asMsgs(ONE), FIVE)).toBe(true)
+  expect(admitsGap(hb('A=173 B=95 C=41 D=7 E=2 (the sandbox note is unverified)'), asMsgs(ran(['a', '173 a'], ['b', '95 b'], ['c', '41 c'], ['d', '7 d'], ['e', '2 e'])), FIVE)).toBe(false)
+  expect(admitsGap(hb('Counts are unavailable.'), asMsgs(ONE), 'Count the lines.')).toBe(true)
+  expect(admitsGap(hb('The count is 173.'), asMsgs(ONE), 'Count the lines.')).toBe(false)
+  expect(admitsGap({ say: ADMIT, tools: [{ name: 'Bash', input: {} }] }, asMsgs(ONE), FIVE)).toBe(false) // not a hand-back
+})
+
+test('an admitted gap is pushed once; a second admitting reply stands; chat-only is not pushed', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const adm = JSON.stringify(hb(ADMIT))
+  const h = harness(a, { replies: [{ out: adm }, { out: adm }], task: FIVE, messages: ONE })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('g1')
+  const { result } = await h.step('g1')
+  expect(h.runs.length).toBe(2)
+  expect(h.runs[1].input).toContain('You said some results are missing')
+  expect(message(result)).toBe(ADMIT)
+  const cont = harness(a, { replies: [{ out: adm }, { out: BASH }], task: FIVE, messages: ONE })
+  await registerAgent(cont.$ as never, a, { cwd: '/w' })
+  await cont.spawn('g2')
+  expect(nameOf((await cont.step('g2')).result)).toBe('Bash')
+  const chat = harness(a, { replies: [{ out: adm }], task: FIVE, messages: ONE, tools: false })
+  await registerAgent(chat.$ as never, a, { cwd: '/w' })
+  await chat.spawn('g3')
+  await chat.step('g3')
+  expect(chat.runs.length).toBe(1)
 })
