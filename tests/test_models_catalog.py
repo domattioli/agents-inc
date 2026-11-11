@@ -168,11 +168,11 @@ class TestModelsCatalog(unittest.TestCase):
             model_id = match.group(1).strip()
             openrouter_models.append(model_id)
 
-        # Expected 22 models in the doc
+        # Expected 11 models in the doc
         self.assertGreaterEqual(
             len(openrouter_models),
-            22,
-            f"Found {len(openrouter_models)} models in doc, expected at least 22",
+            11,
+            f"Found {len(openrouter_models)} models in doc, expected at least 11",
         )
 
         for model_id in openrouter_models:
@@ -181,6 +181,37 @@ class TestModelsCatalog(unittest.TestCase):
                 self.models_data["models"],
                 f"OpenRouter model {model_id} not in models.json",
             )
+
+    def test_probe_2026_11_09(self):
+        """T007 / FR-014: the catalog matches the 2026-11-09 probe and records its date."""
+        self.assertEqual(self.models_data.get("probed"), "2026-11-09")
+        models = self.models_data["models"]
+        for slug in ("gemini-3.8-flash", "codestral-latest", "ministral-3b-latest"):
+            self.assertIn(slug, models)
+            self.assertEqual(models[slug]["status"], "available", slug)
+        self.assertEqual(models["gemini-3.8-flash"]["provider"], "gemini")
+        self.assertEqual(models["codestral-latest"]["provider"], "mistral")
+        self.assertIn("nvidia/nemotron-3.5-lightning:free", models)
+        self.assertNotIn("nemotron-3.5-lightning:free", models)  # full nvidia/ slug only
+
+    def test_catalog_matches_free_dispatch_probe_list(self):
+        """T024 / FR-014: every dispatchable free slug is an available catalog entry from the same provider and the grunt tier."""
+        from agents_inc.install.free_launch import FREE_MODELS
+        models = self.models_data["models"]
+        for slug, entry in FREE_MODELS.items():
+            with self.subTest(slug=slug):
+                self.assertIn(slug, models)
+                # OpenRouter slugs stay "unprobed" until the T030 live smoke records a probe; direct providers must be available
+                ok = ("available", "unprobed") if entry.provider == "openrouter" else ("available",)
+                self.assertIn(models[slug]["status"], ok)
+                self.assertEqual(models[slug]["provider"], entry.provider)
+                self.assertEqual(models[slug]["tier"], "grunt")
+        for deep in ("gemini-3.1-pro-preview", "mistral-large-latest"):  # deep tiers never dispatch (SC-005)
+            self.assertNotIn(deep, FREE_MODELS)
+        for allowed in self.routing_data["optional_allowed_tasks"]:  # no free slug lists an allowed task in both columns
+            for slug in FREE_MODELS:
+                profile = models[slug]
+                self.assertFalse(allowed in profile["tasks_good"] and allowed in profile["tasks_bad"], (slug, allowed))
 
     def test_no_key_like_strings(self):
         """No value in models.json matches key-like regex."""

@@ -51,6 +51,51 @@ class UpdateCheckTest(unittest.TestCase):
         self.assertEqual(uc.notice(self.state, env={uc.OPT_OUT: "1"}, fetch=lambda t: called.append(1) or "99.0.0"), "")
         self.assertEqual(called, [])
 
+    def _script(self, shebang):
+        p = self.state / "launcher"
+        p.write_text(f"#!{shebang}\nfrom agents_inc.install.cli import main\n")
+        return p
+
+    def _notice(self, launcher=None, record=None, managed=False):
+        if record is not None:
+            (self.state / "source-checkout").write_text(record + "\n")
+        std = self.state / "stdlib"; std.mkdir(exist_ok=True)
+        if managed:
+            (std / "EXTERNALLY-MANAGED").write_text("[externally-managed]\n")
+        return uc.notice(self.state, env={}, fetch=lambda t: "99.0.0", now=1000.0, launcher=launcher, stdlib=std)
+
+    def test_kind_pipx(self):
+        text = self._notice(self._script("/Users/x/.local/pipx/venvs/agents-inc/bin/python"), record="packaged")
+        self.assertIn("pipx upgrade agents-inc && agents-inc repair", text)
+        self.assertNotIn("pip install -U", text)
+
+    def test_kind_pip_user_and_venv(self):
+        text = self._notice(self._script("/usr/bin/python3"), record="packaged")
+        self.assertIn("python3 -m pip install --user -U agents-inc && agents-inc repair", text)
+        venv = self.state / "venv" / "bin"; venv.mkdir(parents=True)
+        (venv.parent / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        text = self._notice(self._script(str(venv / "python")), record="packaged")
+        self.assertIn("python3 -m pip install -U agents-inc && agents-inc repair", text)
+        self.assertNotIn("--user", text)
+
+    def test_kind_pip_user_externally_managed_never_offers_bare_pip(self):
+        text = self._notice(self._script("/usr/bin/python3"), record="packaged", managed=True)
+        self.assertIn("PEP 668", text)
+        self.assertIn("pipx", text)
+        self.assertNotIn("pip install -U", text)
+
+    def test_kind_checkout(self):
+        text = self._notice(self._script("/usr/bin/python3"), record="/src/agents-inc")
+        self.assertIn("git -C /src/agents-inc pull && agents-inc repair --source /src/agents-inc", text)
+        self.assertNotIn("pip install -U", text)
+
+    def test_kind_unknown_lists_forms_and_names_pep668(self):
+        text = self._notice(self.state / "missing-launcher")
+        self.assertIn("PEP 668", text)
+        self.assertIn("pipx upgrade agents-inc", text)
+        self.assertIn("git -C <checkout> pull", text)
+        self.assertNotIn("pip install -U", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -179,9 +179,13 @@ Exit codes reserved for mandate **state** refusals (a caller cannot fix these by
 
 Under a mandate, the bridge's `POST /prompt` gains two optional body fields sent by the runner (never both, never neither, for any mandate engagement): `thread_id` (resume a specific session, isolated from the global thread) or `fresh: true` (start an isolated new session, no `resume` argument, global thread untouched). A resume failure on a caller-supplied `thread_id` returns HTTP `409 {"error":"resume failed","thread_id":...,"stderr":...}` with no automatic fresh retry — that retry-as-fresh behaviour is preserved only for the bridge's own global thread.
 
+## Free models through dispatch (D75)
+
+`agents-inc dispatch --model <free slug> --slots <file>` runs gemini-3.8-flash, gemini-flash-lite-latest, ministral-3b-latest, codestral-latest and the OpenRouter `:free` slugs through these wrappers. Slots need `TASK_KIND` (extract, summarize or classify) and an author-written `CLASSIFICATION` (public or internal). Gates use the `{report}` token for the saved reply. No gate ends `unverified`. No tools, fan-out or resume.
+
 ## Free-model health and 429 history
 
-gask/mask/oask report every call outcome to `agents_inc.free_health`. Per-provider cooldown lives in `~/.codex-bridge/backend-health.json`; lifetime per-model calls/429s/last-429 live in `~/.codex-bridge/rate-limit-stats.json` (503 overloaded counts as 429). Show worst offenders first: `PYTHONPATH=. python3 -m agents_inc.free_health rate-limits`. Consult before picking a free model; prefer low 429 rate. Ollama calls (adapter) log tokens to usage.jsonl as backend `ollama` but do not feed free_health. oask writes a fixed `/tmp/oask_response.json`: never run oask calls in parallel, replies clobber. `nvidia/nemotron-3.5-content-safety:free` is a safety guard only (returns `User Safety: safe|unsafe`, ignores instructions); never use it as a general classifier. Latest probe results: `docs/BENCH.md` "Free-model probe — 2026-09-29".
+gask/mask/oask report every call outcome to `agents_inc.free_health`. Per-provider cooldown lives in `~/.codex-bridge/backend-health.json`; lifetime per-model calls/429s/last-429 live in `~/.codex-bridge/rate-limit-stats.json` (503 overloaded counts as 429). Show worst offenders first: `PYTHONPATH=. python3 -m agents_inc.free_health rate-limits`. Consult before picking a free model; prefer low 429 rate. Ollama calls (adapter) log tokens to usage.jsonl as backend `ollama` but do not feed free_health. oask writes a fixed `/tmp/oask_response.json`: never run oask calls in parallel, replies clobber. Latest probe results: `docs/BENCH.md` "Free-model probe — 2026-09-29".
 
 ## Delegation timeouts
 

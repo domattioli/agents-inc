@@ -43,4 +43,4 @@ def repo_file(rel: str) -> Path:
                 continue
     raise FileNotFoundError(
         f"agents_inc: data file {rel!r} not found in a checkout or in the installed package data; "
-        "reinstall with `pip install agents-inc`")
+        "reinstall with `pipx install --force agents-inc` (a bare pip install fails on an externally managed Python, PEP 668)")

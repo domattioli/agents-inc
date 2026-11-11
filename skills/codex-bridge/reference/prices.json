@@ -40,7 +40,7 @@
     "gemini-3.1-pro-preview": {
       "input": 0.0,
       "output": 0.0,
-      "note": "free tier"
+      "note": "not free-tier usable as of 2026-11-09 (quota 0)"
     },
     "gemini-3.6-flash": {
       "input": 0.0,
@@ -91,34 +91,14 @@
     "google/gemma-4-26b-a4b-it:free": {
       "input": 0.0,
       "output": 0.0,
-      "note": "OpenRouter free tier"
+      "note": "OpenRouter free tier; 404 under operator zero-data-retention setting (account-specific)"
     },
     "google/gemma-4-31b-it:free": {
       "input": 0.0,
       "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
-    "inclusionai/ling-3.0-flash-fin:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
-    "inclusionai/ling-3.0-flash-sante:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
+      "note": "OpenRouter free tier; 404 under operator zero-data-retention setting (account-specific)"
     },
     "liquid/lfm-2.5-2.6b:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
-    "minimax/minimax-m2.7:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
-    "minimax/minimax-m3:free": {
       "input": 0.0,
       "output": 0.0,
       "note": "OpenRouter free tier"
@@ -128,47 +108,12 @@
       "output": 0.0,
       "note": "OpenRouter free tier"
     },
-    "nvidia/nemotron-3-super-120b-a12b:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
     "nvidia/nemotron-3-ultra-550b-a55b:free": {
       "input": 0.0,
       "output": 0.0,
       "note": "OpenRouter free tier"
     },
-    "nvidia/nemotron-3.5-content-safety:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
     "nvidia/nemotron-3.5-lightning:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
-    "poolside/laguna-s-2.1:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
-    "poolside/laguna-xs-2.1:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
-    "thinkingmachines/inkling-small:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
-    "thinkingmachines/inkling:free": {
-      "input": 0.0,
-      "output": 0.0,
-      "note": "OpenRouter free tier"
-    },
-    "z-ai/glm-5.2:free": {
       "input": 0.0,
       "output": 0.0,
       "note": "OpenRouter free tier"

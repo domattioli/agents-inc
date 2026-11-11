@@ -16,7 +16,7 @@ Skip the run when the cache file is < 60 s old AND its `session_id` matches.
   cache_read_input_tokens,cache_creation_input_tokens}`. Dedupe on `.message.id`.
 - `usage.db` table `usage(uid,ts,day,backend,model,input_tokens,output_tokens,cache_read,cache_write,reasoning)`.
   7d = `day >= date('now','localtime','-6 days')`. Session = `ts >= session_start` (ISO compare after converting epoch).
-- Codex fallback: `~/.codex/state_5.sqlite`, table `threads`. Use it when a configured OpenAI model has no bridge-DB rows. Session assigns threads created since the Claude session start. 7d assigns threads updated in the preceding 168 hours. `tokens_used` is exact per thread; time-window attribution is estimated because a thread can cross a boundary. Render these values with `~`.
+- Codex fallback: `~/.codex/state_5.sqlite`, table `threads`. Use it when a configured OpenAI model has no bridge-DB rows. Session assigns threads created since the Claude session start whose `cwd` is the session's project dir (`--project-dir`); threads from other projects, such as Codex app chats, are not this session. 7d assigns threads updated in the preceding 168 hours. `tokens_used` is exact per thread; time-window attribution is estimated because a thread can cross a boundary. Render these values with `~`.
 - Codex limits: newest line across `~/.codex/sessions/**/*.jsonl` (check the 3 newest files by mtime) containing
   `"rate_limits"` with `"limit_id":"codex"` and non-null `primary`. `primary` → 5h, `secondary` → 7d.
   Skip `limit_id=="premium"` (windows null). Record the line's `timestamp` field as `observed_at`.
@@ -30,7 +30,7 @@ Skip the run when the cache file is < 60 s old AND its `session_id` matches.
   "schema": 1, "session_id": str, "generated_at": epoch_int,
   "codex": {"h5": {"used_pct": num|null, "resets_at": epoch|null}, "d7": {...}, "observed_at": epoch|null},
   "model_pins": {"claude": id|null, "openai": id|null},   # current models used for the row-4 pin: Claude = `--current-claude-model` (harness `.model.id`, `[1m]` tag and 8-digit date dropped; must start with `claude-`), OpenAI = top-level `model = "..."` of `codex_config_toml` (before the first [table]); null = no pin
-  "models": {  # exactly 4 Claude rows then 4 OpenAI rows. One row per EXACT model id (only a trailing 8-digit date suffix is dropped; claude-opus-5 and claude-opus-5-5 are separate rows, no version-merging aliases). Rows = top 4 ids per provider by `all.tokens` (ties: id order), in rank order. A pin that is not in the top 4 replaces row 4; a pin inside the top 4 keeps its rank. Candidates: usage.db rows (backend claude | codex,openai), state_5 threads with tokens, transcript models, the pins
+  "models": {  # exactly 4 Claude rows then 4 OpenAI rows. One row per EXACT model id (only a trailing 8-digit date suffix is dropped; claude-opus-5 and claude-opus-5-5 are separate rows, no version-merging aliases). Rows = top 4 ids per provider by `all.tokens`, then id, shown in descending `all.tokens` order (operator ruling 2026-11-09: all-time picks and orders). A pin that is not in the top 4 replaces row 4; a pin inside the top 4 keeps its rank. Candidates: usage.db rows (backend claude | codex,openai), state_5 threads with tokens, transcript models, the pins
     "<model_id>": {"label": str, "provider": "claude"|"openai",
                    "session": {"tokens": int|null, "tokens_noncache": int|null, "cost": num|null},   # null = source absent; tokens_noncache = input+output+cache write (Claude: transcript; OpenAI: usage db; null when the Codex thread fallback raised the total)
                    "h5": {"tokens": int|null},
@@ -59,7 +59,7 @@ Skip the run when the cache file is < 60 s old AND its `session_id` matches.
 }
 Labels (`models[id].label`, derived from the id; the renderer derives the same string itself): `claude-<family>-<major>[-<minor>]` -> "Fable 5.1", "Opus 5.5", "Opus 5", "Sonnet 5", "Haiku 4.5";
 `gpt-<version>[-<name>]` -> "GPT-6 Astra", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna". Any other id passes through (renderer cuts it to 13 columns).
-ALL tokens for ranking = the `all.tokens` figure above (usage.db i+o+cache read+cache write per exact id, raised to the 28-day Codex thread total when that is larger). Σ/$ rows stay provider totals.
+Ranking uses ALL tokens = the `all.tokens` figure above (usage.db i+o+cache read+cache write per exact id, raised to the 28-day Codex thread total when that is larger). Σ/$ rows stay provider totals.
 
 ## Renderer layout
 
@@ -134,7 +134,7 @@ Branch color: `branch_kind_color <branch_name>` selects soft red for main/master
 
 ## Operator rules (moved from machine AGENTS.md, 2026-11-07)
 
-- `scripts/statusline.sh` is the only live status line (moved from DomI on 2026-10-11, operator instruction). `~/.claude/settings.json` runs `bash ~/Projects/agents_Inc/scripts/statusline.sh`.
+- `scripts/statusline.sh` is the only live status line (moved from DomI on 2026-10-11, operator instruction). `~/.claude/settings.json` runs `bash ~/Projects/agents-inc/scripts/statusline.sh`.
 - Retired copies: `~/Projects/DomI/scripts/statusline.sh` and `~/.claude/statusline/vaporwave.sh` with its `.bak` copies. Do not edit them or point settings back at them. Do not create a second script.
 - Verify every change yourself with the Gates above. Delegate reports of a working status line have been wrong before.
 - Never drop the box border or the subtable separators.

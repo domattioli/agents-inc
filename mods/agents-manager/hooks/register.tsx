@@ -9,6 +9,11 @@ const RUN_PANE = 'run-'
 const POLL_MS = 2000
 const KEEP_RUNS = 8
 const STALE_MS = 30 * 60 * 1000
+// A finished run leaves the tree this long after its last event: older rows are history, kept on disk, not in the pane.
+// A free-model run (through agent.sh, or since spec 037 through dispatch) takes no cancel and no follow-up message.
+const isFreeRun = (r: { meta?: string }): boolean => / · (agent\.sh|free dispatch)$/.test(String(r.meta ?? ''))
+const RECENT_MS = 60 * 60 * 1000
+const AT = new Map<string, number>()
 const EMPTY: ManagerView = { rows: [], note: 'click a row to open it · or pick a target and type a message', summary: '' }
 const STOP_TEXT = 'Stop now and report what you have.'
 
@@ -148,6 +153,8 @@ const parse = (text: string): any[] =>
 
 // A free-model start (agent.sh) writes a run-style dir under RUNS: run.json with kind 'free', and
 // events.jsonl with one agent_message row per output line and a closing run.end row. No gates, no ledger row.
+// Session start as a run-dir stamp; run dirs are named <stamp>-<model>-<id>, so a plain string compare orders them.
+let SINCE = ''
 const isoStamp = (): string => new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
 const startFreeRun = async (write: (path: string, text: string) => Promise<unknown>, model: string, task: string, slots: string) => {
   const base = `${RUNS}/${isoStamp()}-${model}-free${String(Date.now()).slice(-6)}`
@@ -217,6 +224,7 @@ export const register: Register = on => {
     LAST_AGENTS = new Set()
     STOP_ASKED.clear()
     DONE.clear()
+    SINCE = isoStamp()
     await $.command.register({ name: 'agents-manager', description: 'Open the agents manager: a tree of live agents and a message box' })
     void $.ui.open({ id: PANE, title: 'agents-inc manager' })
 
@@ -247,6 +255,8 @@ export const register: Register = on => {
           // No size known (listing failed or lacks the file): never cache.
           const ev = (await $.fs.list(`${RUNS}/${name}`).catch(() => [])).find(x => x.name === 'events.jsonl')
           const size = typeof ev?.size === 'number' ? ev.size : -1
+          if (typeof ev?.mtimeMs === 'number') AT.set(name, ev.mtimeMs)
+          else if (typeof dirAge.get(name) === 'number') AT.set(name, dirAge.get(name) as number)
           const hit = DONE.get(name)
           if (hit && size >= 0 && hit.size === size && !open.has(name)) {
             if (hit.row) runRows.push(hit.row)
@@ -258,7 +268,7 @@ export const register: Register = on => {
           let slots = ''
           try {
             const rj = JSON.parse(await $.fs.read(`${RUNS}/${name}/run.json`))
-            meta = `${rj.model ?? meta}${rj.effort ? ' · ' + rj.effort : ''} · ${rj.kind === 'free' ? 'agent.sh' : 'dispatch'}`
+            meta = `${rj.model ?? meta}${rj.effort ? ' · ' + rj.effort : ''} · ${rj.kind === 'free' ? (rj.via === 'agent.sh' ? 'agent.sh' : 'free dispatch') : 'dispatch'}`
             if (typeof rj.slots === 'string') slotsSeen.push((slots = rj.slots))
           } catch {}
           // A run with no run.end whose log has not moved in 30 min died without closing: call it stale, not running.
@@ -275,14 +285,30 @@ export const register: Register = on => {
           runRows.push(row)
           if (size >= 0 && row.state !== 'running' && row.state !== 'starting') DONE.set(name, { row, slots, size })
           else DONE.delete(name)
-          if (open.has(name)) fresh[name] = { lines: evs.map(describe).filter(Boolean), note: '' }
+          if (open.has(name)) {
+            const lines = evs.map(describe).filter(Boolean)
+            // A free-model run logs only run.start and run.end: its reply is stdout.md (stderr.txt when it failed).
+            if (isFreeRun(row)) {
+              const reply = await $.fs.read(`${RUNS}/${name}/stdout.md`).catch(() => '')
+              const text = reply.trim() ? reply : await $.fs.read(`${RUNS}/${name}/stderr.txt`).catch(() => '')
+              const body = text.split('\n').filter(l => l.trim())
+              if (body.length) lines.splice(Math.max(0, lines.length - 1), 0, '● ' + body[0], ...body.slice(1).map(l => '  ' + l))
+            }
+            fresh[name] = { lines, note: '' }
+          }
         }
         const live = (r: Row) => r.state === 'running' || r.state === 'starting'
         const active = runRows.filter(live).length
-        const finishedAll = runRows.length - active
+        // Finished runs from before this session are history, not this session's delegates: they used to fill the tree with
+        // eight old rows in every session. In a long session a finished run also drops out an hour after its last event.
+        // A run still running stays listed however old it is.
+        const recent = (r: Row) => { const at = AT.get(r.id); return typeof at !== 'number' || Date.now() - at <= RECENT_MS }
+        const mine = (r: Row) => live(r) || (r.id >= SINCE && recent(r))
+        const finishedAll = runRows.filter(r => !live(r) && mine(r)).length
         let keptFinished = 0
         const shown = runRows.filter(r => {
           if (live(r)) return true
+          if (!mine(r)) return false
           keptFinished++
           return keptFinished <= KEEP_RUNS
         })
@@ -436,7 +462,7 @@ export const register: Register = on => {
                 <Text dimColor>{' ' + (asked ? 'stop requested' : r.state)}</Text>
               </Button>
               {r.kind === 'job' && r.note ? <Text dimColor>{clip('      ' + r.note, cols)}</Text> : null}
-              {r.kind === 'run' && r.state === 'running' && !String(r.meta ?? '').endsWith('agent.sh') ? (
+              {r.kind === 'run' && r.state === 'running' && !isFreeRun(r) ? (
                 <Button
                   key={'cancel-' + r.id}
                   onPress={async () => {
@@ -598,7 +624,7 @@ export const register: Register = on => {
             let note: string
             if (!cur) note = 'no target'
             else if (!row) note = `target gone: ${f.targetLabel || cur}`
-            else if (row.kind === 'run' && String(row.meta ?? '').endsWith('agent.sh')) note = 'free-model runs take no messages; start a new one'
+            else if (row.kind === 'run' && isFreeRun(row)) note = 'free-model runs take no messages; start a new one'
             else if (row.kind === 'run') {
               resume(
                 argv => $.process.spawn({ argv }),

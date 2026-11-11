@@ -15,7 +15,7 @@ DEFAULT_CONFIG = {
     "claude_models": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"],
     "openai_models": ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"],
     "subscriptions": {"claude": 100, "openai": 100},
-    "prices_json": ["~/Projects/agents_for_dummies/skills/codex-bridge/reference/prices.json"],
+    "prices_json": [os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "skills", "codex-bridge", "reference", "prices.json")],
     "openai_price_estimates": {"gpt-6-astra": "claude-fable-5-1", "gpt-5.6-sol": "claude-opus-5", "gpt-5.6-terra": "claude-sonnet-5", "gpt-5.6-luna": "claude-haiku-4-5", "gpt-6.1-sol": "claude-opus-5", "gpt-6.1-terra": "claude-sonnet-5", "gpt-6-luna": "claude-haiku-4-5"},
     "free_price_estimate": "claude-haiku-4-5",
     "cum_default_estimate": "claude-sonnet-5",
@@ -146,13 +146,14 @@ def read_codex_model(path):
         pass
     return None
 
-def pick_rows(candidates, all_tokens, pin, n=4):
-    """Top n ids by ALL tokens (ties: id order). A pin outside the top n replaces row n."""
+def pick_rows(candidates, all_tokens, pin, n=4, recent_tokens=None):
+    """Top n ids by ALL tokens, then id (operator ruling 2026-11-09). A pin outside the top n replaces row n.
+    recent_tokens is accepted for callers but unused."""
     ranked = sorted(candidates, key=lambda m: (-(all_tokens.get(m) or 0), m))
     top = ranked[:n]
     if pin and pin in candidates and pin not in top:
         top = top[:n - 1] + [pin]
-    return top
+    return sorted(top, key=lambda m: (-(all_tokens.get(m) or 0), m))  # every shown row, pin included, descends by all-time tokens
 
 def calculate_cost(model_id, usage_dict, prices):
     base_id = strip_model_version(model_id)
@@ -197,6 +198,7 @@ def main():
         parser.add_argument("--session-id", default="")
         parser.add_argument("--transcript", default="")
         parser.add_argument("--session-start", type=int, default=0)
+        parser.add_argument("--project-dir", default="")
         parser.add_argument("--config", default="")
         parser.add_argument("--out", default="")
         parser.add_argument("--now", type=int, default=None)
@@ -250,6 +252,7 @@ def main():
             price_candidates.extend(cfg["prices_json"])
         elif isinstance(cfg.get("prices_json"), str):
             price_candidates.append(cfg["prices_json"])
+        price_candidates.extend(DEFAULT_CONFIG["prices_json"])  # script-relative repo price file: a stale config path must not blank every cost
         prices = load_prices(price_candidates)
         estimates = cfg.get("openai_price_estimates", {})
         free_est = cfg.get("free_price_estimate", "claude-haiku-4-5")
@@ -925,6 +928,13 @@ def main():
                     ip = tiered_input_price(model)
                     state_all["tokens"] += int(tokens or 0)
                     state_all["cost"] += (int(tokens or 0) / 1_000_000.0) * ip if ip is not None else 0.0
+                    # Per-model ALL = all-time thread total when larger than usage.db (was capped at the 28-day thread total).
+                    if model in all_models_data and int(tokens or 0) > all_models_data[model]["tokens"]:
+                        all_models_data[model]["tokens"] = int(tokens or 0)
+                        price = prices.get(model) or (prices.get(estimates.get(model)) if isinstance(estimates, dict) and estimates.get(model) else None)
+                        if price and price.get("input") is not None:
+                            all_models_data[model]["cost"] = (int(tokens or 0) / 1_000_000.0) * float(price["input"])
+                            all_models_data[model]["has_cost"] = True
                 if state_all["tokens"] > cum_openai_db["tokens"]:
                     cum_openai_db = state_all
                 if state_all["tokens"] > openai_all_tok:
@@ -937,8 +947,8 @@ def main():
                 if args.session_start:
                     cur.execute("""
                         SELECT model, SUM(tokens_used) FROM threads
-                        WHERE created_at >= ? AND tokens_used > 0 GROUP BY model
-                    """, (args.session_start,))
+                        WHERE created_at >= ? AND tokens_used > 0 AND (? = '' OR cwd = ? OR cwd LIKE ? || '/%') GROUP BY model
+                    """, (args.session_start, args.project_dir, args.project_dir, args.project_dir))  # other projects' threads are not this session
                     for raw_model, tokens in cur.fetchall():
                         model = normalize_model(raw_model)
                         if model in openai_session_tokens_map and int(tokens or 0) > openai_session_tokens_map[model]:
@@ -1018,8 +1028,10 @@ def main():
             }
 
         # Rows: top 4 exact ids per provider by ALL-time tokens; the current model outside the top 4 takes row 4.
-        claude_rows = pick_rows(cfg["claude_models"], {m: models_full[m]["all"]["tokens"] for m in cfg["claude_models"]}, claude_pin)
-        openai_rows = pick_rows(cfg["openai_models"], {m: models_full[m]["all"]["tokens"] for m in cfg["openai_models"]}, openai_pin)
+        claude_rows = pick_rows(cfg["claude_models"], {m: models_full[m]["all"]["tokens"] for m in cfg["claude_models"]}, claude_pin,
+                                recent_tokens={m: models_full[m]["d7"]["tokens"] for m in cfg["claude_models"]})
+        openai_rows = pick_rows(cfg["openai_models"], {m: models_full[m]["all"]["tokens"] for m in cfg["openai_models"]}, openai_pin,
+                                recent_tokens={m: models_full[m]["d7"]["tokens"] for m in cfg["openai_models"]})
         for m in claude_rows + openai_rows:
             models_dict[m] = models_full[m]
         for m in claude_rows:

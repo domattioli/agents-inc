@@ -1,0 +1,1 @@
+{ "name": "delegate-pane", "version": "0.2.0", "description": "One live pane per agents-inc delegate model (any rung, any vendor), streaming the newest run's events.", "types": "./types/index.d.ts" }

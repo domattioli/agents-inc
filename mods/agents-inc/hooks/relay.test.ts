@@ -63,10 +63,32 @@ test('an unknown model is refused', async ($, on) => {
   expect(out.deny).toBeDefined()
 })
 
-test('a free model is refused and names agent.sh', async ($, on) => {
+test('a free family name is refused and lists the free slugs', async ($, on) => {
   await start($, on)
   const out = await $.tool.call({ tool: TOOL, model: 'gemini', slots: '/work/s.md', agentId: 'a1' })
-  expect(out.deny).toContain('agent.sh')
+  expect(out.deny).toContain('gemini-3.8-flash')
+  expect(out.deny).not.toContain('agent.sh')
+})
+
+test('a free slug reaches agents-inc dispatch --model (spec 037)', async ($, on) => {
+  const seen: string[][] = []
+  fakeProcesses(on, seen)
+  on('fs.stat', STAT)
+  on('fs.read', () => ({ value: 'delegate answer' }))
+  mock.clock(on)
+  mock.session(on)
+  await start($, on)
+  const out = await $.tool.call({ tool: TOOL, model: 'codestral-latest', slots: '/work/s.md', agentId: 'a1' })
+  expect(out.deny).toBeUndefined()
+  const d = seen.find(a => a.includes('dispatch'))
+  expect(d?.[d.indexOf('--model') + 1]).toBe('codestral-latest')
+})
+
+test('a free slug with slots outside the session cwd is still refused', async ($, on) => {
+  on('fs.stat', (_$, e) => ({ value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false, realPath: e.path } }))
+  await start($, on)
+  const out = await $.tool.call({ tool: TOOL, model: 'codestral-latest', slots: '/etc/passwd', agentId: 'a1' })
+  expect(out.deny).toContain('slots must be')
 })
 
 test('a slots path outside the session cwd is refused', async ($, on) => {

@@ -25,10 +25,11 @@ AGENT_GATE_ENV = "AGENTS_INC_AGENT_GATE"
 AGENT_GATE_MODES = ("enforce", "advisory", "off")
 GATE_ALLOW = frozenset({"Explore", "Plan", "claude-code-guide", "statusline-setup"})
 # The agents-inc mod's native agent types run a Codex model through `agents-inc run` (spec 028): the persona name is
-# the true model and the call is agents-inc's own route, so neither the FR-002 deny nor the gate applies. Exact names,
+# the true model and the call is agents-inc's own route, so neither the FR-002 deny nor the gate applies. The relay type
+# only holds `mcp__agents-inc__run`, so a description such as "Astra analyze" names the model it really runs. Exact names,
 # not a prefix: a lookalike such as x-agents-inc:luna is still an outside spawn. The spike's luna-brain:* types are
 # no longer exempt; the spike mod stays installable but its types now meet the gate like any other.
-NATIVE_TYPES = frozenset({"agents-inc:luna"})
+NATIVE_TYPES = frozenset({"agents-inc:luna", "agents-inc:relay"})
 GATE_DENY_REASON = ("agents-inc agent gate: this Agent/Task call is blocked (subagent_type: {subagent}; background: {background}). "
                     "Agent/Task spawns Claude subagents outside agents-inc routing, ledger, and verification. Allowed here: {allowed} "
                     "(foreground only). For every other delegation run: agents-inc dispatch --slots <json> --model <opus|sonnet|haiku|fable>. "
@@ -59,7 +60,8 @@ def session_start(paths: InstallPaths, host: str) -> str:
                  " disagree. Run `agents-inc repair --source <agents-inc checkout>`.")
     if "WB_SANDBOX_EXCLUDE_MISSING" in report.warnings:
         text += (' WB_SANDBOX_EXCLUDE_MISSING: a sandboxed Bash cannot start a dispatch. Ask the operator once, before the'
-                 ' first dispatch, to add "agents-inc *" to sandbox.excludedCommands in ~/.claude/settings.json.')
+                 ' first dispatch, to run `agents-inc repair --yes`, which adds "agents-inc dispatch *" and the other narrow entries to'
+                 ' sandbox.excludedCommands in ~/.claude/settings.json.')
     from .update_check import notice  # at most one PyPI request a day; silent on any failure
     update = notice(paths.state)
     if update: text += " " + update + " Tell the operator once; do not update without their go-ahead."
@@ -110,8 +112,13 @@ _WRAP_OPT_ARG = frozenset({"-u", "-n", "-C", "-P", "-S", "-I", "-a", "-g", "-s",
 _WRAPPERS = frozenset({"env", "exec", "command", "nohup", "time", "nice", "xargs"})
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-# Command heads that run or re-evaluate what follows; shlex cannot see through them, so they fail closed.
-_HIDING_HEADS = frozenset({"{", "}", "if", "then", "do", "else", "elif", "while", "until", "eval", "alias", "source", "."})
+# Grammar keywords: the command after one is judged as a normal command (#152 F1, F2).
+_KEYWORD_HEADS = frozenset({"{", "}", "if", "then", "do", "else", "elif", "while", "until"})
+# Heads that load or rename what follows; shlex cannot see through them, so they fail closed.
+_HIDING_HEADS = frozenset({"alias", "source", "."})
+# Redirection operators: the next word is a file (or fd) operand, never a command word, and the command goes on
+# after it (#152 B7, B8; a `> $D/out.json` target was read as an expanded command head). `<<` takes a delimiter word.
+_REDIRECTS = frozenset({">", ">>", "<", ">|", "&>", "&>>", ">&", "<&", "<>", "<<", "<<-", "<<<"})
 
 def _unquote(text: str) -> str:
     """Drop quote chars and backslashes so a quoted launcher word ('agents-inc') still matches the dispatch regex."""
@@ -162,16 +169,18 @@ def _parse(s: str, i: int, mode: str):
     and nested substitutions with quote-aware closing. mode is "" (top level), "paren" (after `$(`) or "tick" (after a
     backtick). Raises ValueError on an unterminated quote. A heuristic, not a full shell grammar."""
     cmds, ops, subs, cur = [], [], [], []
-    word, depth, pending, delim, n = None, 0, [], None, len(s)
+    word, depth, pending, delim, target, n = None, 0, [], None, False, len(s)
     def end_word():
-        nonlocal word, delim
+        nonlocal word, delim, target
         if word is None: return
-        cur.append(word)
-        if delim is not None: pending.append((word.text, delim, word.quoted)); delim = None
+        if target:  # a redirection operand or heredoc delimiter: data, not a word of the command
+            target = False
+            if delim is not None: pending.append((word.text, delim, word.quoted)); delim = None
+        else: cur.append(word)
         word = None
     def end_cmd():
-        nonlocal cur
-        end_word()
+        nonlocal cur, target
+        end_word(); target = False
         if cur: cmds.append(cur)
         cur = []
     while i < n:
@@ -193,8 +202,13 @@ def _parse(s: str, i: int, mode: str):
             while j < n and s[j] in _OPERATOR_CHARS: j += 1
             op = s[i:j]
             if op == "<<" and s[j:j + 1] == "-": op, j = "<<-", j + 1
+            if op in _REDIRECTS:
+                # `2>`: an unquoted all-digit word glued to the operator is its fd number, not a command word.
+                if word is not None and word.text.isdigit() and word.prefix == word.text: word = None
+                end_word(); ops.append(op); i = j; target = True
+                if op in ("<<", "<<-"): delim = op == "<<-"
+                continue
             end_cmd(); ops.append(op); i = j
-            if op in ("<<", "<<-"): delim = op == "<<-"
         else:
             if word is None: word = _Word()
             if c == "\\":
@@ -236,6 +250,19 @@ def _words_dispatch(words: list) -> bool:
     return (len(words) >= 2 and os.path.basename(words[0].text) == "agents-inc"
             and words[1].text in ("dispatch", "run", "luna"))
 
+def _script_runs_dispatch(script: str) -> str:
+    """Judge a script string run by eval or sh -c: "" when it only mentions agents-inc, else the offending element.
+    Any executed dispatch/run/luna inside denies, compound or not (D72). An unparsable string falls back to the
+    raw-substring rule."""
+    script = _unquote(script)
+    try:
+        level, _ = _parse(script, 0, "")
+    except ValueError:
+        return "unparsable script string" if COMPOUND_DISPATCH_RE.search(script) else ""
+    found, ran, _ = _judge(level, True)
+    if found: return found
+    return "executed dispatch in script string" if ran else ""
+
 def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
     """(offending element or "", an agents-inc dispatch runs at this level or below, env prefix on it)."""
     cmds, _ops, subs = level
@@ -243,10 +270,15 @@ def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
     for words in cmds:
         rest, skipped = list(words), 0
         while rest and rest[0].assign: rest.pop(0); skipped += 1
+        while rest and rest[0].text in _KEYWORD_HEADS: rest.pop(0)
         if not rest: continue
         if could_hide:
             if rest[0].expands or "\n" in rest[0].text: return f"expanded command word {rest[0].text!r}", False, False
             if rest[0].text in _HIDING_HEADS: return f"shell keyword {rest[0].text}", False, False
+            if rest[0].text == "eval":
+                if any(w.expands for w in rest[1:]): return "eval string", False, False
+                inner = _script_runs_dispatch(" ".join(w.text for w in rest[1:]))
+                if inner: return "eval string", False, False
         wrapped, name = rest, os.path.basename(rest[0].text)
         while name in _WRAPPERS:  # the wrapped command is the first word after the wrapper's own options
             k = 1
@@ -259,8 +291,12 @@ def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
             if not wrapped: break
             if _words_dispatch(wrapped): return f"{os.path.basename(rest[0].text)} wrapper", False, False
             name = os.path.basename(wrapped[0].text)
-        if wrapped and name in _SHELLS and any(re.fullmatch(r"-[a-z]*c[a-z]*", w.text) for w in wrapped[1:]) \
-                and any(COMPOUND_DISPATCH_RE.search(_unquote(w.text)) for w in wrapped[1:]): return f"{name} -c string", False, False
+        if wrapped and name in _SHELLS:
+            c_at = next((k for k, w in enumerate(wrapped) if k and re.fullmatch(r"-[a-z]*c[a-z]*", w.text)), None)
+            if c_at is not None and c_at + 1 < len(wrapped):  # words after the script are positional parameters, not code
+                script = wrapped[c_at + 1]
+                if script.expands and "agents-inc" in "".join(w.text for w in wrapped): return f"{name} -c string", False, False
+                if _script_runs_dispatch(script.text): return f"{name} -c string", False, False
         if _words_dispatch(rest):
             dispatch = True; env_prefix = env_prefix or bool(skipped)
     for sub in subs:
@@ -282,7 +318,10 @@ def _dispatch_shape(command: str) -> str:
         return next((m for m in COMPOUND_MARKERS if m in command), "")
     # Fail closed on shapes that can hide a launcher, but only when the call could involve agents-inc at all.
     flat = re.sub(r"\\\n", "", command)
-    could_hide = "agents-inc" in flat or "agents-inc" in re.sub(r"\$\{[^}]*\}|[\\'\"`]", "", flat)
+    # A mention followed by `/` is a directory in a path (a cwd, a repo checkout), never the launcher name, so it alone
+    # does not make the call suspect; `agents-inc` at a word end (bin/agents-inc, X=agents-inc;) still does.
+    def mentions(text: str) -> bool: return bool(re.search(r"agents-inc(?!/)", text))
+    could_hide = mentions(flat) or mentions(re.sub(r"\$\{[^}]*\}|[\\'\"`]", "", flat))
     found, dispatch, env_prefix = _judge(level, could_hide)
     if found: return found
     if not dispatch: return ""
@@ -381,7 +420,7 @@ def gate_notice(paths: InstallPaths) -> str:
     mode, source = agent_gate_mode(paths)
     lines = [f"agents-inc added hooks to {paths.home / '.claude/settings.json'}: SessionStart session-start; PreToolUse agent-nudge "
              "(Agent|Task, dispatch-shaped Bash, DelegateAgent); PostToolUse agent-done; UserPromptSubmit at_route; "
-             'sandbox.excludedCommands "agents-inc *" (dispatch runs outside the Bash sandbox; each delegate still gets '
+             'sandbox.excludedCommands "agents-inc dispatch|run|repair|install *" (these run outside the Bash sandbox; each delegate still gets '
              "its own sandbox-exec, #94).",
              f"agent gate: {mode} ({source}). enforce blocks Agent/Task calls except foreground "
              f"{', '.join(sorted(GATE_ALLOW))}."]

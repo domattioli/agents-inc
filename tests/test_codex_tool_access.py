@@ -122,7 +122,8 @@ class RungArgvTest(unittest.TestCase):
         resume = runtime.build_codex_resume_argv(EXE, "019a0000-0000-7000-8000-000000000000", "hi", "luna", "medium",
                                                  Path("/w"), EFF, MAP, host_tools=True)
         for setting in ("include_permissions_instructions=false", "include_collaboration_mode_instructions=false",
-                        "skills.include_instructions=false", "project_doc_max_bytes=0"):
+                        "skills.include_instructions=false", "project_doc_max_bytes=0",
+                        "include_environment_context=false"):  # the <filesystem> permission note (2026-11-11)
             self.assertIn(setting, argv)
             self.assertIn(setting, resume)
             self.assertNotIn(setting, _argv("luna"))

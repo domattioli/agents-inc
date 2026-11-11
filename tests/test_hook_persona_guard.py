@@ -79,6 +79,12 @@ class PersonaDenyTest(_Home):
         result, _ = self.run_hook("agent-nudge", data)
         self.assertNotEqual(self.decision(result), "deny")
 
+    def test_the_native_relay_type_may_name_any_persona(self):
+        data = payload("Astra analyze via agents-inc")
+        data["tool_input"]["subagent_type"] = "agents-inc:relay"
+        result, _ = self.run_hook("agent-nudge", data)
+        self.assertNotEqual(self.decision(result), "deny")
+
     def test_spike_and_lookalike_types_get_the_persona_check(self):
         for subagent in ("luna-brain:luna", "x-agents-inc:luna"):
             with self.subTest(subagent=subagent):

@@ -49,7 +49,7 @@ class DoctorWarningsTest(unittest.TestCase):
         (self.codex_home / "models_cache.json").write_text(json.dumps(cache))
         self.models = catalog.load(self.codex_home / "models_cache.json")
         self.drift = f"MODEL_DRIFT sol: pinned {MODEL_ALIASES['sol']}, newest gpt-99-sol"
-        args = argparse.Namespace(source=str(self.source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False)
+        args = argparse.Namespace(source=str(self.source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False, yes=True)
         with mock.patch.object(cli, "_paths", return_value=self.paths):
             self.assertEqual(cli.install(args), 0)
 
@@ -104,6 +104,31 @@ class DoctorWarningsTest(unittest.TestCase):
         self.assertIn("INSTALL_STALE", report.warnings)
         self.assertEqual(report.codes, ())
 
+    def _cli_dispatch(self, *extra):
+        from agents_inc.install import dispatch
+        err = io.StringIO()
+        with mock.patch.object(cli, "_paths", return_value=self.paths), mock.patch.object(dispatch, "run", return_value=0) as run, \
+             contextlib.redirect_stderr(err):
+            code = cli.main(["dispatch", "--slots", "s.json", "--model", "haiku", *extra])
+        return code, run, err.getvalue()
+
+    def test_stale_install_refuses_dispatch_before_launch(self):
+        (self.source / "agents_inc" / "extra.txt").write_text("new")
+        code, run, err = self._cli_dispatch()
+        self.assertEqual(code, 1)
+        run.assert_not_called()
+        self.assertEqual(len(err.strip().splitlines()), 1)
+        self.assertIn(f"agents-inc repair --source {self.source.resolve()}", err)
+
+    def test_stale_install_still_renders_dry_run(self):
+        (self.source / "agents_inc" / "extra.txt").write_text("new")
+        code, run, _ = self._cli_dispatch("--dry-run")
+        self.assertEqual(code, 0); run.assert_called_once()
+
+    def test_fresh_install_dispatches(self):
+        code, run, err = self._cli_dispatch()
+        self.assertEqual(code, 0); run.assert_called_once(); self.assertNotIn("INSTALL_STALE", err)
+
     def test_install_stale_silent_without_record(self):
         (self.paths.state / "source-checkout").unlink()
         self.assertNotIn("INSTALL_STALE", check_install(self.paths, models=self.models, **HOST).warnings)
@@ -148,6 +173,10 @@ class SandboxExclusionTest(DoctorWarningsTest):
     def test_present_exclusion_is_silent(self):
         self._settings({"sandbox": {"excludedCommands": ["agents-inc *"]}})
         self.assertNotIn("WB_SANDBOX_EXCLUDE_MISSING", check_install(self.paths, models=self.models, **HOST).warnings)
+        self._settings({"sandbox": {"excludedCommands": ["agents-inc dispatch *"]}})  # H: the narrow form counts
+        self.assertNotIn("WB_SANDBOX_EXCLUDE_MISSING", check_install(self.paths, models=self.models, **HOST).warnings)
+        self._settings({"sandbox": {"excludedCommands": ["agents-inc doctor *"]}})  # a non-dispatch entry does not
+        self.assertIn("WB_SANDBOX_EXCLUDE_MISSING", check_install(self.paths, models=self.models, **HOST).warnings)
 
     def test_no_settings_file_is_silent(self):
         (self.home / ".claude" / "settings.json").unlink(missing_ok=True)
