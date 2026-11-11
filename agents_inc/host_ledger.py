@@ -12,11 +12,13 @@ import json
 import sys
 from pathlib import Path
 
-from agents_inc import ledger
+from agents_inc import ledger, native_names
 
 _MODELS_PATH = Path(__file__).resolve().parent / "models.json"
 _TASK_CAP = 80
-NATIVE_LUNA_TYPES = frozenset({"agents-inc:luna", "agents-inc:gemini-flash"})  # same names as install.hook.NATIVE_TYPES; this module stays import-light
+# Every guest agent type, from the one nickname list install.hook.NATIVE_TYPES also reads (native_names is json and
+# pathlib only, so this module stays import-light). The relay type is not here: its call is an ordinary host-hook row.
+NATIVE_LUNA_TYPES = native_names.guest_types()
 _VERDICT_MSG = ("agents-inc ledger append: --verdict pass|fail is required; "
                 "a delegate self-report is not a verdict")
 

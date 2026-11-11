@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib, json, os, re, sys, tempfile, time
 from datetime import datetime
 from .. import role_defaults
+from .. import native_names
 from .doctor import check_install
 from .paths import InstallPaths
 
@@ -37,9 +38,9 @@ GATE_ALLOW = frozenset({"Explore", "Plan", "claude-code-guide", "statusline-setu
 # only holds `mcp__agents-inc__run`, so a description such as "Astra analyze" names the model it really runs. Exact names,
 # not a prefix: a lookalike such as x-agents-inc:luna is still an outside spawn. The spike's luna-brain:* types are
 # no longer exempt; the spike mod stays installable but its types now meet the gate like any other.
-# Spec 038 slice 2 adds the first free guest agent type, agents-inc:gemini-flash (D76, D77); T043 derives this list
-# from the native registry instead of a literal.
-NATIVE_TYPES = frozenset({"agents-inc:luna", "agents-inc:relay", "agents-inc:gemini-flash"})
+# Spec 038 T043 (FR-017): every guest agent type (D76, D77) comes from the one nickname list the native registry
+# reads (agents_inc/native_names.py), plus the relay type; no hand-kept literal.
+NATIVE_TYPES = native_names.guest_types() | {native_names.RELAY_TYPE}
 GATE_DENY_REASON = ("agents-inc agent gate: this Agent/Task call is blocked (subagent_type: {subagent}; background: {background}). "
                     "Agent/Task spawns Claude subagents outside agents-inc routing, ledger, and verification. Allowed here: {allowed} "
                     "(foreground only). For every other delegation run: agents-inc dispatch --slots <json> --model <opus|sonnet|haiku|fable>. "

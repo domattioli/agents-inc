@@ -15,6 +15,7 @@ import sys
 import time
 from pathlib import Path
 
+from .. import native_names
 from . import luna_native, native_http
 from .free_launch import FREE_MODELS
 from .hook import write_setting
@@ -29,23 +30,14 @@ BUILT_PROVIDERS = tuple(native_http.HOSTS)
 def _free_nicknames() -> dict[str, dict]:
     """Nickname -> provider and slug for each models.json entry with a `nickname` whose slug is in FREE_MODELS and whose
     provider has an adapter. One nickname names one slug, so one vendor (P7)."""
-    try:
-        models = json.loads(Path(__file__).resolve().parents[1].joinpath("models.json").read_text(encoding="utf-8"))["models"]
-    except (OSError, ValueError, KeyError):
-        return {}
-    out = {}
-    for slug, spec in models.items():
-        nick = spec.get("nickname") if isinstance(spec, dict) else None
-        if isinstance(nick, str) and slug in FREE_MODELS and FREE_MODELS[slug].provider in BUILT_PROVIDERS:
-            if nick in out: raise ValueError(f"models.json: nickname {nick!r} names two slugs")
-            out[nick] = {"provider": FREE_MODELS[slug].provider, "slug": slug}
-    return out
+    return {nick: {"provider": FREE_MODELS[slug].provider, "slug": slug} for nick, slug in native_names.free_nicknames().items()
+            if slug in FREE_MODELS and FREE_MODELS[slug].provider in BUILT_PROVIDERS}
 
 
 # T042: the Codex nicknames, reached through the operator's Codex CLI login (D69: no authorization record). The slug
 # comes from the roster at run time (load_model_map). sol, terra and astra start switched off: they spend more of the
 # operator's paid Codex subscription than luna; `agents-inc native on <nick>` turns one on.
-CODEX_NICKS = ("luna", "sol", "terra", "astra")
+CODEX_NICKS = native_names.CODEX_NICKS
 DEFAULT_OFF = frozenset({"sol", "terra", "astra"})
 # Nickname -> provider and slug.
 NATIVE_MODELS: dict[str, dict] = {**{n: {"provider": "codex", "slug": None} for n in CODEX_NICKS}, **_free_nicknames()}
