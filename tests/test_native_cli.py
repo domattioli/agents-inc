@@ -54,7 +54,8 @@ class NativeCli(unittest.TestCase):
             code, out, _ = run(["native", "status", "--json"])
         self.assertEqual(code, 0)
         names = [m["nickname"] for m in json.loads(out)["models"]]
-        self.assertEqual(names, ["luna", "gemini-flash"])
+        self.assertEqual(names[0], "luna")
+        self.assertIn("gemini-flash", names); self.assertIn("ministral", names); self.assertIn("gemma-31b", names)
 
     def test_luna_status_all_is_the_native_status_the_mod_reads(self):
         with mock.patch("urllib.request.urlopen", side_effect=AssertionError("network")):
