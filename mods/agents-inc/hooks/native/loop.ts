@@ -124,7 +124,7 @@ type Cli = {
   ui: { log: (message: string, options: { to: 'debug' }) => unknown }
   session: { id: () => unknown }
 }
-export type Status = { offered: boolean; slug: string; reason?: string }
+export type Status = { offered: boolean; slug: string; reason?: string; write_dirs?: string[] }
 type Ran = { outcome: 'done' | 'failed' | 'quota-paused' | 'aborted'; usage: Usage }
 // Per subagent: the thread file it keeps, whether a run has used it, and how many api messages the model has seen.
 type AgentState = { n: number; used: boolean; sent: number }
@@ -319,6 +319,8 @@ type LoopState = {
   sessionId: string
   slug: string
   offered: boolean // what the adapter's status verb said at session start
+  writeDirs: string[] // write directories from status at session start (key-store adapters)
+  dirs: Map<string, string[]> // per agent: write directories the begin call returned (authorization can come later)
   begun: Map<string, Promise<void>> // per agent: the begin call
   ran: Map<string, Ran> // per agent: what its steps cost and how the last one ended
   runTimeoutFlag: boolean // false once the installed runtime refused the timeout flag
@@ -331,7 +333,7 @@ function stateFor(adapter: Adapter): LoopState {
     S = {
       agent, types: [`agents-inc:${agent}`], log: `agents-inc ${agent}:`, quota: `${agent} quota-paused`,
       ids: new Set(), agents: new Map(), threadTotals: new Map(), cwd: '', sessionId: 'session', slug: agent,
-      offered: false, begun: new Map(), ran: new Map(), runTimeoutFlag: true,
+      offered: false, writeDirs: [], dirs: new Map(), begun: new Map(), ran: new Map(), runTimeoutFlag: true,
     }
     states.set(adapter, S)
   }
@@ -373,7 +375,15 @@ function ensureBegin($: Cli, adapter: Adapter, id: string, task: string): Promis
   let p = S.begun.get(id)
   if (!p) {
     p = verbCli($, adapter, ['begin', '--session', S.sessionId, '--agent', id, '--cwd', S.cwd || '.', '--task', task.slice(0, 200)])
-      .then(r => { if (r.code !== 0) $.ui.log(`${S.log} begin exited ${r.code}: ${failureText(r.err)}`, { to: 'debug' }) })
+      .then(r => {
+        if (r.code !== 0) $.ui.log(`${S.log} begin exited ${r.code}: ${failureText(r.err)}`, { to: 'debug' })
+        try {
+          const dirs = (JSON.parse(r.out) as { write_dirs?: unknown }).write_dirs
+          if (r.code === 0 && Array.isArray(dirs)) S.dirs.set(id, dirs.filter((d): d is string => typeof d === 'string'))
+        } catch {
+          // no readable begin answer: the status dirs stay in force
+        }
+      })
       .catch(err => { $.ui.log(`${S.log} begin failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' }) })
     S.begun.set(id, p)
   }
@@ -402,6 +412,7 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
     return
   }
   S.slug = status.slug
+  S.writeDirs = Array.isArray(status.write_dirs) ? status.write_dirs.filter((d): d is string => typeof d === 'string') : []
   if (!status.offered) {
     $.ui.log(`${S.log} not registered: ${status.reason ?? 'not offered'}`, { to: 'debug' })
     return
@@ -424,6 +435,35 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
     $.ui.log(`${S.log} not registered: $.agent.register failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
   }
 }
+
+const FILE_WRITERS: Readonly<Record<string, string>> = { Write: 'file_path', Edit: 'file_path', NotebookEdit: 'notebook_path' }
+// Lexical path resolution against the agent cwd (the mod has no filesystem stat, so symlinks are not followed).
+function resolvePath(raw: string, cwd: string): string {
+  const out: string[] = []
+  for (const part of (raw.startsWith('/') ? raw : `${cwd || '.'}/${raw}`).split('/')) {
+    if (part === '..') out.pop()
+    else if (part !== '' && part !== '.') out.push(part)
+  }
+  return `/${out.join('/')}`
+}
+// D76 condition 3: the file-writing tool calls in a reply whose target lies outside every write directory (a missing
+// path counts as outside). Bash is not checked.
+export function outsideWrites(reply: Reply | string | null, cwd: string, dirs: readonly string[]): { name: string; path: string }[] {
+  if (reply === null || typeof reply === 'string') return []
+  const roots = dirs.map(d => resolvePath(d, cwd))
+  const bad: { name: string; path: string }[] = []
+  for (const t of reply.tools) {
+    const field = FILE_WRITERS[t.name]
+    if (field === undefined) continue
+    const raw = (t.input as Record<string, unknown> | null)?.[field]
+    const path = typeof raw === 'string' && raw !== '' ? resolvePath(raw, cwd) : ''
+    if (path === '' || !roots.some(r => path === r || path.startsWith(`${r}/`))) bad.push({ name: t.name, path: typeof raw === 'string' ? raw : '(none)' })
+  }
+  return bad
+}
+const writeRefusal = (bad: readonly { name: string; path: string }[], dirs: readonly string[]) =>
+  `Tool refused: ${bad.map(b => `${b.name} ${b.path}`).join(', ')} is outside the directories this agent may write in (${dirs.join(', ') || 'none recorded'}). ` +
+  'Nothing was written. Write only inside those directories, or report without writing.'
 
 const RETRIED = ' (after one retry on a fresh thread)'
 
@@ -704,6 +744,23 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
       chars += prompt.length
       const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
+    }
+    // D76 condition 3: a free model's file-writing call outside the recorded write directories never reaches the host.
+    // The model reads the refusal and gets one more try; a second violation is dropped and the step reports the refusal.
+    if (!run.failed && adapter.auth === 'key-store') {
+      const dirs = S.dirs.get(id) ?? S.writeDirs
+      const bad = outsideWrites(run.reply, S.cwd, dirs)
+      if (bad.length > 0) {
+        prompt = more(`${writeRefusal(bad, dirs)} Reply with exactly one JSON object.\n`)
+        chars += prompt.length
+        const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
+        if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
+        const still = outsideWrites(run.reply, S.cwd, dirs)
+        if (still.length > 0 && run.reply !== null && typeof run.reply !== 'string') {
+          const kept = run.reply.tools.filter(t => outsideWrites({ say: '', tools: [t] }, S.cwd, dirs).length === 0)
+          run = { ...run, reply: { say: kept.length > 0 ? run.reply.say : writeRefusal(still, dirs), tools: kept } }
+        }
+      }
     }
     // An aborted step is not marked used: the thread may be half-written, so the next step starts it over.
     const wasAborted = next.signal.aborted

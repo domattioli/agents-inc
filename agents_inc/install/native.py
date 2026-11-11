@@ -158,7 +158,8 @@ def status_one(paths: InstallPaths, nick: str, cwd: str = ".") -> dict:
     switch = read_switch(paths, nick)
     has_key = native_http.read_key(paths.home, entry["provider"]) is not None
     probe, probe_reason = probe_state(paths, nick)
-    authorized = authorization(paths, entry["provider"], cwd) is not None
+    record = authorization(paths, entry["provider"], cwd)
+    authorized = record is not None
     if switch == "off": reason = f"switched off (agents-inc native on {nick})"
     elif not has_key: reason = f"no {entry['provider']} key in the key store (WB_NATIVE_KEY_MISSING)"
     elif probe != "pass": reason = probe_reason
@@ -166,6 +167,7 @@ def status_one(paths: InstallPaths, nick: str, cwd: str = ".") -> dict:
     return {"nickname": nick, "provider": entry["provider"], "slug": entry["slug"], "kind": "stateless",
             "offered": switch == "on" and has_key and probe == "pass", "reason": reason, "switch": switch,
             "key": "present" if has_key else "missing", "probe": probe, "authorized": authorized,
+            "write_dirs": list(record.get("write_dirs") or []) if record else [],
             "max_input_chars": entry.get("max_input_chars")}
 
 
@@ -186,9 +188,11 @@ def doctor_lines(paths: InstallPaths) -> list[str]:
 def begin(paths, nick, session, agent, cwd, task) -> tuple[int, dict]:
     entry = model(nick)
     if nick == "luna": return 0, luna_native.begin(paths, session, agent, cwd, task)
-    if authorization(paths, entry["provider"], cwd) is None: return 3, needs_authorization(nick, entry["provider"], cwd)
-    return 0, luna_native.begin(paths, session, agent, cwd, task, slug=entry["slug"], source=f"native-{entry['provider']}",
-                                root=f"native-runs/{nick}")
+    record = authorization(paths, entry["provider"], cwd)
+    if record is None: return 3, needs_authorization(nick, entry["provider"], cwd)
+    result = luna_native.begin(paths, session, agent, cwd, task, slug=entry["slug"], source=f"native-{entry['provider']}",
+                               root=f"native-runs/{nick}")
+    return 0, {**result, "write_dirs": list(record.get("write_dirs") or [])}
 
 
 def end(paths, nick, session, agent, outcome, cwd, usage) -> dict:

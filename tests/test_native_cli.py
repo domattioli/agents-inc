@@ -111,6 +111,17 @@ class NativeCli(unittest.TestCase):
         self.assertIn(json.loads(out)["snapshot"], ("captured", "no-repo"))
         self.assertTrue(self.status()["authorized"])
 
+    def test_status_and_begin_carry_write_dirs(self):
+        self.key(); self.probe()
+        self.assertEqual(self.status()["write_dirs"], [])
+        sub = self.ws / "out"
+        native.allow(self.paths, "gemini", str(self.ws), ["out"])
+        want = [os.path.realpath(sub)]
+        self.assertEqual(self.status()["write_dirs"], want)
+        code, out, _ = run(["native", "--model", "gemini-flash", "begin", "--session", "s1", "--agent", "a1", "--cwd", str(self.ws)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["write_dirs"], want)
+
     def test_begin_by_provider(self):
         native.allow(self.paths, "gemini", str(self.ws))
         code, out, _ = run(["native", "--provider", "gemini", "begin", "--session", "s1", "--agent", "a1", "--cwd", str(self.ws)])

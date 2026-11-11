@@ -2,7 +2,7 @@
 // The hooks are captured from registerLoop through a stand-in `on` and driven with a stand-in `$`.
 import { expect, test } from 'claude-code/testing'
 import type { Adapter } from './adapter'
-import { ranTool, registerAgent, registerLoop, registerLoops, skipsTools } from './loop'
+import { outsideWrites, ranTool, registerAgent, registerLoop, registerLoops, skipsTools } from './loop'
 
 type Run = { out?: string; code?: number; hang?: boolean }
 type Chunk = { kind: string; [k: string]: unknown }
@@ -27,7 +27,7 @@ const fakeAdapter = (over: Partial<Adapter> = {}): Adapter => ({
   ...over,
 })
 
-function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?: 'throw' | unknown[]; timeout?: boolean; also?: Adapter[] } = {}) {
+function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?: 'throw' | unknown[]; timeout?: boolean; also?: Adapter[]; writeDirs?: string[]; beginDirs?: string[]; tools?: boolean; messages?: unknown[] } = {}) {
   const hooks: Record<string, (...a: unknown[]) => unknown> = {}
   const on = (event: string, a: unknown, b?: unknown) => {
     hooks[event] = (b ?? a) as (...a: unknown[]) => unknown
@@ -44,13 +44,13 @@ function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?:
       register: async (a: unknown) => { registered.push(a) },
     },
     session: {
-      messages: async () => [{ role: 'user', content: [{ type: 'text', text: o.task ?? 'Count the lines.' }] }],
+      messages: async () => [{ role: 'user', content: [{ type: 'text', text: o.task ?? 'Count the lines.' }] }, ...(o.messages ?? [])],
       id: async () => 's1',
     },
     // Heartbeats never fire; the step limit fires at once when the test asks for a timeout.
     clock: { now: async () => 0, sleep: (ms: number) => (o.timeout && ms >= 60_000 ? Promise.resolve() : new Promise<never>(() => {})) },
     env: { get: async () => undefined },
-    tool: { list: async () => [{ name: 'Bash', description: 'Runs a command.' }, { name: 'SubagentHandback', description: 'Hand back.' }] },
+    tool: { list: async () => [{ name: 'Bash', description: 'Runs a command.' }, { name: 'Write', description: 'Writes a file.' }, { name: 'Edit', description: 'Edits a file.' }, { name: 'SubagentHandback', description: 'Hand back.' }] },
     prompt: { compose: async () => ({ sections: [{ text: 'System.' }] }) },
     fs: { read: async () => '', write: async () => undefined },
     plugin: { root: '/p' },
@@ -59,7 +59,7 @@ function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?:
       spawn: (a: { argv: string[]; input?: string }) => (async function* () {
         if (a.argv[0] === 'agents-inc') {
           verbs.push(a.argv)
-          const out = a.argv[2] === 'status' ? JSON.stringify({ offered: true, slug: 'fake-1' }) : JSON.stringify({ snapshot: 'unchanged', changed: [] })
+          const out = a.argv[2] === 'status' ? JSON.stringify({ offered: true, slug: 'fake-1', write_dirs: o.writeDirs, tools: o.tools }) : a.argv[2] === 'begin' ? JSON.stringify({ snapshot: 'captured', write_dirs: o.beginDirs }) : JSON.stringify({ snapshot: 'unchanged', changed: [] })
           yield { stream: 'stdout' as const, text: out }
           return { code: 0 }
         }
@@ -263,4 +263,57 @@ test('one set of hooks serves several adapters: each agent runs on its own adapt
   const offer = h.hooks['agent.offer'] as (...x: unknown[]) => unknown
   expect(offer(h.$, { agent: 'general-purpose' }, () => 'next')).toBe('next')
   expect(offer(h.$, { agent: 'agents-inc:other' }, () => 'next')).toBe('next')
+})
+
+const WRITE = (path: string, tool = 'Write') => JSON.stringify({ say: '', tools: [{ name: tool, input: tool === 'NotebookEdit' ? { notebook_path: path } : { file_path: path, content: 'x' } }] })
+const nameOf = (r: Record<string, unknown>) => (r.toolUses as { name: string }[])[0].name
+
+test('a key-store agent: a write inside the recorded directories passes to the host', async () => {
+  const a = fakeAdapter({ auth: 'key-store' })
+  const h = harness(a, { replies: [{ out: WRITE('/w/.scratch/out.txt') }], writeDirs: ['/w/.scratch'] })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('w1')
+  const { result } = await h.step('w1')
+  expect(h.runs.length).toBe(1)
+  expect(result.toolUses).toEqual([{ name: 'Write', input: { file_path: '/w/.scratch/out.txt', content: 'x' } }])
+})
+
+test('a key-store agent: a write outside is refused, the model reads the refusal, a second violation is dropped', async () => {
+  const a = fakeAdapter({ auth: 'key-store' })
+  const h = harness(a, { replies: [{ out: WRITE('/elsewhere/passwd') }, { out: WRITE('.scratch/../src/x.py', 'Edit') }], writeDirs: ['/w/.scratch'] })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('w2')
+  const { result } = await h.step('w2')
+  expect(h.runs.length).toBe(2)
+  expect(h.runs[1].input).toContain('Tool refused: Write /elsewhere/passwd is outside the directories this agent may write in (/w/.scratch)')
+  expect(nameOf(result)).toBe('SubagentHandback')
+  expect(message(result)).toContain('Tool refused: Edit .scratch/../src/x.py')
+})
+
+test('a key-store agent: the begin directories replace the status directories (authorization after session start)', async () => {
+  const a = fakeAdapter({ auth: 'key-store' })
+  const h = harness(a, { replies: [{ out: WRITE('/w/src/a.py') }], writeDirs: [], beginDirs: ['/w/src'] })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('w3')
+  const { result } = await h.step('w3')
+  expect(h.runs.length).toBe(1)
+  expect(nameOf(result)).toBe('Write')
+})
+
+test('a cli-login agent (luna) is not path-checked', async () => {
+  const a = fakeAdapter({ auth: 'cli-login' })
+  const h = harness(a, { replies: [{ out: WRITE('/elsewhere/passwd') }] })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('w4')
+  const { result } = await h.step('w4')
+  expect(h.runs.length).toBe(1)
+  expect(nameOf(result)).toBe('Write')
+})
+
+test('outsideWrites resolves relative paths against the cwd and treats a missing path as outside', () => {
+  const r = (t: unknown) => ({ say: '', tools: [t as never] })
+  expect(outsideWrites(r({ name: 'Write', input: { file_path: 'a.txt' } }), '/w/.scratch', ['/w/.scratch'])).toEqual([])
+  expect(outsideWrites(r({ name: 'Write', input: { file_path: '/w/.scratch2/a' } }), '/w', ['/w/.scratch']).length).toBe(1)
+  expect(outsideWrites(r({ name: 'Write', input: {} }), '/w', ['/w']).length).toBe(1)
+  expect(outsideWrites(r({ name: 'Bash', input: { command: 'rm -rf x' } }), '/w', [])).toEqual([])
 })
