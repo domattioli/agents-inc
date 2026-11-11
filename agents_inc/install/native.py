@@ -19,6 +19,7 @@ from . import luna_native, native_http
 from .free_launch import FREE_MODELS
 from .hook import write_setting
 from .paths import InstallPaths
+from .runtime import load_model_map
 
 FREE_PROVIDERS = ("gemini", "mistral", "openrouter")
 # Providers with a built adapter (native_http.HOSTS). Mistral and OpenRouter come in slice 3.
@@ -41,8 +42,13 @@ def _free_nicknames() -> dict[str, dict]:
     return out
 
 
-# Nickname -> provider and slug. luna's slug comes from the roster at run time.
-NATIVE_MODELS: dict[str, dict] = {"luna": {"provider": "codex", "slug": None}, **_free_nicknames()}
+# T042: the Codex nicknames, reached through the operator's Codex CLI login (D69: no authorization record). The slug
+# comes from the roster at run time (load_model_map). sol, terra and astra start switched off: they spend more of the
+# operator's paid Codex subscription than luna; `agents-inc native on <nick>` turns one on.
+CODEX_NICKS = ("luna", "sol", "terra", "astra")
+DEFAULT_OFF = frozenset({"sol", "terra", "astra"})
+# Nickname -> provider and slug.
+NATIVE_MODELS: dict[str, dict] = {**{n: {"provider": "codex", "slug": None} for n in CODEX_NICKS}, **_free_nicknames()}
 ALLOW_FILE = "native-allow.json"
 PROBE_FILE = "native-probes.json"
 PROBE_TTL_S = 7 * 86400
@@ -70,11 +76,13 @@ def _switch_key(nick: str) -> str: return f"native_type_{nick}"
 
 def read_switch(paths: InstallPaths, nick: str) -> str:
     if nick == "luna": return luna_native.read_switch(paths)
+    default = "off" if nick in DEFAULT_OFF else "on"
     try:
         data = json.loads(paths.settings.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return "on"
-    return "off" if isinstance(data, dict) and data.get(_switch_key(nick)) == "off" else "on"
+        return default
+    value = data.get(_switch_key(nick)) if isinstance(data, dict) else None
+    return value if value in SWITCH_MODES else default
 
 
 def write_switch(paths: InstallPaths, nick: str, mode: str) -> None:
@@ -155,6 +163,7 @@ def status_one(paths: InstallPaths, nick: str, cwd: str = ".") -> dict:
     if nick == "luna":
         report = luna_native.status(paths)
         return {**report, "nickname": nick, "provider": "codex", "kind": "thread"}
+    if entry["provider"] == "codex": return codex_status(paths, nick)
     switch = read_switch(paths, nick)
     has_key = native_http.read_key(paths.home, entry["provider"]) is not None
     probe, probe_reason = probe_state(paths, nick)
@@ -174,6 +183,21 @@ def status_one(paths: InstallPaths, nick: str, cwd: str = ".") -> dict:
             "max_input_chars": entry.get("max_input_chars")}
 
 
+def codex_slug(paths: InstallPaths, nick: str) -> str:
+    return load_model_map(roster=paths.roster, env={"HOME": str(paths.home)})[nick]
+
+
+def codex_status(paths: InstallPaths, nick: str) -> dict:
+    """sol, terra, astra: luna's readiness checks (files only) under the nickname's own switch and roster slug."""
+    slug = codex_slug(paths, nick)
+    switch, codex, catalog = read_switch(paths, nick), luna_native.codex_state(paths), luna_native.catalog_state(paths, slug)
+    if switch == "off": reason = f"switched off (agents-inc native on {nick})"
+    elif codex != "ready": reason = f"Codex {codex}"
+    else: reason = "ready" if catalog == "ok" else "ready; model catalog missing, steps fail until Codex has cached the model"
+    return {"nickname": nick, "provider": "codex", "kind": "thread", "slug": slug, "offered": switch == "on" and codex == "ready",
+            "reason": reason, "switch": switch, "codex": codex, "catalog": catalog}
+
+
 def status_all(paths: InstallPaths, cwd: str = ".") -> dict:
     return {"models": [status_one(paths, nick, cwd) for nick in NATIVE_MODELS]}
 
@@ -191,6 +215,9 @@ def doctor_lines(paths: InstallPaths) -> list[str]:
 def begin(paths, nick, session, agent, cwd, task) -> tuple[int, dict]:
     entry = model(nick)
     if nick == "luna": return 0, luna_native.begin(paths, session, agent, cwd, task)
+    if entry["provider"] == "codex":  # D69: the Codex CLI login is the authorization; no workspace record
+        return 0, luna_native.begin(paths, session, agent, cwd, task, slug=codex_slug(paths, nick), source="native-codex",
+                                    root=f"native-runs/{nick}")
     record = authorization(paths, entry["provider"], cwd)
     if record is None: return 3, needs_authorization(nick, entry["provider"], cwd)
     result = luna_native.begin(paths, session, agent, cwd, task, slug=entry["slug"], source=f"native-{entry['provider']}",
@@ -201,6 +228,8 @@ def begin(paths, nick, session, agent, cwd, task) -> tuple[int, dict]:
 def end(paths, nick, session, agent, outcome, cwd, usage) -> dict:
     entry = model(nick)
     if nick == "luna": return luna_native.end(paths, session, agent, outcome, cwd, usage)
+    if entry["provider"] == "codex":
+        return luna_native.end(paths, session, agent, outcome, cwd, usage, source="native-codex", root=f"native-runs/{nick}")
     return luna_native.end(paths, session, agent, outcome, cwd, usage, source=f"native-{entry['provider']}",
                            root=f"native-runs/{nick}")
 

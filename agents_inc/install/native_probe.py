@@ -60,7 +60,7 @@ def probe_one(paths: InstallPaths, nick: str, env: dict | None = None, now: floa
 
 def run(paths: InstallPaths, target: str | None, out=None, env: dict | None = None) -> int:
     out = out or sys.stdout
-    nicks = [n for n in native.NATIVE_MODELS if n != "luna"] if target in (None, "all") else [target]
+    nicks = [n for n, m in native.NATIVE_MODELS.items() if m["provider"] != "codex"] if target in (None, "all") else [target]
     code = 0
     for nick in nicks:
         try:

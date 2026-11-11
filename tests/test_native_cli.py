@@ -65,7 +65,7 @@ class NativeCli(unittest.TestCase):
         self.assertEqual(json.loads(out), json.loads(ref))
 
     def test_each_nickname_maps_to_one_free_model_and_one_provider(self):
-        roster = {n: m for n, m in native.NATIVE_MODELS.items() if n != "luna"}
+        roster = {n: m for n, m in native.NATIVE_MODELS.items() if n not in native.CODEX_NICKS}
         self.assertIn("gemini-flash", roster)
         self.assertEqual(roster["gemini-flash"]["provider"], "gemini")
         for nick, m in roster.items():
@@ -151,6 +151,45 @@ class NativeCli(unittest.TestCase):
 
     def test_allow_refuses_codex_and_unknown(self):
         self.assertEqual(run(["native", "allow", "codex", "--workspace", str(self.ws)])[0], 2)
+
+    def test_codex_nicknames_listed_off_by_default_with_roster_slug(self):
+        from agents_inc.install.runtime import load_model_map
+        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("network")), \
+             mock.patch("subprocess.Popen", side_effect=AssertionError("child")):
+            code, out, _ = run(["native", "status", "--json", "--cwd", str(self.ws)])
+        self.assertEqual(code, 0)
+        rows = {m["nickname"]: m for m in json.loads(out)["models"]}
+        slugs = load_model_map(roster=self.paths.roster, env={"HOME": str(self.home)})
+        for nick in ("sol", "terra", "astra"):
+            m = rows[nick]
+            self.assertEqual((m["provider"], m["kind"], m["slug"], m["switch"], m["offered"]),
+                             ("codex", "thread", slugs[nick], "off", False))
+            self.assertIn(f"agents-inc native on {nick}", m["reason"])
+            self.assertNotIn("authorized", m)  # D69: no workspace authorization record for Codex
+        self.assertEqual(rows["luna"]["switch"], "on")
+
+    def test_codex_nickname_switch_is_its_own(self):
+        self.assertEqual(run(["native", "on", "sol"])[1], "sol type: on\n")
+        self.assertEqual(native.read_switch(self.paths, "sol"), "on")
+        self.assertEqual(native.read_switch(self.paths, "terra"), "off")
+        self.assertEqual(native.read_switch(self.paths, "luna"), "on")
+        with mock.patch.object(native.luna_native, "codex_state", return_value="ready"):
+            self.assertTrue(native.status_one(self.paths, "sol")["offered"])
+            self.assertFalse(native.status_one(self.paths, "astra")["offered"])
+        run(["native", "off", "sol"])
+        self.assertEqual(native.read_switch(self.paths, "sol"), "off")
+
+    def test_codex_nickname_begin_end_need_no_authorization(self):
+        for verb, extra in (("begin", []), ("end", ["--outcome", "done"])):
+            code, out, _ = run(["native", "--model", "terra", verb, "--session", "s1", "--agent", "a1", "--cwd", str(self.ws), *extra])
+            self.assertEqual(code, 0, verb)
+            self.assertIn("snapshot", json.loads(out))
+        self.assertTrue((self.paths.state / "native-runs" / "terra" / "s1" / "a1").is_dir())
+
+    def test_codex_nickname_step_is_refused(self):
+        err = io.StringIO()
+        self.assertEqual(native.step(self.paths, "sol", str(self.ws), "x", 5, out=io.StringIO(), err=err), 2)
+        self.assertIn("thread model", err.getvalue())
 
     def test_luna_alias_output_unchanged(self):
         a = run(["luna", "status", "--json"])

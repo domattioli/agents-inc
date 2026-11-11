@@ -3,12 +3,13 @@
 // hook is its loop's (registerLoop). The set of adapters is fixed at load, because the engine binds hooks then.
 import type { Register } from 'claude-code'
 import type { Adapter } from './adapter'
-import { codexAdapter } from './codex'
+import { CODEX_ADAPTERS, codexAdapter } from './codex'
 import { HTTP_ADAPTERS } from './http'
 import { registerAgent, registerLoops, type Status } from './loop'
 
-// One adapter per free nickname in agents_inc/models.json (the roster): Gemini, Mistral, OpenRouter.
-export const ADAPTERS: readonly Adapter[] = [...HTTP_ADAPTERS]
+// Every guest type registered from the one status read: the Codex nicknames beyond luna (luna registers through its
+// own status verb, luna.ts) and one adapter per free nickname in agents_inc/models.json (Gemini, Mistral, OpenRouter).
+export const ADAPTERS: readonly Adapter[] = [...CODEX_ADAPTERS.filter(a => a !== codexAdapter), ...HTTP_ADAPTERS]
 
 type Spawn = { argv: string[]; cwd?: string }
 type Chunk = { stream: 'stdout' | 'stderr'; text: string }

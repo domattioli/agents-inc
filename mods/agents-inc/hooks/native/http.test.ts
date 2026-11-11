@@ -2,6 +2,7 @@
 import { expect, test } from 'claude-code/testing'
 import { classifyHttp, geminiFlash } from './http'
 import { ADAPTERS, readNativeStatus, registerNativeAgents } from './registry'
+import { CODEX_ADAPTERS, codexAdapter } from './codex'
 
 test('the gemini adapter is stateless, key-store, and steps through agents-inc native step', () => {
   expect(geminiFlash.kind).toBe('stateless')
@@ -21,6 +22,33 @@ test('mistral and openrouter adapters step through agents-inc native step under 
     expect(a?.argv({} as never, { thread: '/t', cwd: '/w', timeoutS: null })).toEqual(['agents-inc', 'native', 'step', '--model', nick, '--cwd', '/w'])
   }
   expect(new Set(ADAPTERS.map(a => a.nickname)).size).toBe(ADAPTERS.length)
+})
+
+test('sol, terra and astra are thread types through agents-inc run under their own name; luna is unchanged', () => {
+  expect(CODEX_ADAPTERS[0]).toBe(codexAdapter)
+  for (const nick of ['sol', 'terra', 'astra']) {
+    const a = ADAPTERS.find(x => x.nickname === nick)
+    expect(a?.provider).toBe('codex')
+    expect(a?.kind).toBe('thread')
+    expect(a?.auth).toBe('cli-login')
+    expect(a?.cli).toEqual(['agents-inc', 'native', '--model', nick])
+    expect(a?.argv({} as never, { thread: '/t', cwd: '/w', timeoutS: 30 })).toEqual(['agents-inc', 'run', '--model', nick, '--effort', 'low',
+      '--no-tools', '--host-tools', '--timeout', '30', '--cwd', '/w', '--thread', '/t'])
+    expect(a?.identity('slug-x')).toContain(`You are ${nick}`)
+    expect(a?.classify(124, '', 'why', 9)?.fail).toContain(`${nick} failed: timeout`)
+    expect(a?.classify(75, 'usage or rate limit', 'why', 9)?.fail).toContain(`${nick} quota-paused`)
+  }
+  expect(ADAPTERS.find(x => x.nickname === 'luna')).toBeUndefined()
+  expect(codexAdapter.cli).toEqual(['agents-inc', 'luna'])
+})
+
+test('a codex nickname switched off at status registers nothing; one switched on registers', async () => {
+  const f = fake$(JSON.stringify({ models: [
+    { nickname: 'sol', offered: false, slug: 'gpt-6.1-sol', reason: 'switched off' },
+    { nickname: 'terra', offered: true, slug: 'gpt-6.1-terra' },
+  ] }))
+  await registerNativeAgents(f.$ as never, { cwd: '/w' })
+  expect(f.registered).toMatchObject([{ name: 'terra' }])
 })
 
 test('exit codes map to fixed failure texts; only a timeout retries', () => {

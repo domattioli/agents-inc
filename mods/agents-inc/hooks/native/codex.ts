@@ -17,14 +17,20 @@ const ASKED_NOTE = 'Your previous attempt at this step asked a question and was 
   'Do not ask. Request the catalog tools the task needs in "tools" now.\n'
 
 // Per run (one `agents-inc run`): `agents-inc run --timeout` kills Codex's process group at the limit and exits 124.
+// Every Codex nickname shares this one variable: the engine takes only a literal name in $.env.get.
 const TIMEOUT_ENV = 'AGENTS_INC_LUNA_STEP_TIMEOUT_S'
-const timeoutText = (s: number) => `${NICK} failed: timeout: Codex sent no reply within ${s} s (limit ${TIMEOUT_ENV})`
+const timeoutFor = (nick: string) => (s: number) => `${nick} failed: timeout: Codex sent no reply within ${s} s (limit ${TIMEOUT_ENV})`
+const timeoutText = timeoutFor(NICK)
 
 // The text the parent sees when `agents-inc run` exits non-zero (D4). Quota, a missing catalog and a missing Codex are
 // not cured by a fresh thread, so they are not retried.
 function classify(code: number | null, stderr: string, why: string, limitS: number): Outcome | null {
+  return classifyFor(NICK, code, stderr, why, limitS)
+}
+
+function classifyFor(NICK: string, code: number | null, stderr: string, why: string, limitS: number): Outcome | null {
   const clean = failureText(stderr)
-  if (code === 124) return { reply: why, failed: true, fail: timeoutText(limitS) }
+  if (code === 124) return { reply: why, failed: true, fail: timeoutFor(NICK)(limitS) }
   if (code === 77 || stderr.includes('WB_LUNA_RUNAWAY')) {
     const line = clean.split('\n').find(l => l.includes('WB_LUNA_RUNAWAY'))?.replace(/^.*?WB_LUNA_RUNAWAY:?\s*/, '') ?? clean.split('\n')[0]
     return { reply: why, failed: true, asked: true, fail: `${NICK} failed: Codex looped on its own tools and was stopped to cap token use (${line})` }
@@ -64,3 +70,26 @@ export const codexAdapter: Adapter = {
   rejectsTimeout: (code, stderr) => code === 2 && /unrecognized arguments:.*--timeout/.test(stderr),
   classify,
 }
+
+// T042: the other Codex nicknames, the same adapter under their own name. Their status|begin|end verbs are
+// `agents-inc native --model <nick> ...` (switch default off: they spend more of the Codex subscription than luna).
+function codexNick(nick: string, vendorName: string): Adapter {
+  return {
+    ...codexAdapter,
+    nickname: nick,
+    cli: ['agents-inc', 'native', '--model', nick],
+    description: slug => `General-purpose agent whose reasoning is done by ${nick} (${slug}, run through Codex).`,
+    identity: slug => `You are ${nick} (${vendorName}, model ${slug}, run through Codex).\n`,
+    timeoutText: timeoutFor(nick),
+    argv: (_model, o) => ['agents-inc', 'run', '--model', nick, '--effort', 'low', '--no-tools', '--host-tools',
+      ...(o.timeoutS !== null ? ['--timeout', String(o.timeoutS)] : []), '--cwd', o.cwd, '--thread', o.thread],
+    classify: (code, stderr, why, limitS) => classifyFor(nick, code, stderr, why, limitS),
+  }
+}
+
+export const CODEX_ADAPTERS: readonly Adapter[] = [
+  codexAdapter,
+  codexNick('sol', 'OpenAI GPT Sol'),
+  codexNick('terra', 'OpenAI GPT Terra'),
+  codexNick('astra', 'OpenAI GPT Astra'),
+]
