@@ -28,7 +28,7 @@ class Retry(unittest.TestCase):
         with FakeProvider([Reply(429, RATE), Reply(200, OK)]) as srv:
             text, _ = call(srv, retries=3, sleep=slept.append, stats=stats)
             self.assertEqual(len(srv.requests), 2)
-        self.assertEqual((text, slept, stats), ("hi", [2.0], {"retries": 1}))
+        self.assertEqual((text, slept, stats), ("hi", [5.0], {"retries": 1}))
 
     def test_429_four_times_exits_75_with_the_retry_count(self):
         slept = []
@@ -37,20 +37,21 @@ class Retry(unittest.TestCase):
             self.assertEqual(len(srv.requests), 4)
         self.assertEqual(cm.exception.code, 75)
         self.assertIn("after 3 retries", cm.exception.text)
-        self.assertEqual(slept, [2.0, 5.0, 12.0])
+        self.assertEqual(slept, [5.0, 20.0, 40.0])
 
     def test_retry_after_is_honoured_and_capped(self):
         slept = []
         with FakeProvider([Reply(429, RATE, {"Retry-After": "3"}), Reply(429, RATE, {"Retry-After": "600"}), Reply(200, OK)]) as srv:
             call(srv, retries=3, sleep=slept.append)
         self.assertEqual(slept, [3.0, nh.RETRY_AFTER_CAP_S])
+        self.assertEqual(nh.RETRY_AFTER_CAP_S, 45.0)
 
     def test_wait_budget_stops_the_retries(self):
         slept = []
-        with FakeProvider([Reply(429, RATE, {"Retry-After": "15"})] * 4) as srv:
+        with FakeProvider([Reply(429, RATE, {"Retry-After": "30"})] * 4) as srv:
             with self.assertRaises(nh.StepError) as cm: call(srv, retries=3, sleep=slept.append)
-        self.assertEqual(slept, [15.0])  # a second 15 s wait would pass the 20 s budget
-        self.assertIn("after 1 retries", cm.exception.text)
+        self.assertEqual(slept, [30.0, 30.0])  # a third 30 s wait would pass the 65 s budget
+        self.assertIn("after 2 retries", cm.exception.text)
 
     def test_daily_quota_body_is_not_retried(self):
         slept = []
@@ -64,7 +65,7 @@ class Retry(unittest.TestCase):
         slept = []
         with FakeProvider([Reply(503, {"error": "overloaded"}), Reply(200, OK)]) as srv:
             call(srv, retries=3, sleep=slept.append)
-        self.assertEqual(slept, [2.0])
+        self.assertEqual(slept, [5.0])
         with FakeProvider([Reply(500, {"error": "boom"})]) as srv:
             with self.assertRaises(nh.StepError): call(srv, retries=3, sleep=slept.append)
             self.assertEqual(len(srv.requests), 1)
@@ -95,6 +96,87 @@ class Retry(unittest.TestCase):
                 self.assertEqual(len(srv.requests), 2)  # first try plus one retry
         self.assertEqual(rec["result"], "quota-paused")
         self.assertIn("after 1 retries", rec["reason"])
+
+
+class Headers(unittest.TestCase):
+    HDRS = {"x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "37", "RateLimit-Limit": "50000",
+            "Set-Cookie": "secret=1", "X-Request-Id": "abc", "x-ratelimit-note": "z" * 500}
+
+    def test_only_rate_limit_headers_reach_the_error_and_values_are_capped(self):
+        with FakeProvider([Reply(429, RATE, self.HDRS)]) as srv:
+            with self.assertRaises(nh.StepError) as cm: call(srv, sleep=lambda s: None)
+        text = cm.exception.text
+        self.assertIn("x-ratelimit-reset-tokens=37", text)
+        self.assertIn("ratelimit-limit=50000", text)
+        self.assertNotIn("secret", text); self.assertNotIn("abc", text); self.assertNotIn("z" * 61, text)
+        self.assertIn("z" * 60, text)
+
+    def test_a_success_or_other_error_shows_no_headers(self):
+        with FakeProvider([Reply(500, {"error": "boom"}, self.HDRS)]) as srv:
+            with self.assertRaises(nh.StepError) as cm: call(srv)
+        self.assertNotIn("ratelimit", cm.exception.text.lower())
+
+    def test_reset_header_sets_the_wait_and_the_event_line_carries_the_headers(self):
+        slept, events = [], []
+        with FakeProvider([Reply(429, RATE, self.HDRS), Reply(200, OK)]) as srv:
+            call(srv, retries=3, sleep=slept.append, on_retry=lambda n, of, w, h: events.append((n, of, w, h)))
+        self.assertEqual(slept, [37.0])
+        self.assertEqual(events[0][:3], (1, 3, 37.0))
+        self.assertEqual(events[0][3]["x-ratelimit-reset-tokens"], "37")
+
+    def test_reset_forms_and_cap(self):
+        self.assertEqual(nh.header_wait({"x-ratelimit-reset-tokens": "1m30s"}, 0), 90.0)
+        self.assertEqual(nh.header_wait({"x-ratelimit-reset-requests": "250ms"}, 0), 0.25)
+        self.assertEqual(nh.header_wait({"x-ratelimit-reset": "1800000060"}, 1800000000.0), 60.0)
+        self.assertIsNone(nh.header_wait({"x-ratelimit-remaining": "0"}, 0))
+        slept = []
+        with FakeProvider([Reply(429, RATE, {"x-ratelimit-reset-tokens": "1m30s"}), Reply(200, OK)]) as srv:
+            call(srv, retries=3, sleep=slept.append)
+        self.assertEqual(slept, [nh.RETRY_AFTER_CAP_S])
+
+    def test_without_headers_the_default_schedule_outlasts_a_minute(self):
+        self.assertEqual(sum(nh.RETRY_WAITS), 65.0)
+        self.assertLessEqual(sum(nh.RETRY_WAITS), nh.WAIT_BUDGET_S)
+
+    def test_step_emits_a_waiting_status_line_with_the_headers(self):
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = InstallPaths.for_home(Path(tmp))
+            store = nh.key_store(Path(tmp)); store.parent.mkdir(parents=True)
+            store.write_text(f"GEMINI_API_KEY={KEY}\n"); store.chmod(0o600)
+            native.allow(paths, "gemini", tmp)
+            with FakeProvider([Reply(429, RATE, {"x-ratelimit-remaining-tokens": "0"}), Reply(200, OK)]) as srv:
+                env = {"AGENTS_INC_NATIVE_GEMINI_URL": srv.url, nh.RETRY_WAITS_ENV: "0,0,0"}
+                err = io.StringIO()
+                native.step(paths, "gemini-flash", tmp, "P", 5, io.StringIO(), err, env)
+        self.assertIn("rate limited, waiting", err.getvalue())
+        self.assertIn("x-ratelimit-remaining-tokens=0", err.getvalue())
+
+
+class DebugPrompt(unittest.TestCase):
+    def run_step(self, env_extra):
+        import io
+        tmp = tempfile.mkdtemp()
+        paths = InstallPaths.for_home(Path(tmp))
+        store = nh.key_store(Path(tmp)); store.parent.mkdir(parents=True)
+        store.write_text(f"GEMINI_API_KEY={KEY}\n"); store.chmod(0o600)
+        native.allow(paths, "gemini", tmp)
+        with FakeProvider([Reply(200, OK)] * 2) as srv:
+            env = {"AGENTS_INC_NATIVE_GEMINI_URL": srv.url, **env_extra}
+            native.step(paths, "gemini-flash", tmp, "FIRST PROMPT", 5, io.StringIO(), io.StringIO(), env, session="s1", agent="a1")
+            native.step(paths, "gemini-flash", tmp, "SECOND PROMPT", 5, io.StringIO(), io.StringIO(), env, session="s1", agent="a1")
+        return paths
+
+    def test_flag_dumps_only_step_zero_with_mode_0600_and_no_key(self):
+        paths = self.run_step({native.DEBUG_PROMPT_ENV: "1"})
+        f = paths.state / "native-runs" / "gemini-flash" / "s1" / "a1" / "step0-prompt.txt"
+        self.assertEqual(f.read_text(), "FIRST PROMPT")
+        self.assertEqual(f.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(KEY, f.read_text())
+
+    def test_no_flag_no_file(self):
+        paths = self.run_step({})
+        self.assertFalse((paths.state / "native-runs" / "gemini-flash" / "s1" / "a1" / "step0-prompt.txt").exists())
 
 
 class Pace(unittest.TestCase):

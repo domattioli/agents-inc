@@ -19,6 +19,10 @@ const MCP_DESC_CAP = 200
 // 3-25 s. The adapter's timeoutEnv (AGENTS_INC_LUNA_STEP_TIMEOUT_S for luna) overrides it.
 export const STEP_TIMEOUT_S = 60
 const STEP_GRACE_S = 15
+// A stateless guest sleeps inside `agents-inc native step` between rate-limit retries (up to 65 s, native_http.WAIT_BUDGET_S).
+// `--timeout` is only the socket timeout of each request, so the sleeps are bounded by this hook timer alone: it waits
+// that long extra, or a 65 s wait would be killed at limit + grace = 75 s.
+export const RETRY_WAIT_S = 65
 // A live "still working" line this often while a run is in flight.
 const HEARTBEAT_MS = 10_000
 export function stepTimeoutS(raw: string | undefined): number {
@@ -608,7 +612,7 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
       const flag = S.runTimeoutFlag
       const stop = Promise.race([
         aborted.then(() => STOP),
-        $.clock.sleep((flag ? limitS + STEP_GRACE_S : limitS) * 1000, { signal: timer.signal }).then(() => STOP, never),
+        $.clock.sleep((flag ? limitS + STEP_GRACE_S + (adapter.kind === 'stateless' ? RETRY_WAIT_S : 0) : limitS) * 1000, { signal: timer.signal }).then(() => STOP, never),
       ])
       const stream = $.process.spawn({
         argv: adapter.argv({ nickname: S.agent, provider: adapter.provider, slug: S.slug }, { thread, cwd: S.cwd, timeoutS: flag ? limitS : null, session: S.sessionId, agent: id }),

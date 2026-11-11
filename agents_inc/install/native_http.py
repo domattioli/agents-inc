@@ -178,9 +178,13 @@ def free_only(provider: str, slug: str) -> None:
 
 
 # Rate limits (429) and overload (503) are short: retry inside the step before the agent is called quota-paused.
-RETRY_WAITS = (2.0, 5.0, 12.0)  # seconds before retry 1, 2, 3
-RETRY_AFTER_CAP_S = 15.0  # a Retry-After header is honoured up to this
-WAIT_BUDGET_S = 20.0  # total sleeping per call, well inside the 60 s step timeout
+# A per-minute window (Mistral free tier, 2026-11-11: three requests then 429 even after 19 s) needs a wait that outlasts 60 s.
+RETRY_WAITS = (5.0, 20.0, 40.0)  # seconds before retry 1, 2, 3 when the provider names no reset time
+RETRY_AFTER_CAP_S = 45.0  # a Retry-After or reset header is honoured up to this
+WAIT_BUDGET_S = 65.0  # total sleeping per call. The socket timeout does not cover sleeps; the mod's hook timer does (loop.ts RETRY_WAIT_S)
+# Only these response headers are ever shown (rate-limit state, never anything else); each value is cut to HEADER_VALUE_CAP.
+_RATE_HEADER = re.compile(r"^(retry-after|ratelimit-.*|x-ratelimit-.*)$", re.I)
+HEADER_VALUE_CAP, HEADER_MAX = 60, 12
 RETRY_WAITS_ENV, PACE_ENV, PACE_DIR_NAME = "AGENTS_INC_NATIVE_RETRY_WAITS", "AGENTS_INC_NATIVE_PACE_S", "native-pace"
 # Minimum seconds between two requests to one provider (all agents, through a lock file per provider).
 PACE_S = {"gemini": 1.0, "mistral": 1.1, "openrouter": 3.1}
@@ -233,14 +237,51 @@ def pace(provider: str, state: Path, gap: float, sleep=time.sleep, clock=time.ti
         return
 
 
-def _retry_after(exc) -> float | None:
-    try: return max(0.0, float(exc.headers.get("Retry-After")))
-    except (TypeError, ValueError, AttributeError): return None
+def rate_headers(headers) -> dict:
+    """The rate-limit headers of a response: names matching retry-after, ratelimit-*, x-ratelimit-*; values capped."""
+    out: dict = {}
+    try: items = list(headers.items())
+    except AttributeError: return out
+    for name, value in items:
+        if len(out) >= HEADER_MAX: break
+        if _RATE_HEADER.match(str(name)): out[str(name).lower()] = str(value).strip()[:HEADER_VALUE_CAP]
+    return out
+
+
+def header_text(hdrs: dict) -> str:
+    return "; ".join(f"{k}={v}" for k, v in hdrs.items())
+
+
+_DURATION = re.compile(r"(\d+(?:\.\d+)?)(ms|s|m|h)")
+
+
+def _seconds(value: str, now: float) -> float | None:
+    """A header value as seconds from now: plain seconds, an epoch time, or a Go-style duration (1m30s, 250ms)."""
+    v = value.strip()
+    try:
+        n = float(v)
+        return max(0.0, n - now) if n > 1e9 else max(0.0, n)
+    except ValueError: pass
+    parts = _DURATION.findall(v)
+    if parts and "".join(a + b for a, b in parts) == v:
+        return sum(float(a) * {"ms": 0.001, "s": 1, "m": 60, "h": 3600}[b] for a, b in parts)
+    return None
+
+
+def header_wait(hdrs: dict, now: float) -> float | None:
+    """How long the headers say to wait: Retry-After, else the latest reset header (tokens or requests). None if silent."""
+    ra = hdrs.get("retry-after")
+    if ra is not None:
+        got = _seconds(ra, now)
+        if got is not None: return got
+    resets = [_seconds(v, now) for k, v in hdrs.items() if "reset" in k]
+    resets = [r for r in resets if r is not None]
+    return max(resets) if resets else None
 
 
 def ask(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, timeout: float,
         env: dict | None = None, retries: int = 0, waits: tuple = RETRY_WAITS, sleep=time.sleep,
-        pace_dir: Path | None = None, stats: dict | None = None, on_retry=None) -> tuple[str, dict]:
+        pace_dir: Path | None = None, stats: dict | None = None, on_retry=None, clock=time.time) -> tuple[str, dict]:
     """One request, with up to `retries` retries on 429 or 503 after bounded waits (Retry-After honoured, capped; total
     wait at most WAIT_BUDGET_S) and a per-provider pace when `pace_dir` is set. `stats["retries"]` counts the retries made.
     Returns (reply text, usage). Raises StepError with the exit code and a scrubbed line."""
@@ -251,7 +292,8 @@ def ask(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, time
             if pace_dir is not None: pace(provider, pace_dir, pace_gap(provider, env), sleep)
             return _ask_once(provider, slug, prompt, key, max_chars=max_chars, timeout=timeout, env=env)
         except _Retryable as r:
-            wait = min(r.after, RETRY_AFTER_CAP_S) if r.after is not None else (waits[used] if used < len(waits) else waits[-1] if waits else 0.0)
+            told = header_wait(r.headers, clock())
+            wait = min(told, RETRY_AFTER_CAP_S) if told is not None else (waits[used] if used < len(waits) else waits[-1] if waits else 0.0)
             if r.exhausted or used >= retries or slept + wait > WAIT_BUDGET_S:
                 err = r.error
                 if used: err.text += f" (after {used} retries)"; err.args = (err.text,)
@@ -259,14 +301,14 @@ def ask(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, time
             used += 1
             slept += wait
             if stats is not None: stats["retries"] = used
-            if on_retry: on_retry(used, retries, wait)
+            if on_retry: on_retry(used, retries, wait, r.headers)
             sleep(wait)
 
 
 class _Retryable(Exception):
-    def __init__(self, error: StepError, after: float | None, exhausted: bool):
+    def __init__(self, error: StepError, headers: dict, exhausted: bool):
         super().__init__(error.text)
-        self.error, self.after, self.exhausted = error, after, exhausted
+        self.error, self.headers, self.exhausted = error, headers, exhausted
 
 
 def _ask_once(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, timeout: float,
@@ -285,13 +327,14 @@ def _ask_once(provider: str, slug: str, prompt: str, key: str, *, max_chars: int
         if 300 <= exc.code < 400:
             raise StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP {exc.code}: redirect refused") from None
         detail = scrub(exc.read().decode("utf-8", "replace")[:300].replace("\n", " "), key)
-        retry_after = _retry_after(exc)
+        hdrs = rate_headers(exc.headers) if exc.code in (429, 503) else {}
         exc.close()
+        shown = f" [rate-limit headers: {header_text(hdrs)}]" if hdrs else ""
         if exc.code == 429:
-            raise _Retryable(StepError(EXIT_QUOTA, f"{provider} {slug} hit a usage or rate limit (HTTP 429): {detail}"),
-                             retry_after, bool(_EXHAUSTED.search(detail))) from None
+            raise _Retryable(StepError(EXIT_QUOTA, f"{provider} {slug} hit a usage or rate limit (HTTP 429): {detail}{shown}"),
+                             hdrs, bool(_EXHAUSTED.search(detail))) from None
         if exc.code == 503:
-            raise _Retryable(StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP 503: {detail}"), retry_after, False) from None
+            raise _Retryable(StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP 503: {detail}{shown}"), hdrs, False) from None
         raise StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP {exc.code}: {detail}") from None
     except (TimeoutError, socket.timeout):
         raise StepError(EXIT_TIMEOUT, f"WB_NATIVE_TIMEOUT: no reply from {host} within {timeout:g} s") from None

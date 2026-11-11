@@ -285,12 +285,31 @@ STEP_TIMEOUT_S = 60.0
 STEP_RETRIES = 3  # rate-limit retries inside one step (waits 2, 5, 12 s; native_http.RETRY_WAITS)
 
 
+DEBUG_PROMPT_ENV = "AGENTS_INC_NATIVE_DEBUG_PROMPT"
+
+
+def _dump_prompt(paths, nick, prompt, session, agent, env) -> None:
+    """Debug aid: with AGENTS_INC_NATIVE_DEBUG_PROMPT=1, write the first prompt of a run to step0-prompt.txt (mode 0600)
+    in the agent's run directory. The prompt holds no key (the key is only a request header). Best effort."""
+    if env.get(DEBUG_PROMPT_ENV) != "1": return
+    try:
+        folder = luna_native._run_dir(paths, session, agent, f"native-runs/{nick}") if session and agent else paths.state / "native-debug"
+        target = folder / "step0-prompt.txt"
+        if target.exists(): return
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh: fh.write(prompt)
+    except (OSError, ValueError):
+        return
+
+
 def step(paths: InstallPaths, nick: str, cwd: str, prompt: str, timeout: float | None, out=None, err=None,
          env: dict | None = None, session: str | None = None, agent: str | None = None) -> int:
     """T024: one stateless step. Prompt from the caller (stdin), reply text on stdout, progress lines on stderr. With
     session and agent, one `step` row goes to the agent's run directory events.jsonl (FR-015; no prompt, no reply)."""
     out, err = out or sys.stdout, err or sys.stderr
     seen: dict = {}
+    _dump_prompt(paths, nick, prompt, session, agent, os.environ if env is None else env)
     code = _step(paths, nick, cwd, prompt, timeout, out, err, env, seen)
     if session and agent:
         try:
@@ -320,8 +339,9 @@ def _step(paths, nick, cwd, prompt, timeout, out, err, env, seen: dict) -> int:
             raise native_http.StepError(native_http.EXIT_NOT_OFFERED, f"WB_NATIVE_KEY_MISSING: no {provider} key (checked {', '.join(native_http.key_places(provider))})")
         native_http.progress(err, "record", {"model": nick, "slug": entry["slug"], "provider": provider})
         native_http.progress(err, "event", {"kind": "status", "text": f"{nick}: request sent to {entry['slug']}"})
-        def on_retry(n, of, wait):
-            native_http.progress(err, "event", {"kind": "status", "text": f"{nick}: rate limited, retry {n} of {of} in {wait:g} s"})
+        def on_retry(n, of, wait, hdrs=None):
+            shown = f" [{native_http.header_text(hdrs)}]" if hdrs else ""
+            native_http.progress(err, "event", {"kind": "status", "text": f"{nick}: rate limited, waiting {wait:g} s (retry {n} of {of}){shown}"})
         stats: dict = {}
         policy = native_http.live_policy(provider, os.environ if env is None else env, STEP_RETRIES, paths.state)
         text, usage = native_http.ask(provider, entry["slug"], prompt, key, max_chars=entry["max_input_chars"],
