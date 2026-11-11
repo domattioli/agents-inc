@@ -20,9 +20,11 @@ EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_NOT_OFFERED, EXIT_BLOCKED, EXIT_QUOTA, EXIT
 # Key names as the legacy wrappers read them (gask.sh, mask.sh, oask.sh), first one wins.
 KEY_VARS = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"), "mistral": ("MISTRAL_API_KEY",),
             "openrouter": ("OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY")}
-HOSTS = {"gemini": "https://generativelanguage.googleapis.com"}
+HOSTS = {"gemini": "https://generativelanguage.googleapis.com", "mistral": "https://api.mistral.ai",
+         "openrouter": "https://openrouter.ai"}
 # Tests point a provider at the fake server. Only a loopback URL is honoured, so the variable cannot send a key elsewhere.
-URL_ENV = {"gemini": "AGENTS_INC_NATIVE_GEMINI_URL"}
+URL_ENV = {"gemini": "AGENTS_INC_NATIVE_GEMINI_URL", "mistral": "AGENTS_INC_NATIVE_MISTRAL_URL",
+           "openrouter": "AGENTS_INC_NATIVE_OPENROUTER_URL"}
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 PROGRESS = "agents-inc run:"
 
@@ -127,16 +129,62 @@ def _gemini_reply(data: dict) -> tuple[str, dict]:
     return text, usage
 
 
+# Mistral and OpenRouter: the OpenAI-style chat completions shape, Bearer key (mask.sh, oask.sh).
+CHAT_PATHS = {"mistral": "/v1/chat/completions", "openrouter": "/api/v1/chat/completions"}
+
+
+def _chat_request(provider: str, base: str, slug: str, prompt: str, key: str) -> urllib.request.Request:
+    body = {"model": slug, "messages": [{"role": "user", "content": prompt}]}
+    # Mistral documents JSON mode for its chat models; OpenRouter free slugs vary, so they get the text protocol alone.
+    if provider == "mistral": body["response_format"] = {"type": "json_object"}
+    return urllib.request.Request(f"{base}{CHAT_PATHS[provider]}", data=json.dumps(body).encode(), method="POST",
+                                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
+
+
+def _chat_reply(data: dict) -> tuple[str, dict]:
+    choices = data.get("choices") or []
+    first = choices[0] if choices and isinstance(choices[0], dict) else {}
+    content = (first.get("message") or {}).get("content")
+    if isinstance(content, list):  # Mistral can answer with typed chunks
+        content = "".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type", "text") == "text")
+    text = content if isinstance(content, str) else ""
+    meta = data.get("usage") or {}
+    details = meta.get("prompt_tokens_details")
+    cached = details.get("cached_tokens") if isinstance(details, dict) else 0
+    usage = {"input_tokens": int(meta.get("prompt_tokens") or 0), "cached_input_tokens": int(cached or 0),
+             "output_tokens": int(meta.get("completion_tokens") or 0)}
+    if not text.strip():
+        reason = first.get("finish_reason") or ((data.get("error") or {}).get("message") if isinstance(data.get("error"), dict) else None)
+        raise StepError(EXIT_FAIL, f"WB_NATIVE_EMPTY_REPLY: the provider returned no text ({reason or 'no choice'})")
+    return text, usage
+
+
+def _build(provider: str, base: str, slug: str, prompt: str, key: str) -> urllib.request.Request:
+    if provider == "gemini": return _gemini_request(base, slug, prompt, key)
+    return _chat_request(provider, base, slug, prompt, key)
+
+
+def _parse(provider: str, data: dict) -> tuple[str, dict]:
+    return _gemini_reply(data) if provider == "gemini" else _chat_reply(data)
+
+
+def free_only(provider: str, slug: str) -> None:
+    """The $0 rule (FR-013): an OpenRouter slug that does not end ':free' is refused before any request."""
+    if provider == "openrouter" and not (isinstance(slug, str) and slug.endswith(":free")):
+        raise StepError(EXIT_NOT_OFFERED, f"WB_NATIVE_NOT_FREE: OpenRouter slug {slug!r} is not a ':free' slug; not sent")
+
+
 def ask(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, timeout: float,
         env: dict | None = None) -> tuple[str, dict]:
     """One request. Returns (reply text, usage). Raises StepError with the exit code and a scrubbed line."""
     if provider not in HOSTS: raise StepError(EXIT_NOT_OFFERED, f"WB_NATIVE_UNKNOWN_PROVIDER: {provider}")
+    free_only(provider, slug)
     if len(prompt) > max_chars:
         raise StepError(EXIT_USAGE, f"WB_NATIVE_CONTEXT_OVER: context over {max_chars} chars (prompt {len(prompt)} chars); not sent")
     import os
     base = base_url(provider, os.environ if env is None else env)
     host = urllib.parse.urlsplit(base).hostname
-    req = _gemini_request(base, slug, prompt, key)
+    req = _build(provider, base, slug, prompt, key)
     try:
         with _OPENER.open(req, timeout=timeout) as resp:
             raw = resp.read()
@@ -158,7 +206,7 @@ def ask(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, time
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         raise StepError(EXIT_FAIL, f"WB_NATIVE_BAD_RESPONSE: {provider} answered with no JSON body") from None
-    return _gemini_reply(data if isinstance(data, dict) else {})
+    return _parse(provider, data if isinstance(data, dict) else {})
 
 
 def progress(err, kind: str, data: dict) -> None:

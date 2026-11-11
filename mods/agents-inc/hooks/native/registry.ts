@@ -4,11 +4,11 @@
 import type { Register } from 'claude-code'
 import type { Adapter } from './adapter'
 import { codexAdapter } from './codex'
-import { geminiFlash } from './http'
+import { HTTP_ADAPTERS } from './http'
 import { registerAgent, registerLoops, type Status } from './loop'
 
-// One adapter per free nickname in agents_inc/models.json (the roster). Slice 2: Gemini only.
-export const ADAPTERS: readonly Adapter[] = [geminiFlash]
+// One adapter per free nickname in agents_inc/models.json (the roster): Gemini, Mistral, OpenRouter.
+export const ADAPTERS: readonly Adapter[] = [...HTTP_ADAPTERS]
 
 type Spawn = { argv: string[]; cwd?: string }
 type Chunk = { stream: 'stdout' | 'stderr'; text: string }
@@ -53,5 +53,5 @@ export async function registerNativeAgents($: Native$, e: { cwd: string }): Prom
 // The engine reads `register` from source: a const function that passes `on` only to an imported function.
 // One registration per event for every native type, luna included (luna.ts's own register is no longer called by mod.ts).
 export const register: Register = on => {
-  registerLoops(on, [codexAdapter, geminiFlash])
+  registerLoops(on, [codexAdapter, ...ADAPTERS])
 }

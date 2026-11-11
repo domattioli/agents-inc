@@ -8,7 +8,19 @@ test('the gemini adapter is stateless, key-store, and steps through agents-inc n
   expect(geminiFlash.auth).toBe('key-store')
   expect(geminiFlash.argv('gemini-3.8-flash' as never, { thread: '/t', cwd: '/w', timeoutS: 60 }))
     .toEqual(['agents-inc', 'native', 'step', '--model', 'gemini-flash', '--cwd', '/w', '--timeout', '60'])
-  expect(ADAPTERS.map(a => a.nickname)).toEqual(['gemini-flash'])
+  expect(ADAPTERS.map(a => a.nickname)).toContain('gemini-flash')
+})
+
+test('mistral and openrouter adapters step through agents-inc native step under their own nickname', () => {
+  const byNick = new Map(ADAPTERS.map(a => [a.nickname, a]))
+  for (const [nick, provider] of [['ministral', 'mistral'], ['codestral', 'mistral'], ['gemma-31b', 'openrouter'], ['nemotron-ultra', 'openrouter']] as const) {
+    const a = byNick.get(nick)
+    expect(a?.provider).toBe(provider)
+    expect(a?.kind).toBe('stateless')
+    expect(a?.auth).toBe('key-store')
+    expect(a?.argv({} as never, { thread: '/t', cwd: '/w', timeoutS: null })).toEqual(['agents-inc', 'native', 'step', '--model', nick, '--cwd', '/w'])
+  }
+  expect(new Set(ADAPTERS.map(a => a.nickname)).size).toBe(ADAPTERS.length)
 })
 
 test('exit codes map to fixed failure texts; only a timeout retries', () => {
@@ -18,6 +30,7 @@ test('exit codes map to fixed failure texts; only a timeout retries', () => {
   expect(c(69, 'WB_NATIVE_HOST_BLOCKED: host')?.fail).toContain('provider host blocked')
   expect(c(2, 'WB_NATIVE_CONTEXT_OVER: context over 200000 chars')?.fail).toContain('context over 200000 chars')
   expect(c(3, 'WB_NATIVE_KEY_MISSING: no key')?.fail).toContain('not available (WB_NATIVE_KEY_MISSING)')
+  expect(c(3, 'WB_NATIVE_NOT_FREE: slug x is not free')?.fail).toContain('not available (WB_NATIVE_NOT_FREE)')
   expect(c(1, 'boom')).toBeNull()
   for (const code of [75, 69, 3]) expect(c(code, 'WB_NATIVE_KEY_MISSING')?.retry).toBe(false)
 })

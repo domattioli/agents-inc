@@ -42,7 +42,7 @@ export function classifyHttp(nick: string, code: number | null, stderr: string, 
       `Nothing was sent. A ${nick} agent sends ${ask.sends ?? 'the whole conversation'} to ${ask.provider ?? 'the provider'}, and may write only in ` +
       `${(ask.write_dirs ?? []).join(', ') || 'the recorded directories'}. Ask the operator; on a yes run \`${ask.allow ?? 'agents-inc native allow <provider> --workspace <path>'}\` and start the agent again.`)
   }
-  const missing = /WB_NATIVE_(KEY_MISSING|UNKNOWN_MODEL|UNKNOWN_PROVIDER)/.exec(stderr)
+  const missing = /WB_NATIVE_(KEY_MISSING|UNKNOWN_MODEL|UNKNOWN_PROVIDER|NOT_FREE)/.exec(stderr)
   if (missing) return fail(`failed: not available (${missing[0]}) ${after(stderr, missing[0])}`.trim())
   return null
 }
@@ -73,3 +73,19 @@ export function httpAdapter(spec: Spec): Adapter {
 }
 
 export const geminiFlash = httpAdapter({ nickname: 'gemini-flash', provider: 'gemini', vendor: 'Google Gemini' })
+
+// T040/T041: one adapter per free nickname in agents_inc/models.json (tests/test_native_nicknames.py keeps the two in step).
+// OpenRouter: native_http.free_only refuses any slug not ending ':free' before a request.
+const mistral = (nickname: string) => httpAdapter({ nickname, provider: 'mistral', vendor: 'Mistral' })
+const openrouter = (nickname: string) => httpAdapter({ nickname, provider: 'openrouter', vendor: 'OpenRouter' })
+export const HTTP_ADAPTERS: readonly Adapter[] = [
+  geminiFlash,
+  mistral('ministral'),
+  mistral('codestral'),
+  openrouter('nemotron-lightning'),
+  openrouter('nemotron-ultra'),
+  openrouter('nemotron-nano'),
+  openrouter('gemma-26b'),
+  openrouter('gemma-31b'),
+  openrouter('dots-note'),
+]
