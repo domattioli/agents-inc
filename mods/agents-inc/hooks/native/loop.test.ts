@@ -2,7 +2,7 @@
 // The hooks are captured from registerLoop through a stand-in `on` and driven with a stand-in `$`.
 import { expect, test } from 'claude-code/testing'
 import type { Adapter } from './adapter'
-import { registerAgent, registerLoop } from './loop'
+import { ranTool, registerAgent, registerLoop, skipsTools } from './loop'
 
 type Run = { out?: string; code?: number; hang?: boolean }
 type Chunk = { kind: string; [k: string]: unknown }
@@ -207,4 +207,25 @@ test('key-store is a known auth value', async () => {
   const h = harness(a)
   await registerAgent(h.$ as never, a, { cwd: '/w' })
   expect(h.registered.length).toBe(1)
+})
+
+test('a hand-back before a tool the task names ran is pushed; Skill calls do not count as that tool', () => {
+  const hb = { say: '', tools: [{ name: 'SubagentHandback', input: { message: 'A=100 B=75 L=line 50' } }] }
+  const task = 'Run wc -l a.txt with Bash, then Read b.txt'
+  const names = ['Bash', 'Read', 'Skill', 'SubagentHandback']
+  const skill = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Skill', input: { skill: 'caveman' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+  ]
+  const bash = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'wc -l a.txt' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: '173 a.txt' }] },
+  ]
+  expect(ranTool([], task, names)).toBe(false)
+  expect(ranTool(skill, task, names)).toBe(false)
+  expect(ranTool(bash, task, names)).toBe(true)
+  expect(ranTool(skill, 'Write one Latin sentence.', names)).toBe(true) // no tool named: any result counts
+  expect(skipsTools(hb, ranTool(skill, task, names), task, names)).toBe(true)
+  expect(skipsTools(hb, ranTool(bash, task, names), task, names)).toBe(false)
+  expect(skipsTools(hb, false, 'Summarise the plan.', names)).toBe(false) // no tool named: the answer stands
 })

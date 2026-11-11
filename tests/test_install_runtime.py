@@ -326,6 +326,40 @@ class EmptyReplyReasonTest(unittest.TestCase):
             text = seen.read_text()
         self.assertTrue(text.startswith(runtime.NO_ASK_PREAMBLE)); self.assertTrue(text.endswith("do it"))
 
+    def _run_host_tools(self, events):
+        """A host-tools thread run whose fake Codex prints these --json events and writes no final message."""
+        from agents_inc.install import runtime
+        with tempfile.TemporaryDirectory() as raw:
+            raw = Path(raw)
+            fake = raw / "codex"
+            lines = "".join(f"echo '{json.dumps(e)}'\n" for e in events)
+            fake.write_text(f"#!/bin/sh\ncat >/dev/null\n{lines}exit 0\n")
+            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+            catalog = raw / "catalog.json"; catalog.write_text("{}")
+            receipt = InstallReceipt(release_hash="a" * 64, python_path=Path("/usr/bin/python3"), codex_path=fake)
+            err = io.StringIO()
+            with mock.patch.object(runtime, "require_host_tools_catalog", return_value=catalog), \
+                 mock.patch.object(runtime, "lead_codex_home", return_value=None), \
+                 mock.patch.object(runtime, "build_codex_argv", return_value=[str(fake)]), \
+                 mock.patch.object(runtime, "thread_rollout", return_value=None), \
+                 contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                rc = run_codex("luna", "low", raw, io.StringIO("go"), receipt, {"gpt-6-luna": ["low"]}, no_tools=True,
+                               host_tools=True, thread_out={})
+            return rc, err.getvalue()
+
+    def test_host_tools_empty_final_message_is_not_a_failure_when_luna_spoke(self):
+        said = {"type": "item.completed", "item": {"type": "agent_message", "text": "{\"say\":\"\",\"tools\":[]}"}}
+        rc, err = self._run_host_tools([{"type": "thread.started", "thread_id": "t1"}, said])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("left its final message empty", err)
+        self.assertNotIn("empty reply", err)
+
+    def test_host_tools_empty_final_message_with_no_message_still_fails(self):
+        blank = {"type": "item.completed", "item": {"type": "agent_message", "text": " "}}
+        rc, err = self._run_host_tools([{"type": "thread.started", "thread_id": "t1"}, blank])
+        self.assertEqual(rc, 1)
+        self.assertIn("returned an empty reply", err)
+
     def test_red_line_says_unknown_without_thread_id(self):
         rc, err = self._run([], tid=None)
         self.assertEqual(rc, 1)

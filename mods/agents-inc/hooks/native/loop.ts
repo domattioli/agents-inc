@@ -51,9 +51,20 @@ export const refuses = (reply: Reply | string | null): boolean =>
 // luna answered "A=0" for `wc -l a.txt` without running Bash (Docker stress run, 2026-10-24).
 export function skipsTools(reply: Reply | string | null, ranTool: boolean, task = '', names: readonly string[] = []): boolean {
   if (ranTool || reply === null || typeof reply === 'string') return false
-  // A hand-back alone, before any tool ran, counts only when it refuses (run 2 above); a plain answer stands.
-  if (reply.tools.length > 0) return reply.tools.every(t => t.name === HANDBACK) && refuses(reply)
-  return REFUSAL.test(reply.say) || names.some(n => n !== HANDBACK && namesTool(task, n))
+  // A hand-back alone, before a needed tool ran, counts when it refuses (run 2 above) or when the task names a catalog
+  // tool: luna handed back "A=100 B=75" for `wc -l a.txt with Bash` after running only two Skill calls, the values taken
+  // from a conversation it wrote itself (macOS stress, 2026-11-11, rollout 01a1cc20-74b1).
+  const named = names.some(n => n !== HANDBACK && namesTool(task, n))
+  if (reply.tools.length > 0) return reply.tools.every(t => t.name === HANDBACK) && (refuses(reply) || named)
+  return REFUSAL.test(reply.say) || named
+}
+// Whether the conversation already holds a tool run that counts for skipsTools: any tool result, unless the task names
+// catalog tools, in which case one of those must have been called (a Skill call from a session-start rule does not count).
+export function ranTool(messages: readonly unknown[], task: string, names: readonly string[]): boolean {
+  const raw = JSON.stringify(messages)
+  if (!raw.includes('"tool_result"')) return false
+  const named = names.filter(n => n !== HANDBACK && namesTool(task, n))
+  return named.length === 0 || named.some(n => raw.includes(`"name":${JSON.stringify(n)}`))
 }
 // A tool name counts only mid-sentence after a lowercase word ("with Bash", "then Read") or before "tool":
 // "Write one Latin sentence" names no tool.
@@ -641,7 +652,7 @@ export function registerLoop(on: Parameters<Register>[0], adapter: Adapter): voi
       chars += prompt.length
       run = yield* ask(prompt, threadPath(S, id, st.n), allowed)
     }
-    if (!run.failed && skipsTools(run.reply, JSON.stringify(messages).includes('"tool_result"'), taskText(messages), names)) {
+    if (!run.failed && skipsTools(run.reply, ranTool(messages, taskText(messages), names), taskText(messages), names)) {
       // One push; a second reply without tools stands as luna's answer.
       prompt = adapter.pushes.refusal
       chars += prompt.length

@@ -771,6 +771,13 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
 
     # Empty output: on success, or (#160) on a failure caused by request_user_input calls, say so with the cause
     refused_asks = (result.stderr or "").count(RUI_UNAVAILABLE)
+    if not stdout.strip() and result.returncode == 0 and host_tools and not refused_asks and _said_something(result.stdout):
+        # macOS stress, 2026-11-11 (3 of 40 runs lost two ways, 2 of them here): luna put its {say, tools} reply in
+        # commentary messages and left the final message empty. The step loop already has those messages from the
+        # progress lines and picks the first that requests tools, so this is not a failure.
+        sys.stderr.write(f"agents-inc run: codex {slug} left its final message empty; its earlier messages stand\n")
+        sys.stderr.flush()
+        return 1 if cleanup_failed else 0
     if not stdout.strip() and (result.returncode == 0 or refused_asks):
         asked = "unknown"
         rid = tid or resume_thread
@@ -809,6 +816,19 @@ def thread_progress_line(line: str) -> None:
     if out is not None:
         sys.stderr.write(out + "\n")
         sys.stderr.flush()
+
+
+def _said_something(jsonl: str | None) -> bool:
+    """True when the Codex --json stream holds at least one agent_message item with text."""
+    for line in (jsonl or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        item = event.get("item") if isinstance(event, dict) and event.get("type") == "item.completed" else None
+        if isinstance(item, dict) and item.get("type") == "agent_message" and str(item.get("text") or "").strip():
+            return True
+    return False
 
 
 NOT_TOOL_ITEMS = ("reasoning", "agent_message", "error")
