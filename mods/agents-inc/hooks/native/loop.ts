@@ -605,7 +605,7 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
         $.clock.sleep((flag ? limitS + STEP_GRACE_S : limitS) * 1000, { signal: timer.signal }).then(() => STOP, never),
       ])
       const stream = $.process.spawn({
-        argv: adapter.argv({ nickname: S.agent, provider: adapter.provider, slug: S.slug }, { thread, cwd: S.cwd, timeoutS: flag ? limitS : null }),
+        argv: adapter.argv({ nickname: S.agent, provider: adapter.provider, slug: S.slug }, { thread, cwd: S.cwd, timeoutS: flag ? limitS : null, session: S.sessionId, agent: id }),
         cwd: S.cwd || undefined,
         input: prompt,
       })

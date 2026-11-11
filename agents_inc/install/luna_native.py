@@ -86,8 +86,31 @@ def _run_dir(paths: InstallPaths, session: str, agent: str, root: str = "luna-ru
     return paths.state / root / session / agent
 
 
+EVENTS_FILE = "events.jsonl"
+
+
+def append_event(folder: Path, event: dict) -> bool:
+    """Spec 038 FR-015: one envelope row (the dispatch events.jsonl shape: v, seq, ts, source, event) in the agent's
+    run directory, for the pane. Never raises; a missing run directory writes nothing."""
+    from datetime import datetime, timezone
+    try:
+        if not folder.is_dir(): return False
+        path = folder / EVENTS_FILE
+        try:
+            with path.open("rb") as fh: seq = sum(1 for _ in fh) + 1
+        except OSError: seq = 1
+        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        line = json.dumps({"v": 1, "seq": seq, "ts": ts, "source": "agents-inc", "event": event}) + "\n"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as fh: fh.write(line)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def begin(paths: InstallPaths, session: str, agent: str, cwd: str, task: str | None = None, *,
-          slug: str | None = None, source: str = "native-luna", root: str = "luna-runs") -> dict:
+          slug: str | None = None, source: str = "native-luna", root: str = "luna-runs", provider: str = "codex",
+          nickname: str = "luna") -> dict:
     """Spec 028 D6 item 1: pin the working tree and write the agent's dispatch row. A cwd outside git records
     snapshot 'no-repo' and goes on. Returns {"snapshot": "captured"|"no-repo"}."""
     from .. import host_ledger
@@ -99,8 +122,10 @@ def begin(paths: InstallPaths, session: str, agent: str, cwd: str, task: str | N
     rc, _ = dispatch.snapshot("capture", str(target), cwd=Path(cwd))
     snapshot = "captured" if rc == 0 and target.is_file() else "no-repo"
     if slug is None: slug = load_model_map(roster=paths.roster, env={"HOME": str(paths.home)})["luna"]
-    row = host_ledger.native_luna_dispatch_row(agent, session, slug, task, cwd, snapshot)
+    row = host_ledger.native_luna_dispatch_row(agent, session, slug, task, cwd, snapshot, provider=provider)
     host_ledger.record_native_luna(paths.state, {**row, "source": source})
+    append_event(folder, {"type": "run.start", "model": nickname, "slug": slug, "provider": provider, "source": source,
+                          "snapshot": snapshot})
     return {"snapshot": snapshot}
 
 
@@ -122,8 +147,11 @@ def end(paths: InstallPaths, session: str, agent: str, outcome: str, cwd: str = 
             changed = [line[len("CHANGED "):].strip() for line in text.splitlines() if line.startswith("CHANGED ")]
             snapshot = f"changed:{len(changed)}"
         else: snapshot = "unverified"
+    # provider stays null on the return row, as model and tier do: the dispatch row of the same id carries them.
     row = host_ledger.native_luna_return_row(agent, session, outcome, usage or {}, snapshot, changed)
     host_ledger.record_native_luna(paths.state, {**row, "source": source})
+    append_event(_run_dir(paths, session, agent, root), {"type": "run.end", "outcome": outcome, "snapshot": snapshot,
+                                                         "usage": usage or {}, "changed": changed[:CHANGED_PATH_CAP]})
     return {"snapshot": snapshot, "changed": changed[:CHANGED_PATH_CAP]}
 
 

@@ -30,7 +30,8 @@ export interface Adapter {
   timeoutEnv: string // env var that overrides the step limit
   timeoutText(limitS: number): string
   // Spawn argv for one run; the prompt goes on stdin. `timeoutS` null: the runtime has no run timeout flag.
-  argv(model: NativeModel, o: { thread: string; cwd: string; timeoutS: number | null }): string[]
+  // `session` and `agent` name the agent's run directory (FR-015 events.jsonl); a stateless adapter passes them on.
+  argv(model: NativeModel, o: { thread: string; cwd: string; timeoutS: number | null; session?: string; agent?: string }): string[]
   // True when a run failed only because the installed runtime rejected the timeout flag: the loop runs again without it.
   rejectsTimeout(code: number | null, stderr: string): boolean
   // Exit-code mapping; null = generic failure (`<nickname> failed: run exited <code>: <stderr>`).

@@ -209,11 +209,11 @@ def begin(paths, nick, session, agent, cwd, task) -> tuple[int, dict]:
     if nick == "luna": return 0, luna_native.begin(paths, session, agent, cwd, task)
     if entry["provider"] == "codex":  # D69: the Codex CLI login is the authorization; no workspace record
         return 0, luna_native.begin(paths, session, agent, cwd, task, slug=codex_slug(paths, nick), source="native-codex",
-                                    root=f"native-runs/{nick}")
+                                    root=f"native-runs/{nick}", nickname=nick)
     record = authorization(paths, entry["provider"], cwd)
     if record is None: return 3, needs_authorization(nick, entry["provider"], cwd)
     result = luna_native.begin(paths, session, agent, cwd, task, slug=entry["slug"], source=f"native-{entry['provider']}",
-                               root=f"native-runs/{nick}")
+                               root=f"native-runs/{nick}", provider=entry["provider"], nickname=nick)
     return 0, {**result, "write_dirs": list(record.get("write_dirs") or [])}
 
 
@@ -230,9 +230,22 @@ STEP_TIMEOUT_S = 60.0
 
 
 def step(paths: InstallPaths, nick: str, cwd: str, prompt: str, timeout: float | None, out=None, err=None,
-         env: dict | None = None) -> int:
-    """T024: one stateless step. Prompt from the caller (stdin), reply text on stdout, progress lines on stderr."""
+         env: dict | None = None, session: str | None = None, agent: str | None = None) -> int:
+    """T024: one stateless step. Prompt from the caller (stdin), reply text on stdout, progress lines on stderr. With
+    session and agent, one `step` row goes to the agent's run directory events.jsonl (FR-015; no prompt, no reply)."""
     out, err = out or sys.stdout, err or sys.stderr
+    seen: dict = {}
+    code = _step(paths, nick, cwd, prompt, timeout, out, err, env, seen)
+    if session and agent:
+        try:
+            folder = luna_native._run_dir(paths, session, agent, f"native-runs/{nick}")
+        except ValueError:
+            return code
+        luna_native.append_event(folder, {"type": "step", "model": nick, "exit": code, "usage": seen.get("usage")})
+    return code
+
+
+def _step(paths, nick, cwd, prompt, timeout, out, err, env, seen: dict) -> int:
     try:
         entry = model(nick)
     except ValueError as exc:
@@ -257,6 +270,7 @@ def step(paths: InstallPaths, nick: str, cwd: str, prompt: str, timeout: float |
         err.write(f"agents-inc native step: {native_http.scrub(exc.text, key)}\n")
         return exc.code
     native_http.progress(err, "usage", usage)
+    seen["usage"] = usage
     out.write(native_http.scrub(text, key))
     out.flush()
     return 0
@@ -291,7 +305,7 @@ def run_cli(paths: InstallPaths, args) -> int:
             return 0
         if nick is None: raise ValueError(f"native {verb} needs --model or --provider")
         if verb == "step":
-            return step(paths, nick, args.cwd, sys.stdin.read(), args.timeout)
+            return step(paths, nick, args.cwd, sys.stdin.read(), args.timeout, session=args.session, agent=args.agent)
         if not args.session or not args.agent: raise ValueError(f"native {verb} needs --session and --agent")
         if verb == "begin":
             code, result = begin(paths, nick, args.session, args.agent, args.cwd, args.task)

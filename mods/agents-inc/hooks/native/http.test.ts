@@ -22,6 +22,8 @@ test('mistral and openrouter adapters step through agents-inc native step under 
     expect(a?.argv({} as never, { thread: '/t', cwd: '/w', timeoutS: null })).toEqual(['agents-inc', 'native', 'step', '--model', nick, '--cwd', '/w'])
   }
   expect(new Set(ADAPTERS.map(a => a.nickname)).size).toBe(ADAPTERS.length)
+  expect(geminiFlash.argv({} as never, { thread: '/t', cwd: '/w', timeoutS: null, session: 's1', agent: 'a1' }))
+    .toEqual(['agents-inc', 'native', 'step', '--model', 'gemini-flash', '--cwd', '/w', '--session', 's1', '--agent', 'a1'])
 })
 
 test('sol, terra and astra are thread types through agents-inc run under their own name; luna is unchanged', () => {

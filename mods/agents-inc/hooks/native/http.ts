@@ -66,7 +66,9 @@ export function httpAdapter(spec: Spec): Adapter {
     timeoutText: s => `${nick} failed: timeout: the provider sent no reply within ${s} s (limit ${NATIVE_TIMEOUT_ENV})`,
     // The thread path is ignored: a stateless model gets the whole conversation on stdin every run.
     argv: (_m: NativeModel, o) => ['agents-inc', 'native', 'step', '--model', nick, '--cwd', o.cwd || '.',
-      ...(o.timeoutS !== null ? ['--timeout', String(o.timeoutS)] : [])],
+      ...(o.timeoutS !== null ? ['--timeout', String(o.timeoutS)] : []),
+      // The run directory's events.jsonl gets one row per step (FR-015).
+      ...(o.session && o.agent ? ['--session', o.session, '--agent', o.agent] : [])],
     rejectsTimeout: () => false,
     classify: (code, stderr, why, limitS) => classifyHttp(nick, code, stderr, why, limitS),
   }
