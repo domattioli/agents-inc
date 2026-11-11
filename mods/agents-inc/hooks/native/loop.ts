@@ -124,7 +124,7 @@ type Cli = {
   ui: { log: (message: string, options: { to: 'debug' }) => unknown }
   session: { id: () => unknown }
 }
-export type Status = { offered: boolean; slug: string; reason?: string; write_dirs?: string[] }
+export type Status = { offered: boolean; slug: string; reason?: string; write_dirs?: string[]; tools?: boolean }
 type Ran = { outcome: 'done' | 'failed' | 'quota-paused' | 'aborted'; usage: Usage }
 // Per subagent: the thread file it keeps, whether a run has used it, and how many api messages the model has seen.
 type AgentState = { n: number; used: boolean; sent: number }
@@ -228,8 +228,14 @@ export function render(messages: readonly Msg[]): string {
   return out.join('\n')
 }
 
-export function buildPrompt(a: Adapter, slug: string, system: string, tools: string, messages: readonly Msg[], hand = true): string {
-  return `${header(a, slug)}${hand ? HANDBACK_RULES : FINAL_RULES}\nSystem prompt:\n${system}\n\nTools:\n${tools}\n\nConversation:\n${render(messages) || '(empty)'}\n`
+// A chat-only model (failed tool probe, D76 condition 4) is never told to use tools.
+const chatHeader = (a: Adapter, slug: string) =>
+  a.identity(slug) +
+  'You have no tools: nothing in this conversation can be run, read or written by you. Answer from the conversation alone and never ask for a tool.\n' +
+  NO_ASK + SUBAGENT_NOTE +
+  'Reply with exactly one JSON object and nothing else: {"say": "<your answer>", "tools": []}\n'
+export function buildPrompt(a: Adapter, slug: string, system: string, tools: string, messages: readonly Msg[], hand = true, chat = false): string {
+  return `${chat ? chatHeader(a, slug) : header(a, slug)}${hand ? HANDBACK_RULES : FINAL_RULES}\nSystem prompt:\n${system}\n\nTools:\n${tools}\n\nConversation:\n${render(messages) || '(empty)'}\n`
 }
 
 // First balanced {...} in the text, parsed; a reason string when none parses or the shape is wrong.
@@ -319,6 +325,7 @@ type LoopState = {
   sessionId: string
   slug: string
   offered: boolean // what the adapter's status verb said at session start
+  chatOnly: boolean // status said `tools: false` (probe failed): no tool catalog, no pushes to use tools
   writeDirs: string[] // write directories from status at session start (key-store adapters)
   dirs: Map<string, string[]> // per agent: write directories the begin call returned (authorization can come later)
   begun: Map<string, Promise<void>> // per agent: the begin call
@@ -333,7 +340,7 @@ function stateFor(adapter: Adapter): LoopState {
     S = {
       agent, types: [`agents-inc:${agent}`], log: `agents-inc ${agent}:`, quota: `${agent} quota-paused`,
       ids: new Set(), agents: new Map(), threadTotals: new Map(), cwd: '', sessionId: 'session', slug: agent,
-      offered: false, writeDirs: [], dirs: new Map(), begun: new Map(), ran: new Map(), runTimeoutFlag: true,
+      offered: false, chatOnly: false, writeDirs: [], dirs: new Map(), begun: new Map(), ran: new Map(), runTimeoutFlag: true,
     }
     states.set(adapter, S)
   }
@@ -412,6 +419,7 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
     return
   }
   S.slug = status.slug
+  S.chatOnly = status.tools === false
   S.writeDirs = Array.isArray(status.write_dirs) ? status.write_dirs.filter((d): d is string => typeof d === 'string') : []
   if (!status.offered) {
     $.ui.log(`${S.log} not registered: ${status.reason ?? 'not offered'}`, { to: 'debug' })
@@ -426,7 +434,7 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
     // No tools and no permissionMode: the agent inherits the parent's, like any native subagent.
     await $.agent.register({
       name: S.agent,
-      description: adapter.description(status.slug),
+      description: S.chatOnly ? `${adapter.description(status.slug)} Chat only, no tools: its tool-protocol probe failed, so it answers from the conversation alone.` : adapter.description(status.slug),
       prompt: AGENT_PROMPT,
       model: 'haiku', // placeholder: turn.step never calls it for this agent
     })
@@ -679,12 +687,14 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     // The harness announces SubagentHandback in a reminder when it serves it; a background agent on some builds has none
     // and loops on "No such tool available" if told to call it (Linux, Claude Code 2.1.310, 2026-10-24).
     const hand = tools.some(t => t.name === HANDBACK) || JSON.stringify(messages).includes(HANDBACK_CUE)
-    const names = [...tools.filter(t => t.name !== HANDBACK).map(t => t.name), ...(hand ? [HANDBACK] : [])]
+    // A chat-only model gets an empty catalog; the hand-back tool stays, because it is how the turn ends.
+    const offeredTools = S.chatOnly ? [] : tools
+    const names = [...offeredTools.filter(t => t.name !== HANDBACK).map(t => t.name), ...(hand ? [HANDBACK] : [])]
     const allowed = new Set(names)
     const composed = await $.prompt.compose({ tools: names }).catch(() => ({ sections: [] }))
     const system = [...composed.sections.map(s => stripModelLines(s.text)), AGENT_PROMPT].join('\n\n')
     const types = await readToolTypes($)
-    const full = () => buildPrompt(adapter, S.slug, system, catalog(tools, types, hand), messages, hand)
+    const full = () => buildPrompt(adapter, S.slug, system, catalog(offeredTools, types, hand), messages, hand, S.chatOnly)
     // A stateless adapter keeps no thread: every run gets the whole conversation, and a correction or push rides after
     // it with the reply it answers (spec 038 R3). A thread adapter sends the follow-up text alone.
     const stateless = adapter.kind === 'stateless'
@@ -720,7 +730,7 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
       chars += prompt.length
       run = yield* ask(prompt, threadPath(S, id, st.n), allowed)
     }
-    if (!run.failed && skipsTools(run.reply, ranTool(messages, taskText(messages), names), taskText(messages), names)) {
+    if (!run.failed && !S.chatOnly && skipsTools(run.reply, ranTool(messages, taskText(messages), names), taskText(messages), names)) {
       // One push; a second reply without tools stands as luna's answer.
       prompt = more(adapter.pushes.refusal)
       chars += prompt.length
@@ -738,7 +748,7 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
         const fresh = yield* ask(prompt, threadPath(S, id, st.n), allowed)
         if (!fresh.failed && fresh.reply !== null && typeof fresh.reply !== 'string' && (fresh.reply.tools.length > 0 || fresh.reply.say)) run = fresh
       }
-    } else if (!run.failed && stopsEarly(run.reply)) {
+    } else if (!run.failed && !S.chatOnly && stopsEarly(run.reply)) {
       // One push to go on; a second early stop stands as luna's answer.
       prompt = more(adapter.pushes.unfinished)
       chars += prompt.length
@@ -768,7 +778,7 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     const reply = run.reply
     if (typeof reply !== 'string' && reply !== null) st.sent = messages.length
     const ms = (await $.clock.now()) - t0
-    $.ui.log(`${S.log} step ${e.index} of ${id} took ${ms} ms, prompt ${chars} chars, ${resumed ? 'resumed' : 'fresh'} thread, system ${system.length} catalog ${catalog(tools, types, hand).length} conversation ${render(messages).length} chars, ${names.length} tools, handback ${hand ? 'on' : 'off'}, messages ${messages.length} sent ${sentBefore}, codex_tools ${acc.tools.length ? acc.tools.join(' ') : 'none'}, usage ${acc.usage ? `in ${acc.usage.input_tokens} cached ${acc.usage.cached_input_tokens} out ${acc.usage.output_tokens}` : 'none'}`, { to: 'debug' })
+    $.ui.log(`${S.log} step ${e.index} of ${id} took ${ms} ms, prompt ${chars} chars, ${resumed ? 'resumed' : 'fresh'} thread, system ${system.length} catalog ${catalog(offeredTools, types, hand).length} conversation ${render(messages).length} chars, ${names.length} tools, handback ${hand ? 'on' : 'off'}, messages ${messages.length} sent ${sentBefore}, codex_tools ${acc.tools.length ? acc.tools.join(' ') : 'none'}, usage ${acc.usage ? `in ${acc.usage.input_tokens} cached ${acc.usage.cached_input_tokens} out ${acc.usage.output_tokens}` : 'none'}`, { to: 'debug' })
     const tokens = acc.usage
     const failure = run.failed ? (run.fail ?? `${S.agent} failed: run failed`) : typeof reply === 'string' ? `${S.agent} failed: unparsable reply` : null
     const before = S.ran.get(id)?.usage ?? ZERO

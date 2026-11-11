@@ -317,3 +317,38 @@ test('outsideWrites resolves relative paths against the cwd and treats a missing
   expect(outsideWrites(r({ name: 'Write', input: {} }), '/w', ['/w']).length).toBe(1)
   expect(outsideWrites(r({ name: 'Bash', input: { command: 'rm -rf x' } }), '/w', [])).toEqual([])
 })
+
+test('a chat-only model (status tools false) is registered as chat only, gets no tool catalog and is never pushed to use tools', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const guess = JSON.stringify({ say: 'A=0', tools: [] })
+  const h = harness(a, { replies: [{ out: guess }, { out: BASH }], tools: false, task: 'Run wc -l a.txt with Bash; report A=<n>.' })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  expect(h.registered).toMatchObject([{ description: expect.stringContaining('Chat only, no tools') }])
+  await h.spawn('c1')
+  const { result } = await h.step('c1')
+  expect(h.runs.length).toBe(1) // no refusal push
+  expect(h.runs[0].input).toContain('You have no tools')
+  expect(h.runs[0].input).not.toContain('- Bash:')
+  expect(h.runs[0].input).toContain('- SubagentHandback:') // the hand-back tool still ends the turn
+  expect(message(result)).toBe('A=0')
+})
+
+test('a chat-only model that names a tool is corrected, since the catalog is empty', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const h = harness(a, { replies: [{ out: BASH }, { out: JSON.stringify({ say: 'done', tools: [] }) }], tools: false })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('c2')
+  const { result } = await h.step('c2')
+  expect(h.runs[1].input).toContain('unknown tool "Bash"')
+  expect(message(result)).toBe('done')
+})
+
+test('a model with tools true or no tools field keeps the normal prompt and description', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const h = harness(a, { replies: [{ out: BASH }], tools: true })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  expect(String((h.registered[0] as { description: string }).description)).not.toContain('Chat only')
+  await h.spawn('c3')
+  await h.step('c3')
+  expect(h.runs[0].input).toContain('- Bash:')
+})

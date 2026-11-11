@@ -78,11 +78,12 @@ class NativeCli(unittest.TestCase):
     def test_not_offered_without_passing_fresh_probe(self):
         self.key()
         self.assertEqual(self.status()["probe"], "none")
-        self.probe("fail"); self.assertFalse(self.status()["offered"])
+        self.probe("fail"); s = self.status()  # a failed probe is offered chat only, not hidden
+        self.assertTrue(s["offered"]); self.assertFalse(s["tools"]); self.assertIn("chat only, no tools", s["reason"])
         self.probe("pass", age=native.PROBE_TTL_S + 1); s = self.status()
-        self.assertFalse(s["offered"]); self.assertEqual(s["probe"], "stale")
+        self.assertFalse(s["offered"]); self.assertEqual(s["probe"], "stale"); self.assertFalse(s["tools"])
         self.probe("pass"); s = self.status()
-        self.assertTrue(s["offered"]); self.assertEqual(s["slug"], "gemini-3.8-flash")
+        self.assertTrue(s["offered"]); self.assertTrue(s["tools"]); self.assertEqual(s["slug"], "gemini-3.8-flash")
         self.assertNotIn(FAKE_KEY, json.dumps(s))
 
     def test_on_off_switch(self):
