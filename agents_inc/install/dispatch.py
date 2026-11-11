@@ -1094,6 +1094,12 @@ def _run_gates(spec: dict, report_path: Path | None = None) -> tuple[list, str |
             try:
                 run_argv, env = argv, None
                 if tmp is not None:
+                    # sandbox-exec starts even when the gate binary is absent and exits non-zero, which would read as
+                    # gate-failed; resolve first so a missing binary stays FileNotFoundError (gate-missing).
+                    exe = str(wd / argv[0]) if os.sep in argv[0] else argv[0]
+                    if shutil.which(exe) is None:
+                        raise FileNotFoundError(argv[0])
+                if tmp is not None:
                     profile = Path(tmp) / "gate.sb"
                     profile.write_text(gate_sandbox_profile(Path(spec["cwd"]).resolve(), Path.home(), tmp,
                                                             bool(g.get("network"))), encoding="utf-8")

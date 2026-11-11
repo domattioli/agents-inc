@@ -493,6 +493,19 @@ class GateRunTest(GrantsBase):
         self.assertIsNone(spec["gate_results"][0]["rc"])
         self.assertEqual(spec["gate_results"][0]["error"], "FileNotFoundError")
 
+    def test_missing_binary_is_gate_missing_under_sandbox(self):
+        # Sandboxed gates: sandbox-exec would start and exit non-zero, so the binary is resolved before wrapping.
+        real = subprocess.run
+        with mock.patch.object(dispatch, "capability_preflight", return_value=[]), \
+                mock.patch.object(dispatch, "sandbox_available", return_value=True), \
+                mock.patch.object(dispatch.subprocess, "run") as run:
+            run.side_effect = lambda a, *k, **kw: (mock.Mock(returncode=71, stdout="", stderr="")
+                                                   if a[0] == dispatch.SANDBOX_EXEC else real(a, *k, **kw))
+            rc, _, spec = self._gate_run([{"argv": ["/nonexistent/bin/xyz"]}])
+        self.assertFalse([c for c in run.call_args_list if c.args and c.args[0][0] == dispatch.SANDBOX_EXEC])
+        self.assertEqual((rc, spec["reason"]), (1, "gate-missing"))
+        self.assertEqual(spec["gate_results"][0]["error"], "FileNotFoundError")
+
     def test_timeout_is_gate_missing(self):
         rc, _, spec = self._gate_run([{"argv": [sys.executable, "-c", "import time;time.sleep(5)"], "timeout_s": 0.5}])
         self.assertEqual((rc, spec["reason"]), (1, "gate-missing"))
@@ -562,7 +575,7 @@ class GateRunTest(GrantsBase):
 
 class ResumeGateTest(GrantsBase):
     def test_resume_reuses_lists_and_reruns_gates(self):
-        counter = self.root / "count"
+        counter = self.repo / ".git" / "count"  # inside the gate cwd (sandbox allows it), untracked so the snapshot stays clean
         gate = [{"argv": [sys.executable, "-c", f"open({str(counter)!r}, 'a').write('x')"]}]
         self._dispatch(GATES=gate)
         run = self._run_dir()
