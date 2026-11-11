@@ -2,14 +2,14 @@
 // The hooks are captured from registerLoop through a stand-in `on` and driven with a stand-in `$`.
 import { expect, test } from 'claude-code/testing'
 import type { Adapter } from './adapter'
-import { ranTool, registerAgent, registerLoop, skipsTools } from './loop'
+import { ranTool, registerAgent, registerLoop, registerLoops, skipsTools } from './loop'
 
 type Run = { out?: string; code?: number; hang?: boolean }
 type Chunk = { kind: string; [k: string]: unknown }
 
 const fakeAdapter = (over: Partial<Adapter> = {}): Adapter => ({
   provider: 'gemini',
-  kind: 'stateless',
+  kind: 'thread',
   auth: 'cli-login',
   nickname: 'fake',
   cli: ['agents-inc', 'fake'],
@@ -27,7 +27,7 @@ const fakeAdapter = (over: Partial<Adapter> = {}): Adapter => ({
   ...over,
 })
 
-function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?: 'throw'; timeout?: boolean } = {}) {
+function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?: 'throw' | unknown[]; timeout?: boolean; also?: Adapter[] } = {}) {
   const hooks: Record<string, (...a: unknown[]) => unknown> = {}
   const on = (event: string, a: unknown, b?: unknown) => {
     hooks[event] = (b ?? a) as (...a: unknown[]) => unknown
@@ -40,7 +40,7 @@ function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?:
   const replies = [...(o.replies ?? [])]
   const $ = {
     agent: {
-      list: async () => { if (o.agents === 'throw') throw new Error('list down'); return [] },
+      list: async () => { if (o.agents === 'throw') throw new Error('list down'); return o.agents ?? [] },
       register: async (a: unknown) => { registered.push(a) },
     },
     session: {
@@ -71,7 +71,8 @@ function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?:
       })(),
     },
   }
-  registerLoop(on as never, adapter)
+  if (o.also) registerLoops(on as never, [adapter, ...o.also])
+  else registerLoop(on as never, adapter)
   let placeholder = 0
   const step = async (agentId: string, signal = new AbortController().signal) => {
     const next = Object.assign(function* () {
@@ -87,10 +88,10 @@ function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?:
       chunks.push(n.value)
     }
   }
-  const spawn = async (agentId: string) => {
-    await hooks['agent.spawn']($, { subagentType: `agents-inc:${adapter.nickname}`, prompt: o.task ?? 'Count the lines.' }, async () => ({ agentId }))
+  const spawn = async (agentId: string, nick = adapter.nickname) => {
+    await hooks['agent.spawn']($, { subagentType: `agents-inc:${nick}`, prompt: o.task ?? 'Count the lines.' }, async () => ({ agentId }))
   }
-  return { $, runs, verbs, registered, logs, step, spawn, placeholderCalls: () => placeholder }
+  return { $, hooks, runs, verbs, registered, logs, step, spawn, placeholderCalls: () => placeholder }
 }
 
 const BASH = JSON.stringify({ say: '', tools: [{ name: 'Bash', input: { command: 'wc -l a.txt' } }] })
@@ -228,4 +229,38 @@ test('a hand-back before a tool the task names ran is pushed; Skill calls do not
   expect(skipsTools(hb, ranTool(skill, task, names), task, names)).toBe(true)
   expect(skipsTools(hb, ranTool(bash, task, names), task, names)).toBe(false)
   expect(skipsTools(hb, false, 'Summarise the plan.', names)).toBe(false) // no tool named: the answer stands
+})
+
+test('a stateless adapter resends the whole conversation with its previous reply on a push', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const guess = JSON.stringify({ say: 'A=0', tools: [] })
+  const h = harness(a, { replies: [{ out: guess }, { out: BASH }, { out: BASH }], task: 'Run wc -l a.txt with Bash; report A=<n>.' })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('s1')
+  await h.step('s1')
+  expect(h.runs.length).toBe(2)
+  expect(h.runs[1].input).toContain('System prompt:')
+  expect(h.runs[1].input).toContain(`Your previous reply:\n${guess}\nPUSH-REFUSAL`)
+  await h.step('s1')
+  expect(h.runs[2].input).toContain('System prompt:') // a later step is never a delta
+  expect(h.runs[2].input).not.toContain('DELTA-RULE')
+})
+
+test('one set of hooks serves several adapters: each agent runs on its own adapter, other types pass through', async () => {
+  const a = fakeAdapter()
+  const b = fakeAdapter({ nickname: 'other', argv: () => ['other-run'] })
+  const h = harness(a, { replies: [{ out: BASH }, { out: BASH }, { out: BASH }], also: [b], agents: [{ id: 'b2', type: 'agents-inc:other' }] })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await registerAgent(h.$ as never, b, { cwd: '/w' })
+  await h.spawn('a1')
+  await h.spawn('b1', 'other')
+  await h.step('a1')
+  await h.step('b1')
+  await h.step('b2') // known only from the agent list
+  expect(h.runs.map(r => r.argv[0])).toEqual(['fake-run', 'other-run', 'other-run'])
+  await h.step('claude-1')
+  expect(h.placeholderCalls()).toBe(1)
+  const offer = h.hooks['agent.offer'] as (...x: unknown[]) => unknown
+  expect(offer(h.$, { agent: 'general-purpose' }, () => 'next')).toBe('next')
+  expect(offer(h.$, { agent: 'agents-inc:other' }, () => 'next')).toBe('next')
 })

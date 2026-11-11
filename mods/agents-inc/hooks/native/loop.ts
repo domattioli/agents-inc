@@ -124,7 +124,7 @@ type Cli = {
   ui: { log: (message: string, options: { to: 'debug' }) => unknown }
   session: { id: () => unknown }
 }
-type Status = { offered: boolean; slug: string; reason?: string }
+export type Status = { offered: boolean; slug: string; reason?: string }
 type Ran = { outcome: 'done' | 'failed' | 'quota-paused' | 'aborted'; usage: Usage }
 // Per subagent: the thread file it keeps, whether a run has used it, and how many api messages the model has seen.
 type AgentState = { n: number; used: boolean; sent: number }
@@ -382,7 +382,9 @@ function ensureBegin($: Cli, adapter: Adapter, id: string, task: string): Promis
 
 // Called from mod.ts (through luna.ts): a plugin's hooks.json names one module, and a module may register session.start once.
 // The type is registered only when the engine gives what the native type needs and the adapter's status verb offers it.
-export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: string }): Promise<void> {
+// `known`: a status already read for this adapter (registry.ts reads every model in one `native status` call); omitted,
+// the adapter's own status verb is asked (luna).
+export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: string }, known?: Status | null): Promise<void> {
   const S = stateFor(adapter)
   S.cwd = e.cwd
   S.offered = false
@@ -394,7 +396,7 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
   }
   // The contract check: the status call needs a streaming $.process.spawn, the registration needs $.agent.register.
   // A build without either leaves the type unregistered, and the debug log says which.
-  const status = await verbStatus($, adapter)
+  const status = known === undefined ? await verbStatus($, adapter) : known
   if (!status) {
     $.ui.log(`${S.log} not registered: ${adapter.cli.join(' ')} status gave no usable answer (needs a streaming $.process.spawn)`, { to: 'debug' })
     return
@@ -425,28 +427,41 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
 
 const RETRIED = ' (after one retry on a fresh thread)'
 
-// The hooks of one native type, called from luna.ts's register with its adapter.
+// The hooks of one native type (loop.test.ts drives one adapter this way).
 export function registerLoop(on: Parameters<Register>[0], adapter: Adapter): void {
-  const S = stateFor(adapter)
+  registerLoops(on, [adapter])
+}
+
+// The hooks of every native type, registered once: the engine refuses a second registration of an event in one module
+// (`on("agent.spawn") registered twice`), so one set of hooks serves all adapters and picks the one that owns the agent.
+export function registerLoops(on: Parameters<Register>[0], adapters: readonly Adapter[]): void {
+  const byType = new Map<string, Adapter>(adapters.map(a => [stateFor(a).types[0], a]))
+  const owner = (id: string) => adapters.find(a => stateFor(a).ids.has(id))
 
   on('agent.spawn', async ($, e, next) => {
     const r = await next(e)
-    if (S.types.includes(e.subagentType) && r.agentId) {
-      S.ids.add(r.agentId)
+    const adapter = byType.get(e.subagentType)
+    if (adapter && r.agentId) {
+      stateFor(adapter).ids.add(r.agentId)
       void ensureBegin($, adapter, r.agentId, String(e.prompt ?? ''))
     }
     return r
   })
 
-  // A session that registered the type before a switch-off still hides it; a failed guard hides it too.
-  on('agent.offer', { agent: S.types[0] }, (_$, e, next) => (S.offered ? next(e) : { isOffered: false }))
-    .catch((_$, e, next) => (next.called ? next(e) : { isOffered: false }))
+  // A session that registered the type before a switch-off still hides it; a failed guard hides it too. Other types
+  // pass through untouched.
+  on('agent.offer', (_$, e, next) => {
+    const a = byType.get(e.agent)
+    return a === undefined || stateFor(a).offered ? next(e) : { isOffered: false }
+  }).catch((_$, e, next) => (byType.has(e.agent) ? (next.called ? next(e) : { isOffered: false }) : next(e)))
 
   // Spec 028 D6 item 2: verify the tree against the begin snapshot and write the return row. The parent verifies (Q2).
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     const id = e.agentId
-    if (id === undefined || !S.ids.has(id)) return r
+    const adapter = id === undefined ? undefined : owner(id)
+    if (id === undefined || adapter === undefined) return r
+    const S = stateFor(adapter)
     const done = S.ran.get(id) ?? { outcome: 'failed' as const, usage: ZERO }
     const outcome = e.isAborted ? 'aborted' : done.outcome
     try {
@@ -469,20 +484,25 @@ export function registerLoop(on: Parameters<Register>[0], adapter: Adapter): voi
 
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId
-    if (id === undefined || !S.offered) return yield* next(e)
-    if (!S.ids.has(id)) {
+    const live = adapters.filter(a => stateFor(a).offered)
+    if (id === undefined || live.length === 0) return yield* next(e)
+    let adapter = owner(id)
+    if (adapter === undefined) {
       // The spawn hook may not have recorded the id yet; the agent list knows the type.
-      const listed = await $.agent.list().then(l => l.some(a => a.id === id && S.types.includes(a.type)), () => null)
+      const listed = await $.agent.list().then(l => l.find(a => a.id === id)?.type ?? '', () => null)
       if (listed === null) {
-        // Fail closed: a luna step must never reach the placeholder model.
-        const text = `${S.log} cannot identify agent ${id}; step not sent to the placeholder model`
+        // Fail closed: a native step must never reach the placeholder model.
+        const text = `${stateFor(live[0]).log} cannot identify agent ${id}; step not sent to the placeholder model`
         yield { kind: 'text', index: 0, text }
         yield { kind: 'stop', stopReason: 'end_turn', usage: null }
         return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null }
       }
-      if (!listed) return yield* next(e)
-      S.ids.add(id)
+      adapter = byType.get(listed)
+      if (adapter === undefined) return yield* next(e)
+      stateFor(adapter).ids.add(id)
     }
+    if (!stateFor(adapter).offered) return yield* next(e)
+    const S = stateFor(adapter)
     await ensureBegin($, adapter, id, taskText((await $.session.messages({ agentId: id, as: 'api' }).catch(() => [])) as Msg[]))
 
     const t0 = await $.clock.now()
@@ -499,7 +519,9 @@ export function registerLoop(on: Parameters<Register>[0], adapter: Adapter): voi
     // The engine takes only a literal name in $.env.get, so each adapter's env var is read here by name.
     const limitS = stepTimeoutS(adapter.timeoutEnv === 'AGENTS_INC_LUNA_STEP_TIMEOUT_S'
       ? await $.env.get('AGENTS_INC_LUNA_STEP_TIMEOUT_S').catch(() => undefined)
-      : undefined)
+      : adapter.timeoutEnv === 'AGENTS_INC_NATIVE_STEP_TIMEOUT_S'
+        ? await $.env.get('AGENTS_INC_NATIVE_STEP_TIMEOUT_S').catch(() => undefined)
+        : undefined)
     const never = () => new Promise<never>(() => {})
 
     // One run: stderr progress lines become thinking chunks as they arrive; stdout is the reply.
@@ -580,6 +602,7 @@ export function registerLoop(on: Parameters<Register>[0], adapter: Adapter): voi
           }
           chunk = stream.next()
           if (n.done) {
+            lastOut = stdout.slice(0, RESULT_CAP)
             if (pending) take(pending)
             for (const text of lines.splice(0)) yield { kind: 'thinking', index: 0, text }
             if (n.value.code === 0) return { reply: pickReply(said, stdout, allowed), failed: false }
@@ -622,12 +645,17 @@ export function registerLoop(on: Parameters<Register>[0], adapter: Adapter): voi
     const system = [...composed.sections.map(s => stripModelLines(s.text)), AGENT_PROMPT].join('\n\n')
     const types = await readToolTypes($)
     const full = () => buildPrompt(adapter, S.slug, system, catalog(tools, types, hand), messages, hand)
+    // A stateless adapter keeps no thread: every run gets the whole conversation, and a correction or push rides after
+    // it with the reply it answers (spec 038 R3). A thread adapter sends the follow-up text alone.
+    const stateless = adapter.kind === 'stateless'
+    let lastOut = ''
+    const more = (text: string) => (stateless ? `${full()}\nYour previous reply:\n${lastOut || '(empty)'}\n${text}` : text)
 
     const st = S.agents.get(id) ?? { n: 1, used: false, sent: 0 }
     S.agents.set(id, st)
     // A compacted conversation holds fewer messages than luna has seen: the thread no longer matches it, so start over.
     if (st.used && messages.length < st.sent) Object.assign(st, { n: st.n + 1, used: false, sent: 0 })
-    let resumed = st.used
+    let resumed = st.used && !stateless
     const sentBefore = st.sent
     let prompt = resumed ? `${deltaHeader(adapter)}${render(messages.slice(st.sent)) || '(nothing new)'}\n` : full()
     let chars = prompt.length
@@ -648,13 +676,13 @@ export function registerLoop(on: Parameters<Register>[0], adapter: Adapter): voi
     // correction (macOS, 2026-11-11, rollout 01a1cb16-2b78).
     if (!run.failed && typeof run.reply === 'string') {
       // The thread already holds the prompt: the correction alone is enough.
-      prompt = CORRECTION(run.reply)
+      prompt = more(CORRECTION(run.reply))
       chars += prompt.length
       run = yield* ask(prompt, threadPath(S, id, st.n), allowed)
     }
     if (!run.failed && skipsTools(run.reply, ranTool(messages, taskText(messages), names), taskText(messages), names)) {
       // One push; a second reply without tools stands as luna's answer.
-      prompt = adapter.pushes.refusal
+      prompt = more(adapter.pushes.refusal)
       chars += prompt.length
       const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       // An empty pushed reply keeps the first one: luna once answered the push with {"say": "", "tools": []}.
@@ -672,7 +700,7 @@ export function registerLoop(on: Parameters<Register>[0], adapter: Adapter): voi
       }
     } else if (!run.failed && stopsEarly(run.reply)) {
       // One push to go on; a second early stop stands as luna's answer.
-      prompt = adapter.pushes.unfinished
+      prompt = more(adapter.pushes.unfinished)
       chars += prompt.length
       const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
