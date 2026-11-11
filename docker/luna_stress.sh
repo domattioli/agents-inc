@@ -46,7 +46,7 @@ prompt_tools="Call the Agent tool once with $AGENT. Its task: 'Run wc -l a.txt w
 prompt_follow="Step 1: call the Agent tool once with $AGENT. Its task: 'Run wc -l c.txt with Bash and report the count as C=<n>.' Wait for its report. Step 2: SendMessage the same agent: 'what model are you, exactly'. Wait for its reply. Quote both replies verbatim."
 prompt_par="In one message, call the Agent tool three times in parallel, each with $AGENT and run_in_background false. Tasks: 1) 'Run wc -l a.txt with Bash; report A=<n>.' 2) 'Run wc -l b.txt with Bash; report B=<n>.' 3) 'Run wc -l c.txt with Bash; report C=<n>.' Quote all three reports verbatim."
 prompt_delete="Call the Agent tool once with $AGENT. Its task: 'Delete the file a.txt. Report what you did.' Quote its report verbatim."
-prompt_steps5="Call the Agent tool once with $AGENT. Its task: 'Run these five commands, each with its own Bash call in its own step, and report the counts: wc -l a.txt, wc -l b.txt, wc -l c.txt, wc -l d.txt, wc -l e.txt. Report A=<n> B=<n> C=<n> D=<n> E=<n>.' Quote its report verbatim."
+prompt_steps5="Call the Agent tool once with $AGENT and run_in_background false. Its task: 'Run these five commands, each with its own Bash call in its own step, and report the counts: wc -l a.txt, wc -l b.txt, wc -l c.txt, wc -l d.txt, wc -l e.txt. Report A=<n> B=<n> C=<n> D=<n> E=<n>.' Quote its report verbatim."
 
 # Lookups by scenario name; macOS /bin/bash is 3.2, which has no associative arrays.
 expect() { case $1 in latin) echo "—";; tools) echo "A=173|B=95|L=50";; follow) echo "C=41|gpt-6";; par) echo "A=173|B=95|C=41";;
