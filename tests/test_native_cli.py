@@ -123,10 +123,10 @@ class NativeCli(unittest.TestCase):
         sub = self.ws / "out"
         native.allow(self.paths, "gemini", str(self.ws), ["out"])
         want = [os.path.realpath(sub)]
-        self.assertEqual(self.status()["write_dirs"], want)
+        self.assertEqual(self.status()["write_dirs"][:1], want)  # extra entries are the same dirs under cwd's own spelling
         code, out, _ = run(["native", "--model", "gemini-flash", "begin", "--session", "s1", "--agent", "a1", "--cwd", str(self.ws)])
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(out)["write_dirs"], want)
+        self.assertEqual(json.loads(out)["write_dirs"][:1], want)
 
     def test_begin_by_provider(self):
         native.allow(self.paths, "gemini", str(self.ws))
@@ -143,6 +143,45 @@ class NativeCli(unittest.TestCase):
         self.assertIsNone(native.authorization(self.paths, "mistral", str(self.ws)))
         (self.ws / "sub").mkdir()
         self.assertIsNotNone(native.authorization(self.paths, "gemini", str(self.ws / "sub")))
+
+    def test_authorization_matches_a_symlinked_spelling_of_the_workspace(self):
+        # Works on every filesystem: a symlink is a second spelling of the same directory.
+        link = Path(self.tmp.name) / "link"; link.symlink_to(self.ws)
+        native.allow(self.paths, "gemini", str(link), ["out"])
+        rec = native.authorization(self.paths, "gemini", str(self.ws))
+        self.assertIsNotNone(rec)
+        self.assertIsNotNone(native.authorization(self.paths, "gemini", str(link)))
+        (self.ws / "sub").mkdir()
+        self.assertIsNotNone(native.authorization(self.paths, "gemini", str(link / "sub")))
+        # a different directory never matches
+        other = Path(self.tmp.name) / "other"; other.mkdir()
+        self.assertIsNone(native.authorization(self.paths, "gemini", str(other)))
+        self.assertTrue(native._same_dir(str(link), str(self.ws)))
+        self.assertFalse(native._same_dir(str(other), str(self.ws)))
+        self.assertFalse(native._same_dir(str(self.ws / "missing"), str(self.ws / "missing2")))
+
+    def test_write_dirs_come_back_under_the_spelling_of_cwd(self):
+        spelled = Path(self.tmp.name) / "spelled"; spelled.mkdir()
+        (spelled / "sub").mkdir()
+        # authorize through the real name, then ask from a case-changed or relinked spelling of the same directory
+        native.allow(self.paths, "gemini", str(spelled))
+        link = Path(self.tmp.name) / "alias"; link.symlink_to(spelled)
+        rec = native.authorization(self.paths, "gemini", str(link / "sub"))
+        self.assertIn(os.path.join(os.path.realpath(spelled), ".scratch"), rec["write_dirs"])
+        self.assertIn(str(link / ".scratch"), rec["write_dirs"])
+        # every dir named stays inside the workspace
+        for d in rec["write_dirs"]:
+            self.assertTrue(native._same_dir(os.path.dirname(d), str(spelled)))
+
+    def test_authorization_matches_a_case_changed_spelling(self):
+        d = Path(self.tmp.name) / "CaseDir"; d.mkdir()
+        swapped = Path(self.tmp.name) / "casedir"
+        if not swapped.exists():
+            self.skipTest("case-sensitive filesystem")
+        native.allow(self.paths, "gemini", str(swapped))
+        self.assertEqual(native.allow(self.paths, "gemini", str(swapped))["workspace"], os.path.realpath(d))  # on-disk case
+        self.assertIsNotNone(native.authorization(self.paths, "gemini", str(swapped)))
+        self.assertEqual(len(native._read_json(self.paths.state / native.ALLOW_FILE)["records"]), 1)
 
     def test_refusal_starts_nothing_and_sends_nothing(self):
         self.key(); self.probe()

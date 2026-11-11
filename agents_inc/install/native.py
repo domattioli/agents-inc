@@ -103,32 +103,79 @@ def _write_json(path: Path, data: dict) -> None:
 def _real(p: str | Path) -> str: return os.path.realpath(os.path.expanduser(str(p)))
 
 
+def _same_dir(a: str, b: str) -> bool:
+    """True when two paths name the same existing directory: equal realpaths, else `os.path.samefile` (a case-insensitive
+    filesystem keeps one directory under two spellings, and realpath does not fold the case). Never true for a missing path."""
+    if a == b: return True
+    try: return os.path.isdir(a) and os.path.isdir(b) and os.path.samefile(a, b)
+    except OSError: return False
+
+
+def _canon(p: str | Path) -> str:
+    """The realpath with each component spelled as the directory lists it (the on-disk case)."""
+    out = _real(p)
+    parts = out.split(os.sep)
+    cur = os.sep
+    for part in parts[1:]:
+        if part == "": continue
+        try:
+            hit = part if part in os.listdir(cur) else next((n for n in os.listdir(cur) if n.casefold() == part.casefold() and _same_dir(os.path.join(cur, n), os.path.join(cur, part))), part)
+        except OSError:
+            hit = part
+        cur = os.path.join(cur, hit)
+    return cur
+
+
 # Workspace authorization (D76, data-model WorkspaceAuthorization).
 def allow(paths: InstallPaths, provider: str, workspace: str, write_dirs: list[str] | None = None, note: str = "") -> dict:
     if provider not in FREE_PROVIDERS: raise ValueError(f"authorization is for a free provider ({', '.join(FREE_PROVIDERS)}): {provider!r}")
-    ws = _real(workspace)
+    ws = _canon(os.path.expanduser(workspace))
     if not Path(ws).is_dir(): raise ValueError(f"workspace is not a directory: {workspace}")
-    dirs = [_real(d if os.path.isabs(d) else os.path.join(ws, d)) for d in (write_dirs or [".scratch"])]
+    dirs = [_canon(d if os.path.isabs(d) else os.path.join(ws, d)) for d in (write_dirs or [".scratch"])]
     record = {"workspace": ws, "provider": provider, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "write_dirs": dirs, "note": note}
     data = _read_json(paths.state / ALLOW_FILE)
-    rows = [r for r in data.get("records", []) if isinstance(r, dict) and not (r.get("workspace") == ws and r.get("provider") == provider)]
+    rows = [r for r in data.get("records", []) if isinstance(r, dict) and not (isinstance(r.get("workspace"), str) and _same_dir(r["workspace"], ws) and r.get("provider") == provider)]
     _write_json(paths.state / ALLOW_FILE, {"records": [*rows, record]})
     return record
 
 
 def authorization(paths: InstallPaths, provider: str, cwd: str) -> dict | None:
-    """The record covering cwd (the workspace itself or a directory inside it), or None."""
+    """The record covering cwd (the workspace itself or a directory inside it), or None. A directory counts when it is the
+    same existing directory under another spelling (case, symlink). The record's write_dirs also come back spelled under
+    cwd's own spelling, since the mod compares paths as text."""
     here = _real(cwd)
+    spelled = os.path.abspath(os.path.expanduser(str(cwd)))
     for r in _read_json(paths.state / ALLOW_FILE).get("records", []):
         if not isinstance(r, dict) or r.get("provider") != provider: continue
         ws = r.get("workspace")
-        if isinstance(ws, str) and (here == ws or here.startswith(ws.rstrip(os.sep) + os.sep)): return r
+        if not isinstance(ws, str): continue
+        anc = here
+        while True:  # some ancestor of cwd (cwd included) is the workspace directory, under whatever spelling
+            if _same_dir(anc, ws): return _respelled(r, ws, spelled, here, anc)
+            up = os.path.dirname(anc)
+            if up == anc: break
+            anc = up
     return None
 
 
+def _respelled(record: dict, ws: str, spelled: str, here: str, anc: str) -> dict:
+    """The record plus its write dirs under the spelling of cwd. `anc` is the realpath ancestor of cwd that is the workspace."""
+    depth = len([x for x in os.path.relpath(here, anc).split(os.sep) if x not in ("", ".")]) if here != anc else 0
+    root = spelled
+    for _ in range(depth): root = os.path.dirname(root)
+    dirs = list(record.get("write_dirs") or [])
+    if not _same_dir(root, ws): return {**record, "write_dirs": dirs}  # symlinks changed the depth: add nothing
+    for d in list(dirs):
+        rel = os.path.relpath(d, ws)
+        if not rel.startswith(".."):
+            alt = os.path.normpath(os.path.join(root, rel))
+            if alt not in dirs: dirs.append(alt)
+    return {**record, "write_dirs": dirs}
+
+
 def needs_authorization(nick: str, provider: str, cwd: str) -> dict:
-    ws = _real(cwd)
+    ws = _canon(cwd)
     return {"status": "needs-authorization", "model": nick, "provider": provider, "workspace": ws, "sends": SENDS,
             "write_dirs": [os.path.join(ws, ".scratch")],
             "allow": f"agents-inc native allow {provider} --workspace {ws}"}
