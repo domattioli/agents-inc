@@ -1,8 +1,10 @@
 import type { Register } from 'claude-code'
+import { type Adapter, authKnown, type Outcome, type Reply } from './adapter'
 
-const AGENT = 'luna'
-const AGENT_TYPES = ['agents-inc:luna']
-const LOG = 'agents-inc luna:'
+// Spec 038 slice 1: the provider-neutral step loop. One state record per adapter (stateFor); the adapter supplies the
+// model-specific prompt lines, pushes, argv and exit-code mapping (contracts/step-adapter.md).
+export type { Adapter, Outcome, Reply } from './adapter'
+
 const HANDBACK = 'SubagentHandback'
 const HANDBACK_ARGS = '{ message: string }'
 const HANDBACK_CUE = 'call SubagentHandback('
@@ -11,12 +13,11 @@ const DESC_CAP = 500
 const MCP_DESC_CAP = 200
 // The step timer runs on $.clock.sleep, which is monotonic: time the host spends asleep does not count, so a Mac that
 // sleeps mid-step does not fail the step on time alone (macOS stress run, 2026-10-25).
-// Per run (one `agents-inc run`): `agents-inc run --timeout` kills Codex's process group at the limit and exits 124; this
+// Per run: the adapter's run timeout flag (`agents-inc run --timeout`) kills the model process at the limit; this
 // hook's own timer is a backstop STEP_GRACE_S later. A Codex model call stalled with no output for the whole 300 s
 // limit, then the step failed (macOS, 2026-11-11; rollout 01a1cb10 stops at 14:45:01). Default 60 s; normal steps take
-// 3-25 s. AGENTS_INC_LUNA_STEP_TIMEOUT_S overrides it.
+// 3-25 s. The adapter's timeoutEnv (AGENTS_INC_LUNA_STEP_TIMEOUT_S for luna) overrides it.
 export const STEP_TIMEOUT_S = 60
-const STEP_TIMEOUT_ENV = 'AGENTS_INC_LUNA_STEP_TIMEOUT_S'
 const STEP_GRACE_S = 15
 // A live "still working" line this often while a run is in flight.
 const HEARTBEAT_MS = 10_000
@@ -33,12 +34,9 @@ const NO_ASK = 'Nobody can answer a question here: never ask one and never ask f
 // luna asked whether to follow them instead of the task (rollout 01a1cb50-d730, 2026-11-11).
 const SUBAGENT_NOTE = 'You are a subagent. Session-start steps in the instructions (a required Skill call, a handoff ' +
   'check) are for the main session: skip them unless the task asks for them.\n'
-// A step stopped for asking (exit 77) is retried on a fresh thread that says so (same stress run: the retry asked too).
-const ASKED_NOTE = 'Your previous attempt at this step asked a question and was stopped: nobody can answer. ' +
-  'Do not ask. Request the catalog tools the task needs in "tools" now.\n'
-const DELTA_HEADER =
+const deltaHeader = (a: Adapter) =>
   'New messages since your last reply. Same rules: reply with one JSON object {say, tools}; act on the latest messages; finish as the rules said. ' +
-  'Request catalog tools in "tools", never through exec or another Codex tool. ' +
+  a.deltaRule +
   NO_ASK
 // luna sometimes reads Codex's read-only sandbox note as its own and answers that it cannot run a tool, calling none.
 // luna also read Codex's filesystem note (`<permission_profile>... :root`) as "read access only to root" and handed back
@@ -49,12 +47,6 @@ const handbackText = (reply: Reply) =>
 // A refusal: the reply says it cannot run the tools, in "say" or in a hand-back message.
 export const refuses = (reply: Reply | string | null): boolean =>
   reply !== null && typeof reply !== 'string' && reply.tools.every(t => t.name === HANDBACK) && REFUSAL.test(handbackText(reply))
-// luna refused twice with "the catalog Bash tool is not in my available tools" (par scenario, spec 028 Docker run): the
-// push says where the catalog tools are, since luna looks for them in Codex's own tool list.
-const PUSH = 'You answered without running a tool the task needs. The catalog tools are not in your own tool list, and that is ' +
-  'expected: they are in the Tools list of the prompt, and you call one by naming it in "tools". Every catalog tool is real and the host runs it for you; ' +
-  'a value you report must come from a tool result in this conversation, never from a snapshot or a guess. ' +
-  'Request the tools the task needs in "tools" now. Reply with exactly one JSON object.\n'
 // A first reply that runs nothing is pushed once when it refuses a tool, or when the task names a catalog tool:
 // luna answered "A=0" for `wc -l a.txt` without running Bash (Docker stress run, 2026-10-24).
 export function skipsTools(reply: Reply | string | null, ranTool: boolean, task = '', names: readonly string[] = []): boolean {
@@ -77,22 +69,19 @@ export function taskText(messages: readonly Msg[]): string {
 // luna ran one of five commands and answered "A=173. I haven't run the other four commands yet." (steps5, spec 028 Docker run).
 // luna also said "the other four remain unrun" and "their results have not arrived".
 const UNFINISHED = /\b(haven['’]?t|have not|not yet|yet to)\b[^.]*\b(run|read|done|finish|complete|execute)|\bremaining (\w+ )?(commands?|steps?)\b|\bremain(s)? (unrun|to run|undone)\b|\bunrun\b|\b(have|has) not arrived\b|\b(haven|hasn)['’]?t arrived\b/i
-const CONTINUE = 'Your reply says steps of the task remain. Request the tools for the remaining steps in "tools" now; report only when ' +
-  'every result the report needs is in. Reply with exactly one JSON object.\n'
 export const stopsEarly = (reply: Reply | string | null): boolean =>
   reply !== null && typeof reply !== 'string' && reply.tools.length === 0 && UNFINISHED.test(reply.say)
 const CORRECTION = (why: string) => `Your previous reply was rejected: ${why}. Reply with exactly one JSON object, only tools from the Tools list.\n`
 const TOOL_TYPES_PATH = '.claude-plugin/types/claude-code-tools/index.d.ts'
 
-// The slug comes from `agents-inc luna status`, never from a fixed string here.
-const header = () =>
+// The slug comes from the adapter's status verb, never from a fixed string here.
+const header = (a: Adapter, slug: string) =>
   'You drive an agent loop with real tools. To run a tool, name it in "tools"; the host runs it and its result arrives ' +
   'in the next step. Bash, Read and every other catalog tool work this way, so never answer that you cannot run one.\n' +
-  'The catalog tools live in the host, not in Codex: they never appear in your own tool list, so never look for them there. ' +
+  a.toolHome +
   'Example, to run a shell command: {"say": "", "tools": [{"name": "Bash", "input": {"command": "ls"}}]}\n' +
-  `You are luna (OpenAI GPT-6 Luna, model ${lunaSlug}, run through Codex).\n` +
-  'Codex\'s own tools (exec, wait, request_user_input, list_agents, send_message, collaboration.*, and any other) are ' +
-  'not yours in this loop: never call them, never search them for a catalog tool, and never pass your reply to one. ' +
+  a.identity(slug) +
+  a.ownTools +
   'Your reply is the JSON object itself, written as your final message text. Every tool in the catalog below is real and available: call it ' +
   'by naming it in "tools", and its result arrives in the next step. Never report a catalog tool as unavailable.\n' +
   'Report only values you read in a tool result in this conversation; never guess one. The git status and other context ' +
@@ -114,15 +103,11 @@ const FINAL_RULES =
 
 const AGENT_PROMPT = 'You are a general-purpose agent. Complete the task you are given, then hand your report back.'
 
-type Reply = { say: string; tools: { name: string; input: unknown }[] }
 type Block = { type: string; [field: string]: unknown }
 type Msg = { role: 'user' | 'assistant'; content: Block[] }
 type Tool = { name: string; description: string; mcp?: boolean }
 type Thinking = { kind: 'thinking'; index: number; text: string }
 type Usage = { input_tokens: number; cached_input_tokens: number; output_tokens: number }
-// One agents-inc run: the reply (or why it was rejected), whether the run itself failed, and what it cost.
-// `fail` is the text the parent sees for a failed run; `retry: false` marks a failure a fresh thread cannot cure.
-type Outcome = { reply: Reply | string | null; failed: boolean; fail?: string; retry?: boolean; asked?: boolean }
 type Cli = {
   process: { spawn: (a: { argv: string[]; cwd?: string; input?: string }) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, { code: number | null }> }
   ui: { log: (message: string, options: { to: 'debug' }) => unknown }
@@ -130,23 +115,10 @@ type Cli = {
 }
 type Status = { offered: boolean; slug: string; reason?: string }
 type Ran = { outcome: 'done' | 'failed' | 'quota-paused' | 'aborted'; usage: Usage }
-// Per luna subagent: the Codex thread file it keeps, whether a run has used it, and how many api messages luna has seen.
+// Per subagent: the thread file it keeps, whether a run has used it, and how many api messages the model has seen.
 type AgentState = { n: number; used: boolean; sent: number }
-
-const lunaIds = new Set<string>()
-const agents = new Map<string, AgentState>()
-// Last running total Codex reported per thread file.
-const threadTotals = new Map<string, Usage>()
 const ZERO: Usage = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 }
-let sessionCwd = ''
-let sessionId = 'session'
-let lunaSlug = 'luna'
-let offered = false // what `agents-inc luna status` said at session start
-// Per luna agent: the `agents-inc luna begin` call, and what its steps cost and how the last one ended.
-const begun = new Map<string, Promise<void>>()
-const ran = new Map<string, Ran>()
 let toolTypes: string | undefined // text of the engine-written built-in tool argument types, read once
-let runTimeoutFlag = true // false once the installed agents-inc refused --timeout
 
 type TurnUsageOut = {
   input_tokens: number
@@ -171,11 +143,10 @@ export const trimSkillList = (text: string) =>
     return `${head}${names.join(', ')}\n${tail}`
   })
 
-// The dir is git-ignored; agents-inc creates it. A fresh thread after a failed resume gets the suffix -2, -3...
 const safe = (s: string) => s.replace(/[^\w.-]/g, '_')
-const threadPath = (agentId: string, n: number) =>
-  `${sessionCwd || '.'}/.scratch/agents-inc-luna/${safe(sessionId)}/${safe(agentId)}${n > 1 ? `-${n}` : ''}.thread`
-const debugOn = () => (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.AGENTS_INC_LUNA_DEBUG === '1'
+// AGENTS_INC_LUNA_DEBUG for luna.
+const debugOn = (nick: string) =>
+  (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[`AGENTS_INC_${nick.toUpperCase()}_DEBUG`] === '1'
 
 const cap = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n[truncated ${s.length - n} chars]` : s)
 
@@ -246,8 +217,8 @@ export function render(messages: readonly Msg[]): string {
   return out.join('\n')
 }
 
-export function buildPrompt(system: string, tools: string, messages: readonly Msg[], hand = true): string {
-  return `${header()}${hand ? HANDBACK_RULES : FINAL_RULES}\nSystem prompt:\n${system}\n\nTools:\n${tools}\n\nConversation:\n${render(messages) || '(empty)'}\n`
+export function buildPrompt(a: Adapter, slug: string, system: string, tools: string, messages: readonly Msg[], hand = true): string {
+  return `${header(a, slug)}${hand ? HANDBACK_RULES : FINAL_RULES}\nSystem prompt:\n${system}\n\nTools:\n${tools}\n\nConversation:\n${render(messages) || '(empty)'}\n`
 }
 
 // First balanced {...} in the text, parsed; a reason string when none parses or the shape is wrong.
@@ -320,9 +291,50 @@ async function readToolTypes($: { plugin: { root: string }; fs: { read: (p: stri
   return ''
 }
 
-// Called from mod.ts: a plugin's hooks.json names one module, and a module may register session.start once.
-async function lunaCli($: Cli, args: string[], cwd?: string): Promise<{ code: number | null; out: string; err: string }> {
-  const stream = $.process.spawn({ argv: ['agents-inc', 'luna', ...args], cwd })
+type Register$ = Cli & { agent: { register: (a: Record<string, unknown>) => Promise<unknown> } }
+
+// Per adapter, the state that was module-level in luna.ts. One record per adapter for the life of the module, so state
+// survives across steps the way luna.ts module variables did. The engine accepts `on` only when passed to a top-level
+// function, so the hooks live in registerLoop (below) and read this record, not a closure.
+type LoopState = {
+  agent: string // nickname
+  types: string[] // `agents-inc:<nickname>`
+  log: string // debug-line prefix
+  quota: string // `<nickname> quota-paused`
+  ids: Set<string>
+  agents: Map<string, AgentState>
+  threadTotals: Map<string, Usage> // last running total a thread adapter reported per thread file
+  cwd: string
+  sessionId: string
+  slug: string
+  offered: boolean // what the adapter's status verb said at session start
+  begun: Map<string, Promise<void>> // per agent: the begin call
+  ran: Map<string, Ran> // per agent: what its steps cost and how the last one ended
+  runTimeoutFlag: boolean // false once the installed runtime refused the timeout flag
+}
+const states = new Map<Adapter, LoopState>()
+function stateFor(adapter: Adapter): LoopState {
+  let S = states.get(adapter)
+  if (!S) {
+    const agent = adapter.nickname
+    S = {
+      agent, types: [`agents-inc:${agent}`], log: `agents-inc ${agent}:`, quota: `${agent} quota-paused`,
+      ids: new Set(), agents: new Map(), threadTotals: new Map(), cwd: '', sessionId: 'session', slug: agent,
+      offered: false, begun: new Map(), ran: new Map(), runTimeoutFlag: true,
+    }
+    states.set(adapter, S)
+  }
+  return S
+}
+
+// The dir is git-ignored; agents-inc creates it. A fresh thread after a failed resume gets the suffix -2, -3...
+const threadPath = (S: LoopState, agentId: string, n: number) =>
+  `${S.cwd || '.'}/.scratch/agents-inc-${safe(S.agent)}/${safe(S.sessionId)}/${safe(agentId)}${n > 1 ? `-${n}` : ''}.thread`
+
+// The adapter's status|begin|end verbs (`agents-inc luna ...` for luna).
+async function verbCli($: Cli, adapter: Adapter, args: string[], cwd?: string): Promise<{ code: number | null; out: string; err: string }> {
+  const argv = [...adapter.cli, ...args]
+  const stream = $.process.spawn({ argv, cwd })
   let out = ''
   let err = ''
   for (;;) {
@@ -333,9 +345,9 @@ async function lunaCli($: Cli, args: string[], cwd?: string): Promise<{ code: nu
   }
 }
 
-async function lunaStatus($: Cli): Promise<Status | null> {
+async function verbStatus($: Cli, adapter: Adapter): Promise<Status | null> {
   try {
-    const r = await lunaCli($, ['status', '--json'])
+    const r = await verbCli($, adapter, ['status', '--json'])
     const d = JSON.parse(r.out) as Status
     if (r.code === 0 && typeof d.offered === 'boolean' && typeof d.slug === 'string') return d
   } catch {
@@ -344,144 +356,127 @@ async function lunaStatus($: Cli): Promise<Status | null> {
   return null
 }
 
-// Spec 028 D6 item 1: pin the working tree once per luna agent. Failures are logged; the run goes on (Q2).
-function ensureBegin($: Cli, id: string, task: string): Promise<void> {
-  let p = begun.get(id)
+// Spec 028 D6 item 1: pin the working tree once per agent. Failures are logged; the run goes on (Q2).
+function ensureBegin($: Cli, adapter: Adapter, id: string, task: string): Promise<void> {
+  const S = stateFor(adapter)
+  let p = S.begun.get(id)
   if (!p) {
-    p = lunaCli($, ['begin', '--session', sessionId, '--agent', id, '--cwd', sessionCwd || '.', '--task', task.slice(0, 200)])
-      .then(r => { if (r.code !== 0) $.ui.log(`${LOG} begin exited ${r.code}: ${failureText(r.err)}`, { to: 'debug' }) })
-      .catch(err => { $.ui.log(`${LOG} begin failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' }) })
-    begun.set(id, p)
+    p = verbCli($, adapter, ['begin', '--session', S.sessionId, '--agent', id, '--cwd', S.cwd || '.', '--task', task.slice(0, 200)])
+      .then(r => { if (r.code !== 0) $.ui.log(`${S.log} begin exited ${r.code}: ${failureText(r.err)}`, { to: 'debug' }) })
+      .catch(err => { $.ui.log(`${S.log} begin failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' }) })
+    S.begun.set(id, p)
   }
   return p
 }
 
-// Called from mod.ts: a plugin's hooks.json names one module, and a module may register session.start once.
-// The type is registered only when the engine gives what the native type needs and `agents-inc luna status` offers it.
-export async function registerLunaAgent(
-  $: Cli & { agent: { register: (a: Record<string, unknown>) => Promise<unknown> } },
-  e: { cwd: string },
-): Promise<void> {
-  sessionCwd = e.cwd
-  offered = false
-  runTimeoutFlag = true
-  // The contract check: the status call needs a streaming $.process.spawn, the registration needs $.agent.register.
-  // A build without either leaves the type unregistered, and the debug log says which.
-  const status = await lunaStatus($)
-  if (!status) {
-    $.ui.log(`${LOG} not registered: agents-inc luna status gave no usable answer (needs a streaming $.process.spawn)`, { to: 'debug' })
+// Called from mod.ts (through luna.ts): a plugin's hooks.json names one module, and a module may register session.start once.
+// The type is registered only when the engine gives what the native type needs and the adapter's status verb offers it.
+export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: string }): Promise<void> {
+  const S = stateFor(adapter)
+  S.cwd = e.cwd
+  S.offered = false
+  S.runTimeoutFlag = true
+  // T021a: an adapter whose auth the loop does not know registers nothing, so no step can reach it.
+  if (!authKnown(adapter)) {
+    $.ui.log(`${S.log} not registered: unknown auth ${JSON.stringify((adapter as { auth?: unknown }).auth)}`, { to: 'debug' })
     return
   }
-  lunaSlug = status.slug
+  // The contract check: the status call needs a streaming $.process.spawn, the registration needs $.agent.register.
+  // A build without either leaves the type unregistered, and the debug log says which.
+  const status = await verbStatus($, adapter)
+  if (!status) {
+    $.ui.log(`${S.log} not registered: ${adapter.cli.join(' ')} status gave no usable answer (needs a streaming $.process.spawn)`, { to: 'debug' })
+    return
+  }
+  S.slug = status.slug
   if (!status.offered) {
-    $.ui.log(`${LOG} not registered: ${status.reason ?? 'not offered'}`, { to: 'debug' })
+    $.ui.log(`${S.log} not registered: ${status.reason ?? 'not offered'}`, { to: 'debug' })
     return
   }
   try {
-    sessionId = String((await $.session.id()) || sessionId)
+    S.sessionId = String((await $.session.id()) || S.sessionId)
   } catch {
     // keep the default
   }
   try {
     // No tools and no permissionMode: the agent inherits the parent's, like any native subagent.
     await $.agent.register({
-      name: AGENT,
-      description: `General-purpose agent whose reasoning is done by luna (${status.slug}, run through Codex).`,
+      name: S.agent,
+      description: adapter.description(status.slug),
       prompt: AGENT_PROMPT,
       model: 'haiku', // placeholder: turn.step never calls it for this agent
     })
-    offered = true
+    S.offered = true
   } catch (err) {
-    $.ui.log(`${LOG} not registered: $.agent.register failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
+    $.ui.log(`${S.log} not registered: $.agent.register failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
   }
 }
 
-// The text the parent sees when `agents-inc run` exits non-zero (D4). Quota, a missing catalog and a missing Codex are
-// not cured by a fresh thread, so they are not retried.
-function exitFailure(code: number | null, stderr: string, why: string, limitS: number): Outcome {
-  const clean = failureText(stderr)
-  if (code === 124) return { reply: why, failed: true, fail: timeoutText(limitS) }
-  if (code === 77 || stderr.includes('WB_LUNA_RUNAWAY')) {
-    const line = clean.split('\n').find(l => l.includes('WB_LUNA_RUNAWAY'))?.replace(/^.*?WB_LUNA_RUNAWAY:?\s*/, '') ?? clean.split('\n')[0]
-    return { reply: why, failed: true, asked: true, fail: `luna failed: Codex looped on its own tools and was stopped to cap token use (${line})` }
-  }
-  if (code === 75) {
-    const line = clean.split('\n').find(l => /usage or rate limit/.test(l)) ?? clean.split('\n')[0]
-    return { reply: why, failed: true, retry: false, fail: `luna quota-paused: ${line}` }
-  }
-  const missing = /WB_(CLI_NOT_FOUND|CODEX_AUTH_MISSING)/.exec(stderr)
-  if (missing) return { reply: why, failed: true, retry: false, fail: `luna failed: Codex missing (${missing[0]})` }
-  if (code === 3 && stderr.includes('WB_LUNA_CATALOG_MISSING')) {
-    const rest = clean.split('\n').find(l => l.includes('WB_LUNA_CATALOG_MISSING'))?.replace(/^.*?WB_LUNA_CATALOG_MISSING:?\s*/, '') ?? ''
-    return { reply: why, failed: true, retry: false, fail: `luna failed: catalog missing (WB_LUNA_CATALOG_MISSING) ${rest}`.trim() }
-  }
-  return { reply: why, failed: true, fail: `luna failed: run exited ${code}: ${clean}` }
-}
-
-const timeoutText = (s: number) => `luna failed: timeout: Codex sent no reply within ${s} s (limit ${STEP_TIMEOUT_ENV})`
 const RETRIED = ' (after one retry on a fresh thread)'
 
-export const register: Register = on => {
+// The hooks of one native type, called from luna.ts's register with its adapter.
+export function registerLoop(on: Parameters<Register>[0], adapter: Adapter): void {
+  const S = stateFor(adapter)
 
   on('agent.spawn', async ($, e, next) => {
     const r = await next(e)
-    if (AGENT_TYPES.includes(e.subagentType) && r.agentId) {
-      lunaIds.add(r.agentId)
-      void ensureBegin($, r.agentId, String(e.prompt ?? ''))
+    if (S.types.includes(e.subagentType) && r.agentId) {
+      S.ids.add(r.agentId)
+      void ensureBegin($, adapter, r.agentId, String(e.prompt ?? ''))
     }
     return r
   })
 
   // A session that registered the type before a switch-off still hides it; a failed guard hides it too.
-  on('agent.offer', { agent: AGENT_TYPES[0] }, (_$, e, next) => (offered ? next(e) : { isOffered: false }))
+  on('agent.offer', { agent: S.types[0] }, (_$, e, next) => (S.offered ? next(e) : { isOffered: false }))
     .catch((_$, e, next) => (next.called ? next(e) : { isOffered: false }))
 
   // Spec 028 D6 item 2: verify the tree against the begin snapshot and write the return row. The parent verifies (Q2).
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     const id = e.agentId
-    if (id === undefined || !lunaIds.has(id)) return r
-    const done = ran.get(id) ?? { outcome: 'failed' as const, usage: ZERO }
+    if (id === undefined || !S.ids.has(id)) return r
+    const done = S.ran.get(id) ?? { outcome: 'failed' as const, usage: ZERO }
     const outcome = e.isAborted ? 'aborted' : done.outcome
     try {
-      await begun.get(id)
-      const end = await lunaCli($, ['end', '--session', sessionId, '--agent', id, '--cwd', sessionCwd || '.', '--outcome', outcome, '--usage', JSON.stringify(done.usage)])
+      await S.begun.get(id)
+      const end = await verbCli($, adapter, ['end', '--session', S.sessionId, '--agent', id, '--cwd', S.cwd || '.', '--outcome', outcome, '--usage', JSON.stringify(done.usage)])
       if (end.code !== 0) {
-        $.ui.log(`${LOG} end exited ${end.code}: ${failureText(end.err)}`, { to: 'debug' })
+        $.ui.log(`${S.log} end exited ${end.code}: ${failureText(end.err)}`, { to: 'debug' })
         return r
       }
       const rec = JSON.parse(end.out) as { snapshot?: string; changed?: string[] }
       if (typeof rec.snapshot === 'string' && rec.snapshot.startsWith('changed')) {
         const paths = (rec.changed ?? []).slice(0, 5).join(', ')
-        return { ...r, text: `${r.text}\n[agents-inc luna] The working tree changed while this agent ran (${rec.snapshot}): ${paths}. Check it before you rely on the report.` }
+        return { ...r, text: `${r.text}\n[agents-inc ${S.agent}] The working tree changed while this agent ran (${rec.snapshot}): ${paths}. Check it before you rely on the report.` }
       }
     } catch (err) {
-      $.ui.log(`${LOG} end failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
+      $.ui.log(`${S.log} end failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
     }
     return r
   })
 
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId
-    if (id === undefined || !offered) return yield* next(e)
-    if (!lunaIds.has(id)) {
+    if (id === undefined || !S.offered) return yield* next(e)
+    if (!S.ids.has(id)) {
       // The spawn hook may not have recorded the id yet; the agent list knows the type.
-      const listed = await $.agent.list().then(l => l.some(a => a.id === id && AGENT_TYPES.includes(a.type)), () => null)
+      const listed = await $.agent.list().then(l => l.some(a => a.id === id && S.types.includes(a.type)), () => null)
       if (listed === null) {
         // Fail closed: a luna step must never reach the placeholder model.
-        const text = `${LOG} cannot identify agent ${id}; step not sent to the placeholder model`
+        const text = `${S.log} cannot identify agent ${id}; step not sent to the placeholder model`
         yield { kind: 'text', index: 0, text }
         yield { kind: 'stop', stopReason: 'end_turn', usage: null }
         return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null }
       }
       if (!listed) return yield* next(e)
-      lunaIds.add(id)
+      S.ids.add(id)
     }
-    await ensureBegin($, id, taskText((await $.session.messages({ agentId: id, as: 'api' }).catch(() => [])) as Msg[]))
+    await ensureBegin($, adapter, id, taskText((await $.session.messages({ agentId: id, as: 'api' }).catch(() => [])) as Msg[]))
 
     const t0 = await $.clock.now()
     // Shown live, not recorded: the window has something to show while luna works.
-    yield { kind: 'thinking', index: 0, text: `luna is working on step ${e.index}…` }
+    yield { kind: 'thinking', index: 0, text: `${S.agent} is working on step ${e.index}…` }
     const aborted = new Promise<null>(res => {
       if (next.signal.aborted) res(null)
       else next.signal.addEventListener('abort', () => res(null), { once: true })
@@ -490,21 +485,24 @@ export const register: Register = on => {
     const acc: { usage: Usage | null; slug?: string; tools: string[] } = { usage: null, tools: [] } // summed over this step's runs
     const STOP = Symbol('stop')
     const TICK = Symbol('tick')
-    const limitS = stepTimeoutS(await $.env.get('AGENTS_INC_LUNA_STEP_TIMEOUT_S').catch(() => undefined))
+    // The engine takes only a literal name in $.env.get, so each adapter's env var is read here by name.
+    const limitS = stepTimeoutS(adapter.timeoutEnv === 'AGENTS_INC_LUNA_STEP_TIMEOUT_S'
+      ? await $.env.get('AGENTS_INC_LUNA_STEP_TIMEOUT_S').catch(() => undefined)
+      : undefined)
     const never = () => new Promise<never>(() => {})
 
     // One run: stderr progress lines become thinking chunks as they arrive; stdout is the reply.
     const ask = async function* (prompt: string, thread: string, allowed: ReadonlySet<string>): AsyncGenerator<Thinking, Outcome> {
       const timer = new AbortController()
       const started = await $.clock.now()
-      const flag = runTimeoutFlag
+      const flag = S.runTimeoutFlag
       const stop = Promise.race([
         aborted.then(() => STOP),
         $.clock.sleep((flag ? limitS + STEP_GRACE_S : limitS) * 1000, { signal: timer.signal }).then(() => STOP, never),
       ])
       const stream = $.process.spawn({
-        argv: ['agents-inc', 'run', '--model', 'luna', '--effort', 'low', '--no-tools', '--host-tools', ...(flag ? ['--timeout', String(limitS)] : []), '--cwd', sessionCwd, '--thread', thread],
-        cwd: sessionCwd || undefined,
+        argv: adapter.argv({ nickname: S.agent, provider: adapter.provider, slug: S.slug }, { thread, cwd: S.cwd, timeoutS: flag ? limitS : null }),
+        cwd: S.cwd || undefined,
         input: prompt,
       })
       let stdout = ''
@@ -527,14 +525,15 @@ export const register: Register = on => {
         }
         if (m[1] === 'record' && typeof data.slug === 'string') acc.slug = data.slug
         else if (m[1] === 'usage') {
-          // Codex reports the thread's running total: this run's share is the rise since the last report.
+          // A thread adapter (Codex) reports the thread's running total: this run's share is the rise since the last report.
+          // A stateless adapter reports each run's own usage.
           const total: Usage = {
             input_tokens: Number(data.input_tokens) || 0,
             cached_input_tokens: Number(data.cached_input_tokens) || 0,
             output_tokens: Number(data.output_tokens) || 0,
           }
-          const before = threadTotals.get(thread) ?? ZERO
-          threadTotals.set(thread, total)
+          const before = adapter.kind === 'thread' ? S.threadTotals.get(thread) ?? ZERO : ZERO
+          if (adapter.kind === 'thread') S.threadTotals.set(thread, total)
           const u = acc.usage ?? ZERO
           acc.usage = {
             input_tokens: u.input_tokens + Math.max(0, total.input_tokens - before.input_tokens),
@@ -561,29 +560,29 @@ export const register: Register = on => {
           if (n === TICK) {
             // Shown live while Codex is silent, so a slow or stalled step is visible before the limit.
             const s = Math.round(((await $.clock.now()) - started) / 1000)
-            yield { kind: 'thinking', index: 0, text: `luna is still working on step ${e.index} (${s} s of ${limitS} s)…` }
+            yield { kind: 'thinking', index: 0, text: `${S.agent} is still working on step ${e.index} (${s} s of ${limitS} s)…` }
             continue
           }
           if (n === STOP) {
             void stream.return(undefined as never).catch(() => {})
-            return next.signal.aborted ? { reply: null, failed: false } : { reply: 'agents-inc run timed out', failed: true, fail: timeoutText(limitS) }
+            return next.signal.aborted ? { reply: null, failed: false } : { reply: 'agents-inc run timed out', failed: true, fail: adapter.timeoutText(limitS) }
           }
           chunk = stream.next()
           if (n.done) {
             if (pending) take(pending)
             for (const text of lines.splice(0)) yield { kind: 'thinking', index: 0, text }
             if (n.value.code === 0) return { reply: pickReply(said, stdout, allowed), failed: false }
-            if (flag && n.value.code === 2 && /unrecognized arguments:.*--timeout/.test(stderr)) {
+            if (flag && adapter.rejectsTimeout(n.value.code, stderr)) {
               // An installed agents-inc older than this mod has no --timeout: run again without it; this hook's timer
               // then holds the limit alone.
-              runTimeoutFlag = false
-              $.ui.log(`${LOG} agents-inc run has no --timeout; the step limit falls back to this hook's timer`, { to: 'debug' })
+              S.runTimeoutFlag = false
+              $.ui.log(`${S.log} agents-inc run has no --timeout; the step limit falls back to this hook's timer`, { to: 'debug' })
               timer.abort()
               return yield* ask(prompt, thread, allowed)
             }
             const why = `agents-inc run exited ${n.value.code ?? n.value.signal}, stdout ${stdout.length} chars: ${failureText(stderr)}`
-            $.ui.log(`${LOG} ${why}`, { to: 'debug' })
-            return exitFailure(n.value.code, stderr, why, limitS)
+            $.ui.log(`${S.log} ${why}`, { to: 'debug' })
+            return adapter.classify(n.value.code, stderr, why, limitS) ?? { reply: why, failed: true, fail: `${S.agent} failed: run exited ${n.value.code}: ${failureText(stderr)}` }
           }
           if (n.value.stream === 'stdout') stdout += n.value.text
           else {
@@ -594,7 +593,7 @@ export const register: Register = on => {
         }
       } catch (err) {
         const why = String((err as Error)?.message ?? err)
-        return { reply: `agents-inc run failed: ${why}`, failed: true, fail: `luna failed: could not run agents-inc: ${why}` }
+        return { reply: `agents-inc run failed: ${why}`, failed: true, fail: `${S.agent} failed: could not run agents-inc: ${why}` }
       } finally {
         timer.abort()
       }
@@ -611,28 +610,28 @@ export const register: Register = on => {
     const composed = await $.prompt.compose({ tools: names }).catch(() => ({ sections: [] }))
     const system = [...composed.sections.map(s => stripModelLines(s.text)), AGENT_PROMPT].join('\n\n')
     const types = await readToolTypes($)
-    const full = () => buildPrompt(system, catalog(tools, types, hand), messages, hand)
+    const full = () => buildPrompt(adapter, S.slug, system, catalog(tools, types, hand), messages, hand)
 
-    const st = agents.get(id) ?? { n: 1, used: false, sent: 0 }
-    agents.set(id, st)
+    const st = S.agents.get(id) ?? { n: 1, used: false, sent: 0 }
+    S.agents.set(id, st)
     // A compacted conversation holds fewer messages than luna has seen: the thread no longer matches it, so start over.
     if (st.used && messages.length < st.sent) Object.assign(st, { n: st.n + 1, used: false, sent: 0 })
     let resumed = st.used
     const sentBefore = st.sent
-    let prompt = resumed ? `${DELTA_HEADER}${render(messages.slice(st.sent)) || '(nothing new)'}\n` : full()
+    let prompt = resumed ? `${deltaHeader(adapter)}${render(messages.slice(st.sent)) || '(nothing new)'}\n` : full()
     let chars = prompt.length
     // Debug only: keep the last fresh prompt beside the thread file, to see what fills it.
-    if (!resumed && debugOn()) await $.fs.write(`${threadPath(id, st.n)}.prompt.txt`, prompt).catch(() => undefined)
-    let run = yield* ask(prompt, threadPath(id, st.n), allowed)
+    if (!resumed && debugOn(S.agent)) await $.fs.write(`${threadPath(S, id, st.n)}.prompt.txt`, prompt).catch(() => undefined)
+    let run = yield* ask(prompt, threadPath(S, id, st.n), allowed)
     if (run.failed && run.retry !== false) {
       // A thread that failed may be half-written: start another one with the whole conversation.
       st.n++
       st.used = false
       resumed = false
-      prompt = run.asked ? ASKED_NOTE + full() : full()
+      prompt = run.asked ? adapter.pushes.asked + full() : full()
       chars += prompt.length
-      run = yield* ask(prompt, threadPath(id, st.n), allowed)
-      if (run.failed && run.fail && !run.fail.startsWith('luna quota-paused')) run = { ...run, fail: run.fail + RETRIED }
+      run = yield* ask(prompt, threadPath(S, id, st.n), allowed)
+      if (run.failed && run.fail && !run.fail.startsWith(S.quota)) run = { ...run, fail: run.fail + RETRIED }
     }
     // After a retry too: the fresh thread answered in prose once and the step ended "unparsable reply" with no
     // correction (macOS, 2026-11-11, rollout 01a1cb16-2b78).
@@ -640,13 +639,13 @@ export const register: Register = on => {
       // The thread already holds the prompt: the correction alone is enough.
       prompt = CORRECTION(run.reply)
       chars += prompt.length
-      run = yield* ask(prompt, threadPath(id, st.n), allowed)
+      run = yield* ask(prompt, threadPath(S, id, st.n), allowed)
     }
     if (!run.failed && skipsTools(run.reply, JSON.stringify(messages).includes('"tool_result"'), taskText(messages), names)) {
       // One push; a second reply without tools stands as luna's answer.
-      prompt = PUSH
+      prompt = adapter.pushes.refusal
       chars += prompt.length
-      const again = yield* ask(prompt, threadPath(id, st.n), allowed)
+      const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       // An empty pushed reply keeps the first one: luna once answered the push with {"say": "", "tools": []}.
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
       // A refusal can stick to its thread: luna answered "I can't run Bash from this interface" to the push and then to
@@ -657,14 +656,14 @@ export const register: Register = on => {
         resumed = false
         prompt = full()
         chars += prompt.length
-        const fresh = yield* ask(prompt, threadPath(id, st.n), allowed)
+        const fresh = yield* ask(prompt, threadPath(S, id, st.n), allowed)
         if (!fresh.failed && fresh.reply !== null && typeof fresh.reply !== 'string' && (fresh.reply.tools.length > 0 || fresh.reply.say)) run = fresh
       }
     } else if (!run.failed && stopsEarly(run.reply)) {
       // One push to go on; a second early stop stands as luna's answer.
-      prompt = CONTINUE
+      prompt = adapter.pushes.unfinished
       chars += prompt.length
-      const again = yield* ask(prompt, threadPath(id, st.n), allowed)
+      const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
     }
     // An aborted step is not marked used: the thread may be half-written, so the next step starts it over.
@@ -673,12 +672,12 @@ export const register: Register = on => {
     const reply = run.reply
     if (typeof reply !== 'string' && reply !== null) st.sent = messages.length
     const ms = (await $.clock.now()) - t0
-    $.ui.log(`${LOG} step ${e.index} of ${id} took ${ms} ms, prompt ${chars} chars, ${resumed ? 'resumed' : 'fresh'} thread, system ${system.length} catalog ${catalog(tools, types, hand).length} conversation ${render(messages).length} chars, ${names.length} tools, handback ${hand ? 'on' : 'off'}, messages ${messages.length} sent ${sentBefore}, codex_tools ${acc.tools.length ? acc.tools.join(' ') : 'none'}, usage ${acc.usage ? `in ${acc.usage.input_tokens} cached ${acc.usage.cached_input_tokens} out ${acc.usage.output_tokens}` : 'none'}`, { to: 'debug' })
+    $.ui.log(`${S.log} step ${e.index} of ${id} took ${ms} ms, prompt ${chars} chars, ${resumed ? 'resumed' : 'fresh'} thread, system ${system.length} catalog ${catalog(tools, types, hand).length} conversation ${render(messages).length} chars, ${names.length} tools, handback ${hand ? 'on' : 'off'}, messages ${messages.length} sent ${sentBefore}, codex_tools ${acc.tools.length ? acc.tools.join(' ') : 'none'}, usage ${acc.usage ? `in ${acc.usage.input_tokens} cached ${acc.usage.cached_input_tokens} out ${acc.usage.output_tokens}` : 'none'}`, { to: 'debug' })
     const tokens = acc.usage
-    const failure = run.failed ? (run.fail ?? 'luna failed: run failed') : typeof reply === 'string' ? 'luna failed: unparsable reply' : null
-    const before = ran.get(id)?.usage ?? ZERO
-    ran.set(id, {
-      outcome: wasAborted ? 'aborted' : failure === null ? 'done' : failure.startsWith('luna quota-paused') ? 'quota-paused' : 'failed',
+    const failure = run.failed ? (run.fail ?? `${S.agent} failed: run failed`) : typeof reply === 'string' ? `${S.agent} failed: unparsable reply` : null
+    const before = S.ran.get(id)?.usage ?? ZERO
+    S.ran.set(id, {
+      outcome: wasAborted ? 'aborted' : failure === null ? 'done' : failure.startsWith(S.quota) ? 'quota-paused' : 'failed',
       usage: {
         input_tokens: before.input_tokens + (tokens?.input_tokens ?? 0),
         cached_input_tokens: before.cached_input_tokens + (tokens?.cached_input_tokens ?? 0),
@@ -691,7 +690,7 @@ export const register: Register = on => {
           output_tokens: tokens.output_tokens,
           cache_read_input_tokens: tokens.cached_input_tokens,
           cache_creation_input_tokens: 0,
-          model: acc.slug ?? 'luna',
+          model: acc.slug ?? S.agent,
         }
       : null
 
@@ -701,7 +700,7 @@ export const register: Register = on => {
     let index = 1 // block 0 is the live thinking line
     if (out.say) yield { kind: 'text', index: index++, text: out.say }
     for (const [n, tool] of out.tools.entries()) {
-      yield { kind: 'tool', index, id: `luna_${e.turnId}_${e.index}_${n}`, name: tool.name }
+      yield { kind: 'tool', index, id: `${S.agent}_${e.turnId}_${e.index}_${n}`, name: tool.name }
       yield { kind: 'input', index, json: JSON.stringify(tool.input) }
       index++
     }
@@ -710,3 +709,4 @@ export const register: Register = on => {
     return { turnId: e.turnId, index: e.index, answer: out.say, toolUses: out.tools, stopReason, usage: turnUsage }
   })
 }
+
