@@ -81,6 +81,10 @@ class NativeCli(unittest.TestCase):
         self.assertEqual(self.status()["probe"], "none")
         self.probe("fail"); s = self.status()  # a failed probe is offered chat only, not hidden
         self.assertTrue(s["offered"]); self.assertFalse(s["tools"]); self.assertIn("chat only, no tools", s["reason"])
+        for result in ("unavailable", "quota-paused"):
+            self.probe(result); s = self.status()  # did not answer: never chat only
+            self.assertFalse(s["offered"]); self.assertEqual(s["probe"], result); self.assertFalse(s["tools"])
+            self.assertIn("agents-inc models probe gemini-flash", s["reason"])
         self.probe("pass", age=native.PROBE_TTL_S + 1); s = self.status()
         self.assertFalse(s["offered"]); self.assertEqual(s["probe"], "stale"); self.assertFalse(s["tools"])
         self.probe("pass"); s = self.status()

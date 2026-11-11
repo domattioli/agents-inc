@@ -2,7 +2,7 @@
 
 One synthetic request per model: a catalog with one Read tool and the task "Read the file probe.txt". The probe
 passes when the parsed reply names Read in "tools". No workspace content is sent (no authorization record needed).
-The result goes to native-probes.json (mode 0600); `native status` reads it, and a type is offered only after a pass
+The result goes to native-probes.json (mode 0600); `native status` reads it, and a type is offered with tools only after a pass
 younger than PROBE_TTL_S. Run by `agents-inc models probe [nick]` and `agents-inc doctor --probe`, never at session start.
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ def probe_one(paths: InstallPaths, nick: str, env: dict | None = None, now: floa
     """Probe one model and store the result. Never raises for a provider failure: the record says why."""
     entry = native.model(nick)
     if entry["provider"] == "codex": raise ValueError(f"{nick} is not a free guest agent model")
-    rec = {"result": "fail", "at_epoch": now if now is not None else time.time(), "slug": entry["slug"], "reason": ""}
+    rec = {"result": "unavailable", "at_epoch": now if now is not None else time.time(), "slug": entry["slug"], "reason": ""}
     key = native_http.read_key(paths.home, entry["provider"])
     if key is None:
         rec["reason"] = f"no {entry['provider']} key (WB_NATIVE_KEY_MISSING; checked {', '.join(native_http.key_places(entry['provider']))})"
@@ -50,10 +50,17 @@ def probe_one(paths: InstallPaths, nick: str, env: dict | None = None, now: floa
             ok = _names_read(text)
             rec.update(result="pass" if ok else "fail", reason="reply named Read" if ok else "reply did not name Read in tools")
         except native_http.StepError as exc:
-            rec["result"] = "quota-paused" if exc.code == native_http.EXIT_QUOTA else "fail"
+            # fail means the model answered without following the protocol; any other failed attempt is unavailable.
+            rec["result"] = "quota-paused" if exc.code == native_http.EXIT_QUOTA else "unavailable"
             rec["reason"] = native_http.scrub(exc.text, key)[:300]
     data = native._read_json(paths.state / native.PROBE_FILE)
-    data[nick] = rec
+    old = data.get(nick)
+    if rec["result"] in ("unavailable", "quota-paused") and isinstance(old, dict) and old.get("result") == "pass" \
+            and isinstance(old.get("at_epoch"), (int, float)) and rec["at_epoch"] - old["at_epoch"] < native.PROBE_TTL_S:
+        # One busy moment at the provider must not hide a working type: keep the pass (and its time).
+        data[nick] = {**old, "last_attempt": rec}
+    else:
+        data[nick] = rec
     native._write_json(paths.state / native.PROBE_FILE, data)
     return rec
 

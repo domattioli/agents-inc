@@ -146,8 +146,13 @@ def probe_state(paths: InstallPaths, nick: str, now: float | None = None) -> tup
     at = rec.get("at_epoch")
     if not isinstance(at, (int, float)) or (now if now is not None else time.time()) - at >= PROBE_TTL_S:
         return "stale", "probe older than 7 days (agents-inc models probe)"
-    if rec.get("result") != "pass": return "fail", f"probe {rec.get('result', 'fail')}: {rec.get('reason', '')}".rstrip(": ")
-    return "pass", "probe passed"
+    result = rec.get("result")
+    if result == "pass": return "pass", "probe passed"
+    if result in ("unavailable", "quota-paused"):
+        why = " ".join(str(rec.get("reason", "")).split())
+        if len(why) > 160: why = why[:157] + "..."
+        return result, f"probe {result}: {why}; retry with agents-inc models probe {nick}".replace(": ;", ";")
+    return "fail", f"probe fail: {rec.get('reason', '')}".rstrip(": ")
 
 
 def status_one(paths: InstallPaths, nick: str, cwd: str = ".") -> dict:
@@ -161,7 +166,7 @@ def status_one(paths: InstallPaths, nick: str, cwd: str = ".") -> dict:
     probe, probe_reason = probe_state(paths, nick)
     record = authorization(paths, entry["provider"], cwd)
     authorized = record is not None
-    # A failed probe means chat only: offered with no tools. none, stale and the rest stay not offered.
+    # fail (answered, no tool protocol) means chat only: offered with no tools. none, stale, unavailable, quota-paused stay not offered.
     chat_only = probe == "fail"
     if switch == "off": reason = f"switched off (agents-inc native on {nick})"
     elif not has_key: reason = f"no {entry['provider']} key (WB_NATIVE_KEY_MISSING; checked {', '.join(native_http.key_places(entry['provider']))})"

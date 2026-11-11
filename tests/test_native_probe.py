@@ -63,6 +63,29 @@ class Probe(unittest.TestCase):
             rec = self.probe(srv)
             self.assertEqual(srv.requests, [])
         self.assertIn("WB_NATIVE_KEY_MISSING", rec["reason"])
+        self.assertEqual(rec["result"], "unavailable")
+
+    def test_503_and_404_are_unavailable_not_fail_and_not_offered(self):
+        for code in (503, 404):
+            with FakeProvider([Reply(code, {"error": {"message": "high demand"}})]) as srv:
+                rec = self.probe(srv)
+            self.assertEqual(rec["result"], "unavailable")
+            self.assertIn(str(code), rec["reason"])
+            state, why = native.probe_state(self.paths, "gemini-flash")
+            self.assertEqual(state, "unavailable")
+            self.assertIn("agents-inc models probe gemini-flash", why)
+            self.assertLess(len(why), 300)
+
+    def test_pass_then_503_keeps_the_pass_and_stores_last_attempt(self):
+        with FakeProvider([Reply(200, gemini(READ))]) as srv:
+            first = self.probe(srv)
+        with FakeProvider([Reply(503, {"error": {"message": "busy"}})]) as srv:
+            self.probe(srv)
+        stored = json.loads((self.paths.state / native.PROBE_FILE).read_text())["gemini-flash"]
+        self.assertEqual(stored["result"], "pass")
+        self.assertEqual(stored["at_epoch"], first["at_epoch"])
+        self.assertEqual(stored["last_attempt"]["result"], "unavailable")
+        self.assertEqual(native.probe_state(self.paths, "gemini-flash")[0], "pass")
 
     def test_old_pass_is_stale(self):
         with FakeProvider([Reply(200, gemini(READ))]) as srv:
@@ -79,6 +102,15 @@ class Probe(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("gemini-flash probe: pass", out.getvalue())
         with self.assertRaises(ValueError): native_probe.probe_one(self.paths, "luna")
+
+    def test_models_probe_cli_exits_1_on_unavailable(self):
+        with FakeProvider([Reply(503, {"error": {"message": "busy"}})]) as srv, \
+             mock.patch.dict(os.environ, {"HOME": str(self.home), "AGENTS_INC_NATIVE_GEMINI_URL": srv.url}):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = cli.main(["models", "probe", "gemini-flash"])
+        self.assertEqual(code, 1)
+        self.assertIn("gemini-flash probe: unavailable", out.getvalue())
 
 
 if __name__ == "__main__":

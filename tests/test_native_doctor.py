@@ -87,7 +87,7 @@ class DoctorCli(unittest.TestCase):
                          AGENTS_INC_NATIVE_OPENROUTER_URL=srv.url)
         self.assertEqual(len(srv.requests), 1)  # only the model with a key is asked
         self.assertIn("gemini-flash probe: pass", r.stdout)
-        self.assertIn("ministral probe: fail (no mistral key (WB_NATIVE_KEY_MISSING", r.stdout)
+        self.assertIn("ministral probe: unavailable (no mistral key (WB_NATIVE_KEY_MISSING", r.stdout)
         self.assertIn("gemini-flash type: ready", r.stdout)
         self.assertNotIn(FAKE_KEY, r.stdout + r.stderr)
 
