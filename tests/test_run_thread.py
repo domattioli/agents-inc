@@ -197,7 +197,100 @@ class RuiReplayTest(unittest.TestCase):
         self.assertEqual(self.tools_lines, [])
 
 
+class BurnWatchTest(unittest.TestCase):
+    """A host-tools run that loops on request_user_input is stopped at a cap (2026-11-11: 20 calls, 380k tokens)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+        self.rollout = self.home / ".codex" / "sessions" / "2026" / "11" / "11" / "rollout-2026-11-11T09-41-39-tid-7.jsonl"
+        self.rollout.parent.mkdir(parents=True)
+
+    rui = staticmethod(RuiReplayTest.call)
+
+    @staticmethod
+    def tokens(n):
+        return json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 999999}, "last_token_usage": {"input_tokens": n}}}}) + "\n"
+
+    def test_feed_counts_asks_and_tokens_and_trips_at_a_cap(self):
+        w = runtime.BurnWatch("tid-7", 0, ask_cap=4, token_cap=100_000)
+        w.feed((self.rui("{}") + self.tokens(20_000)) .encode() * 3)
+        self.assertEqual((w.asks, w.tokens, w.tripped), (3, 60_000, None))
+        w.feed(self.rui("{}").encode())
+        self.assertEqual(w.tripped, "4 request_user_input calls (cap 4)")
+        t = runtime.BurnWatch("tid-7", 0, ask_cap=99, token_cap=50_000)
+        half = self.tokens(60_000)
+        t.feed(half[:10].encode())  # a partial line waits for the rest
+        self.assertEqual(t.tokens, 0)
+        t.feed(half[10:].encode())
+        self.assertEqual(t.tripped, "60000 input tokens (cap 50000)")
+
+    def test_offset_skips_earlier_runs_and_thread_started_names_the_thread(self):
+        old = self.rui("{}") * 5
+        self.rollout.write_text(old)
+        w = runtime.BurnWatch(None, len(old.encode()), ask_cap=4, token_cap=10**9)
+        w.on_line(json.dumps({"type": "thread.started", "thread_id": "tid-7"}))
+        self.assertEqual(w.tid, "tid-7")
+        with mock.patch.object(runtime, "real_codex_home", return_value=self.home / ".codex"):
+            self.assertFalse(w.check())
+            with self.rollout.open("a") as f: f.write(self.rui("{}"))
+            self.assertFalse(w.check())
+        self.assertEqual(w.asks, 1)
+
+    def test_runaway_run_is_killed_and_exits_77(self):
+        import subprocess, time
+        thread = self.home / "a.thread"
+        thread.write_text("tid-7\n")
+        self.rollout.write_text("")
+        seen = {}
+
+        def fake_run(*args, on_start=None, on_line=None, **kwargs):
+            proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+            on_start(proc.pid)
+            with self.rollout.open("a") as f:
+                f.write(self.rui(json.dumps({"questions": []})) * 5)
+            t0 = time.monotonic()
+            proc.wait(timeout=10)
+            seen["elapsed"], seen["rc"] = time.monotonic() - t0, proc.returncode
+            return 1
+
+        err = io.StringIO()
+        with mock.patch.object(runtime, "real_codex_home", return_value=self.home / ".codex"), \
+                mock.patch.object(runtime, "run_codex", side_effect=fake_run), contextlib.redirect_stderr(err):
+            rc = run_codex_thread(thread, "luna", "low", self.home, io.StringIO("go"), None, {}, host_tools=True)
+        self.assertEqual(rc, runtime.RUNAWAY_EXIT)
+        self.assertLess(seen["elapsed"], 5)
+        self.assertEqual(seen["rc"], -9)
+        self.assertIn("WB_LUNA_RUNAWAY: stopped Codex after 5 request_user_input calls (cap 4)", err.getvalue())
+
+    def test_env_caps_and_no_watch_without_host_tools(self):
+        with mock.patch.dict(os.environ, {"AGENTS_INC_LUNA_ASK_CAP": "9", "AGENTS_INC_LUNA_TOKEN_CAP": "x"}):
+            self.assertEqual(runtime._env_cap("AGENTS_INC_LUNA_ASK_CAP", 4), 9)
+            self.assertEqual(runtime._env_cap("AGENTS_INC_LUNA_TOKEN_CAP", 5), 5)
+        got = {}
+
+        def fake_run(*args, **kwargs):
+            got.update(kwargs)
+            return 0
+        with mock.patch.object(runtime, "run_codex", side_effect=fake_run), contextlib.redirect_stderr(io.StringIO()):
+            run_codex_thread(self.home / "b.thread", "astra", "low", self.home, io.StringIO("go"), None, {})
+        self.assertNotIn("on_start", got)
+
+
 class RunThreadCliTest(unittest.TestCase):
+    def test_run_timeout_reaches_run_codex_thread(self):
+        from agents_inc.install import cli
+        with tempfile.TemporaryDirectory() as raw, mock.patch.object(cli, "InstallReceipt") as receipt, \
+                mock.patch.object(cli, "run_codex_thread", return_value=0) as run, mock.patch.object(cli, "_efforts", return_value={}):
+            receipt.load.return_value = object()
+            with mock.patch("pathlib.Path.exists", return_value=True):
+                rc = cli.main(["run", "--model", "luna", "--no-tools", "--host-tools", "--timeout", "60", "--cwd", raw,
+                               "--thread", f"{raw}/t"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(run.call_args.kwargs["timeout_s"], 60.0)
+
     def test_thread_with_lead_is_rejected(self):
         from agents_inc.install import cli
         err = io.StringIO()

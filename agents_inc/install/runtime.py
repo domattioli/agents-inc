@@ -6,6 +6,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from .live_events import _stream_run
@@ -367,8 +368,14 @@ NO_ASK_PREAMBLE = ("[agents-inc run] This is a non-interactive run: no user can 
                    "is unavailable. Never ask for confirmation. Make each decision yourself, do the task, and state any "
                    "assumption or blocker in your final message.\n\n")
 RUI_UNAVAILABLE = "request_user_input is unavailable"
+# Codex 0.159.2 also puts the permission profile in <environment_context> (`<filesystem>... <entry access="read">
+# <special>:root</special>`), which include_permissions_instructions does not drop. luna read it as "read access only to
+# root", asked request_user_input 20 times in one run (380k input tokens) and handed back "Blocked before reading any
+# files" (macOS, 2026-11-11, rollout 01a1cb0e). include_environment_context=false drops the block (`codex debug
+# prompt-input`, 2026-11-11); the host's system prompt already carries cwd and date.
 HOST_TOOLS_ARGS = ["-c", "include_permissions_instructions=false", "-c", "include_collaboration_mode_instructions=false",
-                   "-c", "skills.include_instructions=false", "-c", "project_doc_max_bytes=0"]
+                   "-c", "skills.include_instructions=false", "-c", "project_doc_max_bytes=0",
+                   "-c", "include_environment_context=false"]
 
 
 def _write_if_changed(path: Path, text: str) -> None:
@@ -561,19 +568,20 @@ def kill_and_reap(proc) -> None:
         pass
 
 
-def _run_with_deadline(argv, prompt, env, timeout_s, extra, on_line=None) -> subprocess.CompletedProcess:
+def _run_with_deadline(argv, prompt, env, timeout_s, extra, on_line=None, on_start=None) -> subprocess.CompletedProcess:
     """Run argv in its own session; on expiry kill the whole group and return rc 124. Any other exception during
     the run (KeyboardInterrupt included) kills the group and reaps the child before it propagates.
-    on_line (spec 027): called with each stdout line as it arrives; the returned stdout is still the full text."""
+    on_line (spec 027): called with each stdout line as it arrives; the returned stdout is still the full text.
+    on_start(pid): told the child's pid (the process group leader) once it runs."""
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             env=env, start_new_session=True, **extra)
-    rc, out, err = _stream_run(proc, prompt, timeout_s, on_line)  # _stream_run kills and reaps on any exception
+    rc, out, err = _stream_run(proc, prompt, timeout_s, on_line, on_start=on_start)  # kills and reaps on any exception
     return subprocess.CompletedProcess(argv, rc, out or "", err)
 
 
-def _run_streaming(argv, prompt, env, extra, on_line) -> subprocess.CompletedProcess:
+def _run_streaming(argv, prompt, env, extra, on_line, on_start=None) -> subprocess.CompletedProcess:
     """The no-deadline run with a line callback (spec 027)."""
-    return _run_with_deadline(argv, prompt, env, None, extra, on_line)
+    return _run_with_deadline(argv, prompt, env, None, extra, on_line, on_start)
 
 
 def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, supported_efforts: dict[str, list[str]],
@@ -581,7 +589,8 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
               env: dict | None = None, lead_dir: Path | None = None, home_repo: str | None = None,
               extra_deny: tuple = (), isolate_home: bool = False, thread_out: dict | None = None,
               resume_thread: str | None = None, worker: tuple | None = None, extra_read: tuple = (),
-              network: bool = False, timeout_s: float | None = None, on_line=None, host_tools: bool = False) -> int:
+              network: bool = False, timeout_s: float | None = None, on_line=None, host_tools: bool = False,
+              on_start=None) -> int:
     """timeout_s: kill the child's process group after that many seconds and return 124 (None: no deadline).
     on_line (spec 027): called with each JSONL stdout line while the child runs; json mode only.
     thread_out (D54): run with `--json -o`, store the thread id in thread_out["thread_id"], and write the last
@@ -676,9 +685,9 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
                                     network=network, tool_tmp=tool_tmp, host_tools=host_tools, host_catalog=host_catalog)
         line_cb = on_line if json_mode else None  # Lead runs (no --json) get lifecycle events only
         if timeout_s:
-            result = _run_with_deadline(argv, prompt, env, timeout_s, extra, line_cb)
+            result = _run_with_deadline(argv, prompt, env, timeout_s, extra, line_cb, on_start)
         elif line_cb is not None:
-            result = _run_streaming(argv, prompt, env, extra, line_cb)
+            result = _run_streaming(argv, prompt, env, extra, line_cb, on_start)
         else:
             result = subprocess.run(
                 argv,
@@ -850,6 +859,103 @@ def rui_replies(calls: list) -> list[str]:
     return [json.dumps(a) for a in calls if isinstance(a, dict) and isinstance(a.get("tools"), list) and a["tools"]]
 
 
+# A host-tools run that loops on Codex's own tools burns tokens with nothing to show: each refused request_user_input
+# call re-sends the whole thread (17-25k input tokens). One run asked 20 times and used 380k input tokens before it
+# handed back a refusal (macOS, 2026-11-11, rollout 01a1cb0e); healthy runs asked at most 3 times. The watch stops the
+# run at either cap and the run exits RUNAWAY_EXIT. Env overrides: AGENTS_INC_LUNA_ASK_CAP, AGENTS_INC_LUNA_TOKEN_CAP.
+LUNA_ASK_CAP = 4
+LUNA_TOKEN_CAP = 150_000
+RUNAWAY_EXIT = 77
+
+
+def _env_cap(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+class BurnWatch:
+    """Polls the run's Codex rollout from offset on and kills the run's process group when its request_user_input
+    calls reach ask_cap or the input tokens it adds reach token_cap. The --json stream never shows request_user_input
+    calls, so the rollout is the only live signal (see rui_calls)."""
+
+    def __init__(self, tid: str | None, offset: int, ask_cap: int, token_cap: int, poll_s: float = 0.25):
+        self.tid, self.offset, self.ask_cap, self.token_cap, self.poll_s = tid, offset, ask_cap, token_cap, poll_s
+        self.pid = None
+        self.asks = self.tokens = 0
+        self.tripped: str | None = None
+        self.killed = False
+        self._buf = b""
+        self._path = None
+        self._done = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+    def on_start(self, pid: int) -> None:
+        self.pid = pid
+
+    def on_line(self, line: str) -> None:
+        if self.tid is None:
+            tid = parse_thread_id(line)
+            if tid: self.tid = tid
+
+    def start(self) -> "BurnWatch":
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._done.set()
+        self._thread.join(2)
+
+    def feed(self, data: bytes) -> None:
+        """Count complete rollout lines in data (a later chunk of the rollout file)."""
+        self._buf += data
+        *lines, self._buf = self._buf.split(b"\n")
+        for raw in lines:
+            try:
+                payload = json.loads(raw).get("payload") or {}
+            except (ValueError, AttributeError):
+                continue
+            if payload.get("type") == "function_call" and payload.get("name") == "request_user_input":
+                self.asks += 1
+            elif payload.get("type") == "token_count" and isinstance(payload.get("info"), dict):
+                last = payload["info"].get("last_token_usage") or {}
+                self.tokens += int(last.get("input_tokens") or 0)
+        if self.asks >= self.ask_cap:
+            self.tripped = f"{self.asks} request_user_input calls (cap {self.ask_cap})"
+        elif self.tokens >= self.token_cap:
+            self.tripped = f"{self.tokens} input tokens (cap {self.token_cap})"
+
+    def check(self) -> bool:
+        """Read what the rollout gained since the last check; kill the group and return True once a cap is hit."""
+        if self.tripped is None and self.tid:
+            if self._path is None:
+                self._path = thread_rollout(self.tid)
+            if self._path is not None:
+                try:
+                    with self._path.open("rb") as f:
+                        f.seek(self.offset)
+                        data = f.read()
+                    self.offset += len(data)
+                    self.feed(data)
+                except OSError:
+                    pass
+        if self.tripped is not None and self.pid is not None:
+            try:
+                os.killpg(self.pid, signal.SIGKILL)
+                self.killed = True
+            except (ProcessLookupError, PermissionError):
+                pass
+            return True
+        return False
+
+    def _loop(self) -> None:
+        while not self._done.wait(self.poll_s):
+            if self.check():
+                return
+
+
 def run_codex_thread(thread_file: Path, *args, **kwargs) -> int:
     """`agents-inc run --thread FILE`: FILE missing or empty starts a new thread, FILE holding a thread id resumes
     it with the prompt as the next message. After the run the thread id (new or resumed) is written to FILE.
@@ -867,12 +973,25 @@ def run_codex_thread(thread_file: Path, *args, **kwargs) -> int:
     before = thread_rollout(known) if host_tools and known else None
     offset = before.stat().st_size if before else 0
 
+    watch = BurnWatch(known or None, offset, _env_cap("AGENTS_INC_LUNA_ASK_CAP", LUNA_ASK_CAP),
+                      _env_cap("AGENTS_INC_LUNA_TOKEN_CAP", LUNA_TOKEN_CAP)) if host_tools else None
+
     def on_line(line: str) -> None:
         thread_progress_line(line)
         count_codex_tool_call(line, tool_counts)
+        if watch is not None: watch.on_line(line)
 
-    rc = run_codex(*args, thread_out=None if known else thread_out, resume_thread=known or None,
-                   on_line=on_line, **kwargs)
+    if watch is not None:
+        kwargs["on_start"] = watch.on_start
+        watch.start()
+    try:
+        rc = run_codex(*args, thread_out=None if known else thread_out, resume_thread=known or None,
+                       on_line=on_line, **kwargs)
+    finally:
+        if watch is not None: watch.stop()
+    if watch is not None and watch.killed:
+        sys.stderr.write(f"agents-inc run: WB_LUNA_RUNAWAY: stopped Codex after {watch.tripped}\n")
+        rc = RUNAWAY_EXIT
     tid = known or thread_out.get("thread_id")
     rollout = thread_rollout(tid) if host_tools and tid else None
     calls = rui_calls(rollout, offset if rollout == before else 0) if rollout else []

@@ -11,13 +11,32 @@ const DESC_CAP = 500
 const MCP_DESC_CAP = 200
 // The step timer runs on $.clock.sleep, which is monotonic: time the host spends asleep does not count, so a Mac that
 // sleeps mid-step does not fail the step on time alone (macOS stress run, 2026-10-25).
-const RUN_TIMEOUT_MS = 300_000
+// Per run (one `agents-inc run`): `agents-inc run --timeout` kills Codex's process group at the limit and exits 124; this
+// hook's own timer is a backstop STEP_GRACE_S later. A Codex model call stalled with no output for the whole 300 s
+// limit, then the step failed (macOS, 2026-11-11; rollout 01a1cb10 stops at 14:45:01). Default 60 s; normal steps take
+// 3-25 s. AGENTS_INC_LUNA_STEP_TIMEOUT_S overrides it.
+export const STEP_TIMEOUT_S = 60
+const STEP_TIMEOUT_ENV = 'AGENTS_INC_LUNA_STEP_TIMEOUT_S'
+const STEP_GRACE_S = 15
+// A live "still working" line this often while a run is in flight.
+const HEARTBEAT_MS = 10_000
+export function stepTimeoutS(raw: string | undefined): number {
+  const n = Number(raw)
+  return raw !== undefined && raw.trim() !== '' && Number.isFinite(n) && n >= 5 && n <= 3600 ? Math.round(n) : STEP_TIMEOUT_S
+}
 const MODEL_LINE = /You are powered by the model|The exact model ID is/
 const DELTA_HEADER =
   'New messages since your last reply. Same rules: reply with one JSON object {say, tools}; act on the latest messages; finish as the rules said. ' +
   'Request catalog tools in "tools", never through exec or another Codex tool.\n'
 // luna sometimes reads Codex's read-only sandbox note as its own and answers that it cannot run a tool, calling none.
-const REFUSAL = /(can['’]?t|cannot|unable to|not able to)\s+(run|read|inspect|execute|access|use|report|request|call|make|issue|perform)|tools?\b[^.]*\b(disabled|unavailable|not available)/i
+// luna also read Codex's filesystem note (`<permission_profile>... :root`) as "read access only to root" and handed back
+// "Blocked before reading any files" with no tool run (macOS, 2026-11-11, rollout 01a1cb0e).
+const REFUSAL = /(can['’]?t|cannot|unable to|not able to)\s+(run|read|inspect|execute|access|use|report|request|call|make|issue|perform)|tools?\b[^.]*\b(disabled|unavailable|not available)|permission profile|read access only|\bsandbox(ed)?\b[^.]*\b(denies|blocks|only|restrict)|^\s*blocked\b|\b(did not|didn['’]t) (read|run) (any|the)\b/im
+const handbackText = (reply: Reply) =>
+  [reply.say, ...reply.tools.map(t => { const m = (t.input as { message?: unknown } | null)?.message; return typeof m === 'string' ? m : '' })].join('\n')
+// A refusal: the reply says it cannot run the tools, in "say" or in a hand-back message.
+export const refuses = (reply: Reply | string | null): boolean =>
+  reply !== null && typeof reply !== 'string' && reply.tools.every(t => t.name === HANDBACK) && REFUSAL.test(handbackText(reply))
 // luna refused twice with "the catalog Bash tool is not in my available tools" (par scenario, spec 028 Docker run): the
 // push says where the catalog tools are, since luna looks for them in Codex's own tool list.
 const PUSH = 'You answered without running a tool the task needs. The catalog tools are not in your own tool list, and that is ' +
@@ -27,7 +46,9 @@ const PUSH = 'You answered without running a tool the task needs. The catalog to
 // A first reply that runs nothing is pushed once when it refuses a tool, or when the task names a catalog tool:
 // luna answered "A=0" for `wc -l a.txt` without running Bash (Docker stress run, 2026-10-24).
 export function skipsTools(reply: Reply | string | null, ranTool: boolean, task = '', names: readonly string[] = []): boolean {
-  if (ranTool || reply === null || typeof reply === 'string' || reply.tools.length > 0) return false
+  if (ranTool || reply === null || typeof reply === 'string') return false
+  // A hand-back alone, before any tool ran, counts only when it refuses (run 2 above); a plain answer stands.
+  if (reply.tools.length > 0) return reply.tools.every(t => t.name === HANDBACK) && refuses(reply)
   return REFUSAL.test(reply.say) || names.some(n => n !== HANDBACK && namesTool(task, n))
 }
 // A tool name counts only mid-sentence after a lowercase word ("with Bash", "then Read") or before "tool":
@@ -113,6 +134,7 @@ let offered = false // what `agents-inc luna status` said at session start
 const begun = new Map<string, Promise<void>>()
 const ran = new Map<string, Ran>()
 let toolTypes: string | undefined // text of the engine-written built-in tool argument types, read once
+let runTimeoutFlag = true // false once the installed agents-inc refused --timeout
 
 type TurnUsageOut = {
   input_tokens: number
@@ -330,6 +352,7 @@ export async function registerLunaAgent(
 ): Promise<void> {
   sessionCwd = e.cwd
   offered = false
+  runTimeoutFlag = true
   // The contract check: the status call needs a streaming $.process.spawn, the registration needs $.agent.register.
   // A build without either leaves the type unregistered, and the debug log says which.
   const status = await lunaStatus($)
@@ -363,8 +386,13 @@ export async function registerLunaAgent(
 
 // The text the parent sees when `agents-inc run` exits non-zero (D4). Quota, a missing catalog and a missing Codex are
 // not cured by a fresh thread, so they are not retried.
-function exitFailure(code: number | null, stderr: string, why: string): Outcome {
+function exitFailure(code: number | null, stderr: string, why: string, limitS: number): Outcome {
   const clean = failureText(stderr)
+  if (code === 124) return { reply: why, failed: true, fail: timeoutText(limitS) }
+  if (code === 77 || stderr.includes('WB_LUNA_RUNAWAY')) {
+    const line = clean.split('\n').find(l => l.includes('WB_LUNA_RUNAWAY'))?.replace(/^.*?WB_LUNA_RUNAWAY:?\s*/, '') ?? clean.split('\n')[0]
+    return { reply: why, failed: true, fail: `luna failed: Codex looped on its own tools and was stopped to cap token use (${line})` }
+  }
   if (code === 75) {
     const line = clean.split('\n').find(l => /usage or rate limit/.test(l)) ?? clean.split('\n')[0]
     return { reply: why, failed: true, retry: false, fail: `luna quota-paused: ${line}` }
@@ -378,7 +406,8 @@ function exitFailure(code: number | null, stderr: string, why: string): Outcome 
   return { reply: why, failed: true, fail: `luna failed: run exited ${code}: ${clean}` }
 }
 
-const TIMEOUT_TEXT =`luna failed: timeout after ${RUN_TIMEOUT_MS / 1000} s`
+const timeoutText = (s: number) => `luna failed: timeout: Codex sent no reply within ${s} s (limit ${STEP_TIMEOUT_ENV})`
+const RETRIED = ' (after one retry on a fresh thread)'
 
 export const register: Register = on => {
 
@@ -448,16 +477,21 @@ export const register: Register = on => {
 
     const acc: { usage: Usage | null; slug?: string; tools: string[] } = { usage: null, tools: [] } // summed over this step's runs
     const STOP = Symbol('stop')
+    const TICK = Symbol('tick')
+    const limitS = stepTimeoutS(await $.env.get('AGENTS_INC_LUNA_STEP_TIMEOUT_S').catch(() => undefined))
+    const never = () => new Promise<never>(() => {})
 
     // One run: stderr progress lines become thinking chunks as they arrive; stdout is the reply.
     const ask = async function* (prompt: string, thread: string, allowed: ReadonlySet<string>): AsyncGenerator<Thinking, Outcome> {
       const timer = new AbortController()
+      const started = await $.clock.now()
+      const flag = runTimeoutFlag
       const stop = Promise.race([
         aborted.then(() => STOP),
-        $.clock.sleep(RUN_TIMEOUT_MS, { signal: timer.signal }).then(() => STOP, () => new Promise<never>(() => {})),
+        $.clock.sleep((flag ? limitS + STEP_GRACE_S : limitS) * 1000, { signal: timer.signal }).then(() => STOP, never),
       ])
       const stream = $.process.spawn({
-        argv: ['agents-inc', 'run', '--model', 'luna', '--effort', 'low', '--no-tools', '--host-tools', '--cwd', sessionCwd, '--thread', thread],
+        argv: ['agents-inc', 'run', '--model', 'luna', '--effort', 'low', '--no-tools', '--host-tools', ...(flag ? ['--timeout', String(limitS)] : []), '--cwd', sessionCwd, '--thread', thread],
         cwd: sessionCwd || undefined,
         input: prompt,
       })
@@ -507,19 +541,37 @@ export const register: Register = on => {
         parts.forEach(take)
       }
       try {
+        let chunk = stream.next() // held across heartbeats: a tick must not ask the stream twice
         for (;;) {
-          const n = await Promise.race([stream.next(), stop])
+          const tick = new AbortController()
+          const n = await Promise.race([chunk, stop, $.clock.sleep(HEARTBEAT_MS, { signal: tick.signal }).then(() => TICK, never)])
+          tick.abort()
+          if (n === TICK) {
+            // Shown live while Codex is silent, so a slow or stalled step is visible before the limit.
+            const s = Math.round(((await $.clock.now()) - started) / 1000)
+            yield { kind: 'thinking', index: 0, text: `luna is still working on step ${e.index} (${s} s of ${limitS} s)…` }
+            continue
+          }
           if (n === STOP) {
             void stream.return(undefined as never).catch(() => {})
-            return next.signal.aborted ? { reply: null, failed: false } : { reply: 'agents-inc run timed out', failed: true, fail: TIMEOUT_TEXT }
+            return next.signal.aborted ? { reply: null, failed: false } : { reply: 'agents-inc run timed out', failed: true, fail: timeoutText(limitS) }
           }
+          chunk = stream.next()
           if (n.done) {
             if (pending) take(pending)
             for (const text of lines.splice(0)) yield { kind: 'thinking', index: 0, text }
             if (n.value.code === 0) return { reply: pickReply(said, stdout, allowed), failed: false }
+            if (flag && n.value.code === 2 && /unrecognized arguments:.*--timeout/.test(stderr)) {
+              // An installed agents-inc older than this mod has no --timeout: run again without it; this hook's timer
+              // then holds the limit alone.
+              runTimeoutFlag = false
+              $.ui.log(`${LOG} agents-inc run has no --timeout; the step limit falls back to this hook's timer`, { to: 'debug' })
+              timer.abort()
+              return yield* ask(prompt, thread, allowed)
+            }
             const why = `agents-inc run exited ${n.value.code ?? n.value.signal}, stdout ${stdout.length} chars: ${failureText(stderr)}`
             $.ui.log(`${LOG} ${why}`, { to: 'debug' })
-            return exitFailure(n.value.code, stderr, why)
+            return exitFailure(n.value.code, stderr, why, limitS)
           }
           if (n.value.stream === 'stdout') stdout += n.value.text
           else {
@@ -568,7 +620,11 @@ export const register: Register = on => {
       prompt = full()
       chars += prompt.length
       run = yield* ask(prompt, threadPath(id, st.n), allowed)
-    } else if (!run.failed && typeof run.reply === 'string') {
+      if (run.failed && run.fail && !run.fail.startsWith('luna quota-paused')) run = { ...run, fail: run.fail + RETRIED }
+    }
+    // After a retry too: the fresh thread answered in prose once and the step ended "unparsable reply" with no
+    // correction (macOS, 2026-11-11, rollout 01a1cb16-2b78).
+    if (!run.failed && typeof run.reply === 'string') {
       // The thread already holds the prompt: the correction alone is enough.
       prompt = CORRECTION(run.reply)
       chars += prompt.length
@@ -583,7 +639,7 @@ export const register: Register = on => {
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
       // A refusal can stick to its thread: luna answered "I can't run Bash from this interface" to the push and then to
       // an unrelated follow-up (follow scenario, spec 028 Docker run). One fresh thread gets one more try.
-      if (!run.failed && skipsTools(run.reply, false, taskText(messages), names) && REFUSAL.test((run.reply as Reply).say)) {
+      if (!run.failed && skipsTools(run.reply, false, taskText(messages), names) && refuses(run.reply)) {
         st.n++
         st.used = false
         resumed = false
