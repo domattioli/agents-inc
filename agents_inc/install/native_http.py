@@ -24,6 +24,15 @@ LOOPBACK = ("127.0.0.1", "localhost", "::1")
 PROGRESS = "agents-inc run:"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would resend the key header to another host: refuse it, so the 3xx surfaces as an HTTPError."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class StepError(Exception):
     def __init__(self, code: int, text: str):
         super().__init__(text)
@@ -96,9 +105,11 @@ def ask(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, time
     host = urllib.parse.urlsplit(base).hostname
     req = _gemini_request(base, slug, prompt, key)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP {exc.code}: redirect refused") from None
         detail = scrub(exc.read().decode("utf-8", "replace")[:300].replace("\n", " "), key)
         if exc.code == 429: raise StepError(EXIT_QUOTA, f"{provider} {slug} hit a usage or rate limit (HTTP 429): {detail}") from None
         raise StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP {exc.code}: {detail}") from None

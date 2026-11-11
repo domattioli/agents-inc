@@ -34,6 +34,14 @@ class GeminiCall(unittest.TestCase):
         self.assertNotIn(KEY, req.body.decode())
         self.assertEqual(req.json()["contents"][0]["parts"][0]["text"], "PROMPT-TEXT")
 
+    def test_redirect_is_refused_and_target_gets_no_request(self):
+        with FakeProvider([Reply(200, gemini("x"))]) as target:
+            with FakeProvider([Reply(302, {}, {"Location": target.url + "/v1beta/stolen"})]) as srv:
+                with self.assertRaises(nh.StepError) as cm: self.call(srv)
+            self.assertEqual(target.requests, [])
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("HTTP 302: redirect refused", cm.exception.text)
+
     def test_429_is_quota_75(self):
         with FakeProvider([Reply(429, {"error": {"message": "quota"}})]) as srv:
             with self.assertRaises(nh.StepError) as cm: self.call(srv)
