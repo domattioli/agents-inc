@@ -56,6 +56,20 @@ class NativeCli(unittest.TestCase):
         names = [m["nickname"] for m in json.loads(out)["models"]]
         self.assertEqual(names, ["luna", "gemini-flash"])
 
+    def test_luna_status_all_is_the_native_status_the_mod_reads(self):
+        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("network")):
+            code, out, _ = run(["luna", "status", "--json", "--all", "--cwd", str(self.ws)])
+            _, ref, _ = run(["native", "status", "--json", "--cwd", str(self.ws)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), json.loads(ref))
+
+    def test_each_nickname_maps_to_one_free_model_and_one_provider(self):
+        roster = {n: m for n, m in native.NATIVE_MODELS.items() if n != "luna"}
+        self.assertIn("gemini-flash", roster)
+        self.assertEqual(roster["gemini-flash"]["provider"], "gemini")
+        for nick, m in roster.items():
+            self.assertIn(m["provider"], native.BUILT_PROVIDERS, nick)
+
     def test_not_offered_without_key_names_why(self):
         s = self.status()
         self.assertFalse(s["offered"])

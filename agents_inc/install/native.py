@@ -20,12 +20,29 @@ from .free_launch import FREE_MODELS
 from .hook import write_setting
 from .paths import InstallPaths
 
-# Nickname -> provider and slug. One vendor per nickname (P7). luna's slug comes from the roster at run time.
-NATIVE_MODELS: dict[str, dict] = {
-    "luna": {"provider": "codex", "slug": None},
-    "gemini-flash": {"provider": "gemini", "slug": "gemini-3.8-flash"},
-}
 FREE_PROVIDERS = ("gemini", "mistral", "openrouter")
+# Providers with a built adapter (native_http.HOSTS). Mistral and OpenRouter come in slice 3.
+BUILT_PROVIDERS = tuple(native_http.HOSTS)
+
+
+def _free_nicknames() -> dict[str, dict]:
+    """Nickname -> provider and slug for each models.json entry with a `nickname` whose slug is in FREE_MODELS and whose
+    provider has an adapter. One nickname names one slug, so one vendor (P7)."""
+    try:
+        models = json.loads(Path(__file__).resolve().parents[1].joinpath("models.json").read_text(encoding="utf-8"))["models"]
+    except (OSError, ValueError, KeyError):
+        return {}
+    out = {}
+    for slug, spec in models.items():
+        nick = spec.get("nickname") if isinstance(spec, dict) else None
+        if isinstance(nick, str) and slug in FREE_MODELS and FREE_MODELS[slug].provider in BUILT_PROVIDERS:
+            if nick in out: raise ValueError(f"models.json: nickname {nick!r} names two slugs")
+            out[nick] = {"provider": FREE_MODELS[slug].provider, "slug": slug}
+    return out
+
+
+# Nickname -> provider and slug. luna's slug comes from the roster at run time.
+NATIVE_MODELS: dict[str, dict] = {"luna": {"provider": "codex", "slug": None}, **_free_nicknames()}
 ALLOW_FILE = "native-allow.json"
 PROBE_FILE = "native-probes.json"
 PROBE_TTL_S = 7 * 86400

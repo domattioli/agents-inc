@@ -16,7 +16,7 @@ from agents_inc import ledger
 
 _MODELS_PATH = Path(__file__).resolve().parent / "models.json"
 _TASK_CAP = 80
-NATIVE_LUNA_TYPES = frozenset({"agents-inc:luna"})  # same names as install.hook.NATIVE_TYPES; this module stays import-light
+NATIVE_LUNA_TYPES = frozenset({"agents-inc:luna", "agents-inc:gemini-flash"})  # same names as install.hook.NATIVE_TYPES; this module stays import-light
 _VERDICT_MSG = ("agents-inc ledger append: --verdict pass|fail is required; "
                 "a delegate self-report is not a verdict")
 

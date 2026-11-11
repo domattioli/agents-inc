@@ -130,6 +130,7 @@
     "gemini-3.8-flash": {
       "vendor": "google",
       "provider": "gemini",
+      "nickname": "gemini-flash",
       "tier": "grunt",
       "tasks_good": ["extract", "classify", "summarize"],
       "tasks_bad": ["review-of-record", "orchestrate"],
