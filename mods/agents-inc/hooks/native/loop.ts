@@ -204,6 +204,12 @@ export function argBlock(types: string, name: string): string {
   return end < 0 ? '' : lines.slice(start, end + 1).map(l => shortDoc(l.slice(4))).join('\n')
 }
 
+// The tools a stateless guest agent is offered: the core file and shell tools. A real session lists 70+ tools (MCP,
+// deferred, orchestration); sent whole they pushed the first step of a codestral agent over its prompt cap (2026-11-11).
+// SubagentHandback is added by the caller, not listed here.
+export const GUEST_TOOLS: readonly string[] = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'NotebookEdit']
+export const guestTools = (tools: readonly Tool[]): Tool[] => tools.filter(t => !t.mcp && GUEST_TOOLS.includes(t.name))
+
 export function catalog(tools: readonly Tool[], types: string, hand = true): string {
   const entries = tools.map(t => {
     const block = argBlock(types, t.name)
@@ -711,7 +717,7 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     // and loops on "No such tool available" if told to call it (Linux, Claude Code 2.1.310, 2026-10-24).
     const hand = tools.some(t => t.name === HANDBACK) || JSON.stringify(messages).includes(HANDBACK_CUE)
     // A chat-only model gets an empty catalog; the hand-back tool stays, because it is how the turn ends.
-    const offeredTools = S.chatOnly ? [] : tools
+    const offeredTools = S.chatOnly ? [] : adapter.kind === 'stateless' ? guestTools(tools) : tools
     const names = [...offeredTools.filter(t => t.name !== HANDBACK).map(t => t.name), ...(hand ? [HANDBACK] : [])]
     const allowed = new Set(names)
     const composed = await $.prompt.compose({ tools: names }).catch(() => ({ sections: [] }))

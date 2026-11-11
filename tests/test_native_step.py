@@ -65,7 +65,7 @@ class NativeStep(unittest.TestCase):
         with FakeProvider([Reply(429, {"error": "quota"})]) as srv:
             self.assertEqual(self.cli_step(srv, "p")[0], 75)
         with FakeProvider([]) as srv:
-            code, _, err = self.cli_step(srv, "x" * 200_001)
+            code, _, err = self.cli_step(srv, "x" * 300_001)
             self.assertEqual(code, 2); self.assertIn("WB_NATIVE_CONTEXT_OVER", err)
             self.assertEqual(srv.requests, [])
 

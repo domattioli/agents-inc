@@ -2,7 +2,7 @@
 // The hooks are captured from registerLoop through a stand-in `on` and driven with a stand-in `$`.
 import { expect, test } from 'claude-code/testing'
 import type { Adapter } from './adapter'
-import { outsideWrites, ranTool, registerAgent, registerLoop, registerLoops, skipsTools, stopsEarly, ungroundedValues } from './loop'
+import { buildPrompt, catalog, guestTools, outsideWrites, ranTool, registerAgent, registerLoop, registerLoops, skipsTools, stopsEarly, ungroundedValues } from './loop'
 
 type Run = { out?: string; code?: number; hang?: boolean }
 type Chunk = { kind: string; [k: string]: unknown }
@@ -408,4 +408,21 @@ test('stopsEarly catches run 9 and similar wording, not a finished report', () =
   expect(stopsEarly(say('d.txt has not yet run through wc.'))).toBe(true)
   expect(stopsEarly(say('Done. No errors were provided by the tool. A=173 B=95 C=41 D=7 E=12.'))).toBe(false)
   expect(stopsEarly(say('A=173 B=95 C=41 D=7 E=12'))).toBe(false)
+})
+
+// A real session lists 77 tools (MCP and deferred included); the first codestral step was 50032 chars against a 48000 cap.
+test('a stateless guest agent is offered only the core tools, so step 0 of a real session fits', () => {
+  const core = ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'NotebookEdit', 'Agent', 'Skill', 'WebFetch', 'TodoWrite', 'ToolSearch']
+  const all = Array.from({ length: 77 }, (_, i) => {
+    const name = i < core.length ? core[i] : `mcp__server${i % 5}__tool_${i}`
+    return { name, description: `Does thing ${i}. `.repeat(i < core.length ? 60 : 4) + 'x'.repeat(i < core.length ? 800 : 200), mcp: i >= core.length }
+  })
+  const offered = guestTools(all)
+  expect(offered.map(t => t.name)).toEqual(['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'NotebookEdit'])
+  expect(catalog(all, '').length).toBeGreaterThan(catalog(offered, '').length * 2)
+  const system = 's'.repeat(7457)
+  const turn = [{ role: 'user', content: [{ type: 'text', text: 'c'.repeat(14655) }] }]
+  const a = fakeAdapter({ kind: 'stateless' })
+  const prompt = buildPrompt(a, 'codestral-latest', system, catalog(offered, ''), turn as never)
+  expect(prompt.length).toBeLessThan(48000)
 })

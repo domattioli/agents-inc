@@ -19,7 +19,25 @@ from pathlib import Path
 
 NICK = "gemini-flash"
 FILES = {"a.txt": 173, "b.txt": 95, "c.txt": 41, "d.txt": 7, "e.txt": 12}
-TASKS = {"tools": [["a.txt", "b.txt"]], "par": [["a.txt"], ["b.txt"], ["c.txt"]], "steps5": [list(FILES)]}
+TASKS = {"tools": [["a.txt", "b.txt"]], "par": [["a.txt"], ["b.txt"], ["c.txt"]], "steps5": [list(FILES)],
+         "bigcat": [["a.txt", "b.txt"]]}  # bigcat: the same task behind the prompt of a real 77-tool session
+GUEST_CORE = ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit")  # mirrors GUEST_TOOLS in native/loop.ts
+
+
+def session_catalog(n: int = 77, core_only: bool = True) -> str:
+    """A catalog like a real session's: the core tools with long descriptions plus MCP, deferred and orchestration tools.
+    core_only keeps what the loop offers a stateless guest agent; False is the whole list the host reports."""
+    names = [*GUEST_CORE, "Agent", "Skill", "WebFetch", "WebSearch", "TodoWrite", "ToolSearch", "Monitor", "TaskStop"]
+    names += [f"mcp__server{i % 6}__operation_{i}" for i in range(n - len(names))]
+    keep = [x for x in names if x in GUEST_CORE] if core_only else names
+    reps = lambda x: 14 if x in GUEST_CORE else 3 if x.startswith("mcp") else 12
+    desc = "Does the thing it is named for; reads the arguments carefully. "
+    arg = "arg: string, the value to use\n  " * 6
+    return "\n".join(f"- {x}: " + desc * reps(x) + "\n  Arguments:\n  " + arg for x in keep)
+
+
+def session_prefix(core_only: bool = True) -> str:
+    return f"System prompt:\n{'s' * 7457}\n\nTools:\n{session_catalog(core_only=core_only)}\n\nConversation:\n{'c' * 14655}\n"
 FAKE_KEY = "AIzaFAKE-stress-000000000000000000000000"
 
 
@@ -61,12 +79,12 @@ def cli(env, *args, stdin=None):
                           capture_output=True, text=True, timeout=120)
 
 
-def agent_run(env, work, session, agent, files) -> tuple[str, dict, int, list[str]]:
+def agent_run(env, work, session, agent, files, prefix="") -> tuple[str, dict, int, list[str]]:
     """One guest agent: begin, steps until a reply with no tools, end. Returns (say, usage, steps, problems)."""
     bad, usage, steps = [], {"input_tokens": 0, "output_tokens": 0}, 0
     ids = ["--model", NICK, "--cwd", str(work), "--session", session, "--agent", agent]
     if cli(env, "native", "begin", *ids, "--task", "count").returncode: bad.append("begin")
-    prompt, say = f"TASK: count lines of {','.join(files)}\n", ""
+    prompt, say = f"{prefix}TASK: count lines of {','.join(files)}\n", ""
     for _ in range(len(files) + 2):
         r = cli(env, "native", "step", *ids, stdin=prompt); steps += 1
         if r.returncode: bad.append(f"step-exit:{r.returncode}"); break
@@ -117,7 +135,7 @@ def one(src: Path, scenario: str, i: int) -> tuple[bool, str, float, int, int]:
         if not offered: bad.append("not-offered")
         jobs = TASKS[scenario]
         with ThreadPoolExecutor(len(jobs)) as pool:
-            runs = list(pool.map(lambda j: (j, agent_run(env, work, f"s{i}", f"a{j}", jobs[j])), range(len(jobs))))
+            runs = list(pool.map(lambda j: (j, agent_run(env, work, f"s{i}", f"a{j}", jobs[j], session_prefix() if scenario == "bigcat" else "")), range(len(jobs))))
         state = home / ".local" / "state" / "agents-inc"
         for j, (say, usage, steps, problems) in runs:
             bad += problems
@@ -138,7 +156,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--src", default=str(Path(__file__).resolve().parents[1]))
     ap.add_argument("--r", type=int, default=int(os.environ.get("R", 10)))
-    ap.add_argument("--scenarios", default=os.environ.get("SCENARIOS", "tools par steps5"))
+    ap.add_argument("--scenarios", default=os.environ.get("SCENARIOS", "tools par steps5 bigcat"))
     a = ap.parse_args(argv)
     passed = total = 0
     print(f"{'scenario':<8} {'run':<3} {'ok':<4} {'secs':>5} {'start':>5} {'reqs':>4} problems")

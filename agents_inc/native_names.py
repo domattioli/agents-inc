@@ -37,3 +37,18 @@ def nicknames() -> tuple[str, ...]:
 def guest_types() -> frozenset[str]:
     """`agents-inc:<nickname>` for every guest agent model."""
     return frozenset(f"agents-inc:{n}" for n in nicknames())
+
+
+CHARS_PER_TOKEN = 3  # conservative for code and JSON, which tokenize worse than prose
+REPLY_HEADROOM = 0.25  # the share of the window left for the reply
+
+
+def context_chars(slug: str, fallback: int) -> int:
+    """The prompt cap for a guest agent step: the models.json `ctx_hint` (tokens) as chars with reply headroom; `fallback`
+    when the model has no usable hint. The hint is a floor the roster keeps conservative, so the cap is too."""
+    try:
+        hint = json.loads(_MODELS_PATH.read_text(encoding="utf-8"))["models"][slug]["ctx_hint"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return fallback
+    if isinstance(hint, bool) or not isinstance(hint, (int, float)) or hint <= 0: return fallback
+    return int(hint * CHARS_PER_TOKEN * (1 - REPLY_HEADROOM))

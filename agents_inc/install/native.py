@@ -53,7 +53,8 @@ SWITCH_MODES = ("on", "off")
 def model(nick: str) -> dict:
     if nick not in NATIVE_MODELS: raise ValueError(f"unknown guest agent model {nick!r}; one of: {', '.join(NATIVE_MODELS)}")
     entry = dict(NATIVE_MODELS[nick], nickname=nick)
-    if entry["slug"] in FREE_MODELS: entry["max_input_chars"] = FREE_MODELS[entry["slug"]].max_input_chars
+    # Per model: the context window in models.json (D75 input limit, FREE_MODELS, stays the fallback and the dispatch cap).
+    if entry["slug"] in FREE_MODELS: entry["max_input_chars"] = native_names.context_chars(entry["slug"], FREE_MODELS[entry["slug"]].max_input_chars)
     return entry
 
 
