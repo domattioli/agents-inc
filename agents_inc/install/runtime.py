@@ -361,6 +361,12 @@ HOST_TOOLS_DROP = ("apply_patch_tool_type",)
 # offers request_user_input; the operator's skills list (13.8k chars), which luna has no tool to read; and the cwd's
 # AGENTS.md, which the host already puts in the conversation. The sandbox itself stays: only the notes go.
 # luna still calls request_user_input (426 calls in 15 macOS stress runs, 14/15 pass).
+# #160: a tools-on luna run called request_user_input four times ("unavailable in Default mode") and ended with an
+# empty reply. `codex exec` has no user to answer; the preamble says so, and an empty reply names the cause.
+NO_ASK_PREAMBLE = ("[agents-inc run] This is a non-interactive run: no user can answer questions and request_user_input "
+                   "is unavailable. Never ask for confirmation. Make each decision yourself, do the task, and state any "
+                   "assumption or blocker in your final message.\n\n")
+RUI_UNAVAILABLE = "request_user_input is unavailable"
 HOST_TOOLS_ARGS = ["-c", "include_permissions_instructions=false", "-c", "include_collaboration_mode_instructions=false",
                    "-c", "skills.include_instructions=false", "-c", "project_doc_max_bytes=0"]
 
@@ -663,6 +669,8 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
                                            host_tools=host_tools, host_catalog=host_catalog)
             prompt, extra = "", {"cwd": str(cwd)}  # the message rides the PROMPT positional; resume has no -C
         else:
+            if tools and worker is None and prompt.strip():  # #160: nobody answers a question in `codex exec`
+                prompt = NO_ASK_PREAMBLE + prompt
             argv = build_codex_argv(executable, model, effort, cwd, supported_efforts, model_map, tools, write, write_dir,
                                     lead_dir, deny, lead_home, home_repo, json_out, worker, extra_read=extra_read,
                                     network=network, tool_tmp=tool_tmp, host_tools=host_tools, host_catalog=host_catalog)
@@ -745,16 +753,22 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
 
                 return 75
 
-    # Check for empty output with success exit code
-    if result.returncode == 0 and not stdout.strip():
+    # Empty output: on success, or (#160) on a failure caused by request_user_input calls, say so with the cause
+    refused_asks = (result.stderr or "").count(RUI_UNAVAILABLE)
+    if not stdout.strip() and (result.returncode == 0 or refused_asks):
         asked = "unknown"
         rid = tid or resume_thread
         if rid:
             rollout = thread_rollout(rid)
             if rollout is not None: asked = str(len(rui_calls(rollout)))
-        sys.stderr.write(f"agents-inc run: codex {slug} returned an empty reply (request_user_input calls: {asked})\n")
+        if asked == "unknown" and refused_asks: asked = str(refused_asks)
+        line = f"agents-inc run: codex {slug} returned an empty reply (request_user_input calls: {asked})"
+        if refused_asks:
+            line += ("; cause: the model asked the user a question, and request_user_input is unavailable in "
+                     "`codex exec` Default mode. Restate the task so it needs no confirmation, or use a Claude rung")
+        sys.stderr.write(line + "\n")
         sys.stderr.flush()
-        return 1
+        return result.returncode or 1
 
     # Return original exit code; a leaked isolated CODEX_HOME turns success into failure
     return 1 if cleanup_failed and result.returncode == 0 else result.returncode

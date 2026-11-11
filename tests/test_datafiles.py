@@ -48,7 +48,7 @@ class RepoFileTest(unittest.TestCase):
             with self.assertRaises(FileNotFoundError) as ctx:
                 datafiles.repo_file("skills/workerbee/SKILL.md")
             self.assertIn("skills/workerbee/SKILL.md", str(ctx.exception))
-            self.assertIn("pip install agents-inc", str(ctx.exception))
+            self.assertIn("pipx install --force agents-inc", str(ctx.exception))  # #155: pip fails under PEP 668
             with self.assertRaises(FileNotFoundError):
                 datafiles.repo_file("README.md")
 

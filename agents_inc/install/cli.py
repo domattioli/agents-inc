@@ -157,6 +157,10 @@ def install(args):
     A failure is loud (FAIL line, exit 1) and leaves a marker that doctor reports (#155)."""
     command = getattr(args, "command", None) or "install"
     paths = _paths()
+    if not getattr(args, "no_host_wiring", False) and (paths.home / ".claude").is_dir():
+        try: args.claude_settings = _settings_consent(args, paths, command)
+        except (OSError, ValueError, RuntimeError) as exc:
+            _report_install_failure(paths, command, exc); return 1
     try:
         if getattr(args, "source", None):
             code = _install(args, Path(args.source))
@@ -173,6 +177,28 @@ def install(args):
         try: (paths.state.joinpath(REPAIR_MARKER)).unlink(missing_ok=True)
         except OSError: pass
     return code
+
+def _settings_consent(args, paths: InstallPaths, command: str, stdin=None) -> bool:
+    """H (2026-11-11): print what install/repair adds to ~/.claude/settings.json; write only on --yes or a TTY yes.
+    No change pending: True without asking. No TTY and no --yes: False, and print the command that applies it."""
+    from .host_wiring import AT_ROUTE_NOTE, settings_plan
+    exclude = not getattr(args, "no_sandbox_exclude", False)
+    target, text, lines = settings_plan(paths, exclude)
+    if text is None: return True
+    print(f"agents-inc {command} will write these entries to {target} (backup kept; `agents-inc unwire` removes them):")
+    for line in lines: print(f"  {line}")
+    print(AT_ROUTE_NOTE)
+    if getattr(args, "yes", False): return True
+    stdin = sys.stdin if stdin is None else stdin
+    if stdin.isatty():
+        print(f"Write them to {target}? [y/N] ", end="", flush=True)
+        if stdin.readline().strip().lower() in ("y", "yes"): return True
+        print(f"not written: {target} left unchanged.")
+        return False
+    source = getattr(args, "source", None)
+    flags = " ".join(([f"--source {Path(source).resolve()}"] if source else []) + ([] if exclude else ["--no-sandbox-exclude"]))
+    print(f"no TTY and no --yes: {target} left unchanged. Apply with: agents-inc {command} --yes{(' ' + flags) if flags else ''}")
+    return False
 
 REPAIR_MARKER = "repair-failed.json"
 
@@ -211,7 +237,8 @@ def _install(args, source: Path):
             owned = tuple(item for item in receipt.owned_paths if item.path != launcher.path) + (launcher,)
             receipt = InstallReceipt(receipt.release_hash, receipt.python_path, receipt.codex_path, owned, receipt.prior_release)
             if not getattr(args, "no_host_wiring", False):
-                receipt = install_host_wiring(paths, receipt, journal)
+                receipt = install_host_wiring(paths, receipt, journal, not getattr(args, "no_sandbox_exclude", False),
+                                              getattr(args, "claude_settings", True))
                 if (paths.home / ".claude").is_dir():
                     receipt, link_notices = install_alias_links(paths, receipt, journal); notices.extend(link_notices)
             paths.roster.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +254,7 @@ def _install(args, source: Path):
             verify_installed(paths)
             journal.commit()
             if getattr(args, "agent_gate", None): host_hook.write_agent_gate(paths, args.agent_gate)
-            if not getattr(args, "no_host_wiring", False) and (paths.home / ".claude").is_dir(): notices.append(host_hook.gate_notice(paths))
+            if not getattr(args, "no_host_wiring", False) and (paths.home / ".claude").is_dir() and getattr(args, "claude_settings", True): notices.append(host_hook.gate_notice(paths))
             if not getattr(args, "no_mod", False): install_mod(paths, notices); install_pane_mods(paths, notices)  # after commit: a mod problem never rolls the install back
             for line in notices: print(line)
             return 0
@@ -313,12 +340,12 @@ def uninstall(paths: InstallPaths, receipt: InstallReceipt) -> set[Path]:
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="agents-inc")
     subs = parser.add_subparsers(dest="command", required=True)
-    p = subs.add_parser("install"); p.add_argument("--source"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES)
+    p = subs.add_parser("install"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES)
     p = subs.add_parser("run"); p.add_argument("--model", required=True); p.add_argument("--effort", default="medium"); p.add_argument("--cwd", required=True); p.add_argument("--tools", action="store_true"); p.add_argument("--no-tools", action="store_true"); p.add_argument("--host-tools", action="store_true", help="tools off; the caller's host runs the tools the model names (the agents-inc:luna type)"); p.add_argument("--write", action="store_true"); p.add_argument("--network", action="store_true"); p.add_argument("--run-dir"); p.add_argument("--lead", metavar="RUN_DIR"); p.add_argument("--home-repo"); p.add_argument("--thread", metavar="FILE", help="keep one Codex thread in FILE: start it when missing or empty, resume it otherwise")
     p = subs.add_parser("dispatch"); p.add_argument("--slots"); p.add_argument("--model"); p.add_argument("--effort"); p.add_argument("--cwd"); p.add_argument("--tier", choices=("grunt",)); p.add_argument("--run-dir"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--resume"); p.add_argument("--message"); p.add_argument("--home-repo"); p.add_argument("--serve", metavar="RUN_DIR"); p.add_argument("--poll-interval", type=float, default=1.0); p.add_argument("--idle-timeout", type=float, default=600.0); p.add_argument("--cancel", metavar="RUN_DIR"); p.add_argument("--wait", nargs=2, metavar=("RUN_DIR", "REQUEST_ID")); p.add_argument("--timeout", type=float, default=600.0)
     p = subs.add_parser("events", help="follow or redact live delegate events (spec 027)"); p.add_argument("verb", choices=("follow", "redact")); p.add_argument("run_dir", nargs="?")
     p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model")
-    p = subs.add_parser("repair"); p.add_argument("--source"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES)
+    p = subs.add_parser("repair"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES)
     p = subs.add_parser("unwire"); p.add_argument("--host", choices=("claude",), default="claude")
     p = subs.add_parser("hook"); p.add_argument("event", choices=("session-start", "agent-nudge", "agent-done")); p.add_argument("--host", choices=("claude", "codex", "gemini"))
     p = subs.add_parser("ledger", add_help=False); p.add_argument("rest", nargs=argparse.REMAINDER)
@@ -345,6 +372,10 @@ def main(argv=None):
             if args.cancel: return dispatch.cancel_run(args.cancel)
             if args.wait: return dispatch.wait(args.wait[0], args.wait[1], args.timeout)
             if args.serve: return dispatch.serve(args.serve, args.poll_interval, args.idle_timeout, args.home_repo)
+            if not args.dry_run:  # a stale install stops every launch before it starts; --dry-run still renders
+                from .doctor import stale_refusal
+                refusal = stale_refusal(paths)
+                if refusal: print(refusal, file=sys.stderr); return 1
             return dispatch.run(args)
         if args.command == "events":
             from .. import live_rows  # works before the receipt check, like dispatch

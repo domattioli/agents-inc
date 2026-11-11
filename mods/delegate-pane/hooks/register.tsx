@@ -56,9 +56,12 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'delegate-pane', description: 'Open a live pane for every agents-inc delegate model seen so far' })
 
+    // Only runs started in this session open a pane: older run dirs (hundreds pile up) used to open one stale pane per model.
+    const since = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z'
+
     $.clock.every(POLL_MS, async () => {
       try {
-        const dirs = (await $.fs.list(RUNS)).filter(d => d.kind === 'dir' && /^\d{8}T\d{6}Z-/.test(d.name))
+        const dirs = (await $.fs.list(RUNS)).filter(d => d.kind === 'dir' && /^\d{8}T\d{6}Z-/.test(d.name) && d.name >= since)
         const newest: Record<string, string> = {}
         for (const d of dirs) {
           const m = d.name.replace(/^\d{8}T\d{6}Z-/, '').split('-')[0]

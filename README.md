@@ -59,7 +59,7 @@ Restart Claude Code (and Codex, if used) after the install. `agents-inc install 
 
 ### Hooks this installs
 
-`agents-inc install` adds these hooks to `~/.claude/settings.json`, plus `"agents-inc *"` under `sandbox.excludedCommands` so a sandboxed Bash can start a dispatch (each delegate still gets its own `sandbox-exec`). It prints the list when it runs. `agents-inc unwire` removes only these entries.
+`agents-inc install` adds these hooks to `~/.claude/settings.json`, plus `"agents-inc dispatch *"`, `"agents-inc run *"`, `"agents-inc repair *"` and `"agents-inc install *"` under `sandbox.excludedCommands` so a sandboxed Bash can start a dispatch (each delegate and each gate still gets its own `sandbox-exec`). It prints the entries first and asks before writing; `--yes` skips the question, and with no terminal and no `--yes` it writes nothing and prints the command to run. `--no-sandbox-exclude` leaves the exclusion out. `repair` replaces an older `"agents-inc *"` entry with the narrow ones. `agents-inc unwire` removes only these entries.
 
 - `SessionStart`: loads the delegation mandate into each session.
 - `PreToolUse` on `Agent`/`Task`, dispatch-shaped `Bash` and `DelegateAgent`: adds a routing nudge, warns on duplicate dispatches, blocks persona impersonation, and runs the agent gate.
@@ -141,7 +141,7 @@ The full description, including the delegation limits, the 14-element prompt con
 - The governed path is off by default, so a fresh install does not run the enforced cross-vendor review.
 - Cross-vendor review catches disagreement between models. It does not catch a blind spot that both vendors share.
 - Deterministic checks cover what a script can express, such as a file, a quote or an exit code. They do not replace human judgment on scope or design.
-- `agents-inc dispatch` must run outside the Claude Code or Codex sandbox, because the sandbox blocks the provider API. Inside it, dispatch exits 69 before any delegate starts and prints the fix: add `"agents-inc *"` to `sandbox.excludedCommands`. `agents-inc install` and `repair` add that entry; `agents-inc doctor` warns `WB_SANDBOX_EXCLUDE_MISSING` when it is gone.
+- `agents-inc dispatch` must run outside the Claude Code or Codex sandbox, because the sandbox blocks the provider API. Inside it, dispatch exits 69 before any delegate starts and prints the fix: add `"agents-inc dispatch *"` to `sandbox.excludedCommands`. `agents-inc install` and `repair` add that entry; `agents-inc doctor` warns `WB_SANDBOX_EXCLUDE_MISSING` when it is gone.
 - Free-model capacity varies: a probe on 2026-09-29 found 429 or capacity errors on several free models ([docs/BENCH.md](https://github.com/domattioli/agents-inc/blob/main/docs/BENCH.md)). Artifacts stay local; remote publication (Bindle Backend B) is not built.
 
 Updates: new sessions and `agents-inc doctor` tell you when a newer release is on PyPI (one check a day; `AGENTS_INC_NO_UPDATE_CHECK=1` turns it off).

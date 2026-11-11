@@ -372,7 +372,7 @@ WORKER_SETTINGS = '{"sandbox": {"enabled": false}}'
 # #94: AGENTS_INC_ALLOW_SANDBOXED=1 lets dispatch start inside another sandbox (tests, a caller that knows better).
 ALLOW_SANDBOXED_ENV = "AGENTS_INC_ALLOW_SANDBOXED"
 SANDBOX_FIX = ('do not retry unchanged; two routes: (a) rerun as one plain command with no cd, &&, ;, pipe, redirect, heredoc or $(...) '
-               '(add "agents-inc *" to sandbox.excludedCommands); (b) for Claude rungs set '
+               '(add "agents-inc dispatch *" to sandbox.excludedCommands; `agents-inc repair --yes` adds it); (b) for Claude rungs set '
                'sandbox.network.allowedDomains ["api.anthropic.com"] in ~/.claude/settings.json')
 CODEX_NESTED_FIX = "Codex cannot nest a sandbox (rc 71); run as one plain `agents-inc ...` command"
 PROBE_HOST, PROBE_TIMEOUT = "api.anthropic.com", 2.0
@@ -1063,13 +1063,24 @@ def _fan_out_check(spec: dict, out_path: Path) -> str | None:
 REPORT_TOKEN = "{report}"  # spec 037: in a free run's gate argv, the saved reply path
 
 
+def gate_sandbox_profile(cwd: Path, home: Path, tmpdir: str, network: bool = False) -> str:
+    """Gate profile: the delegate's Claude Worker profile (writes only to cwd, the gate tmpdir and the scratch roots;
+    the D49 home deny list), plus no network unless the gate opts in with "network": true."""
+    return claude_sandbox_profile(cwd, home, tmpdir) + ("" if network else "(deny network*)\n")
+
+
 def _run_gates(spec: dict, report_path: Path | None = None) -> tuple[list, str | None]:
     """D58: run each structured gate with no shell after the delegate exits. Return (results, red reason):
     gate-missing when a gate could not run, else gate-failed when an exit code differs, else None.
     report_path (free runs only): `{report}` in a gate argv expands to it, after the screens in _grants_from_slots."""
     danger, results = _load("render_dispatch", _scripts(spec)).DANGER_RE, []
+    # G (2026-11-11): `agents-inc *` runs outside the Claude Code sandbox, so each gate gets its own sandbox-exec
+    # profile. Without a working sandbox-exec (non-macOS, nested sandbox) gates run as before and run.json says so.
+    sandboxed = sandbox_available()
+    spec["gate_sandbox"] = "sandbox-exec" if sandboxed else "unavailable"
     for g in spec["gate_commands"]:
-        row = {"argv": g["argv"], "cwd": g["cwd"], "expect_rc": g["expect_rc"], "rc": None, "excerpt": ""}
+        row = {"argv": g["argv"], "cwd": g["cwd"], "expect_rc": g["expect_rc"], "rc": None, "excerpt": "",
+               "network": bool(g.get("network"))}
         argv = [a.replace(REPORT_TOKEN, str(report_path)) for a in g["argv"]] if report_path is not None else g["argv"]
         joined = " ".join(argv)
         wd = (Path(spec["cwd"]) / g["cwd"]).resolve()  # re-checked here: the delegate may have planted a link
@@ -1079,8 +1090,15 @@ def _run_gates(spec: dict, report_path: Path | None = None) -> tuple[list, str |
         elif not wd.is_relative_to(Path(spec["cwd"]).resolve()):
             row["error"] = "cwd-outside"
         else:
+            tmp = tempfile.mkdtemp(prefix="agents-inc-gate-") if sandboxed else None
             try:
-                res = subprocess.run(argv, cwd=str(wd), shell=False,
+                run_argv, env = argv, None
+                if tmp is not None:
+                    profile = Path(tmp) / "gate.sb"
+                    profile.write_text(gate_sandbox_profile(Path(spec["cwd"]).resolve(), Path.home(), tmp,
+                                                            bool(g.get("network"))), encoding="utf-8")
+                    run_argv, env = [SANDBOX_EXEC, "-f", str(profile)] + list(argv), {**os.environ, "TMPDIR": tmp}
+                res = subprocess.run(run_argv, cwd=str(wd), shell=False, env=env,
                                      stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
                                      timeout=g["timeout_s"])
                 tail = ((res.stdout or "") + (res.stderr or "")).encode()[-2048:].decode("utf-8", "ignore")
@@ -1089,6 +1107,9 @@ def _run_gates(spec: dict, report_path: Path | None = None) -> tuple[list, str |
                 row["error"] = "timeout"
             except OSError as exc:
                 row["error"] = type(exc).__name__
+            finally:
+                if tmp is not None:
+                    shutil.rmtree(tmp, ignore_errors=True)
         results.append(row)
     if any(r["rc"] is None for r in results):
         return results, "gate-missing"
@@ -1946,10 +1967,10 @@ SCOPE_LINE = "SCOPE BOILERPLATE: repo-scoped writes only"
 _HOME_CRED = r"(~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.(claude(?!/skills/(?!\S*\.\.))|codex|ssh|config|aws|gnupg|netrc|local|codex-bridge)\b"
 # 025 (#85, #87): the slot text screen matches locations, never bare words such as credentials, token or api_key.
 # A home directory matches only with a further non-glob segment, so deny-list prose (`~/.claude/**`) passes;
-# ~/.local/bin/ and ~/.local/share/agents-inc/ are exempt like ~/.claude/skills/; so is the instruction file ~/.claude/AGENTS.md
+# ~/.local/bin/, ~/.local/share/agents-inc/ and ~/.local/state/agents-inc/ are exempt like ~/.claude/skills/; so is the instruction file ~/.claude/AGENTS.md
 # when it ends the path (#146).
 _HOME_CRED_TEXT = (r"(~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.(claude(?!/skills/(?!\S*\.\.))(?!/AGENTS\.md(?=$|[\s'\"`,;)]))|codex|ssh"
-                   r"|config|aws|gnupg|netrc|local(?!/(?:bin|share/agents-inc)/(?!\S*\.\.))|codex-bridge)\b"
+                   r"|config|aws|gnupg|netrc|local(?!/(?:bin|share/agents-inc|state/agents-inc)/(?!\S*\.\.))|codex-bridge)\b"
                    r"/(?![^\s/]*[*?\[])[^\s/'\"`,;)]+")
 _ENV_READ_VERBS = r"cat|read|print|open|source|dump|echo|show|less|head|tail"
 CREDENTIAL_RE = re.compile(
@@ -1958,6 +1979,30 @@ CREDENTIAL_RE = re.compile(
     + r"|(?<=[/~])\.env(?:\.[\w.-]+)?\b"  # .env after a path separator or ~
     + r"|`[^`\n]*?(?<![\w-])(?:" + _ENV_READ_VERBS + r")\s+\.env(?:\.[\w.-]+)?(?=[\s`])[^`\n]*`",  # `cat .env`
     re.IGNORECASE)
+# Printing a secret-bearing variable: a print verb, then within the clause an upper-case name ending in a secret word
+# ($OPENAI_API_KEY, ${GH_TOKEN}, printenv AWS_SECRET_ACCESS_KEY). Case-sensitive on the name, so $tokens passes.
+SECRET_VAR_PRINT_RE = re.compile(
+    r"(?i:\b(?:print(?:env)?|echo|show|dump|output|paste|reveal|log|report|copy|cat|env)\b)[^.;\n]{0,60}?"
+    r"(?<![\w])\$?\{?[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Z0-9_]*\b")
+# #87: OUT_OF_SCOPE and CONSTRAINTS hold deny-list wording ("Do not read ~/.codex/auth.json"). A clause there is
+# skipped when it is a prohibition: in CONSTRAINTS it starts with a negation; in OUT_OF_SCOPE every clause is a
+# prohibition by slot meaning. A clause that turns around (except, unless, but, instead, however) is still screened.
+DENY_LIST_SLOTS = frozenset({"OUT_OF_SCOPE", "CONSTRAINTS"})
+_CLAUSE_SPLIT_RE = re.compile(r"\n|;|(?<=[.!?])\s+")
+_NEGATION_RE = re.compile(r"\A[\s\-*•>\d.)]*(?:do\s+not|don't|never|no|not|must\s+not|may\s+not|cannot|can't|avoid"
+                          r"|nothing|without|forbidden|off[- ]limits|refuse)\b", re.IGNORECASE)
+_TURN_RE = re.compile(r"\b(?:except|unless|but|instead|however|other\s+than)\b", re.IGNORECASE)
+
+
+def _screen_text(key: str, value: str):
+    """First credential match in one slot value, skipping prohibition clauses of a deny-list slot (#87)."""
+    clauses = _CLAUSE_SPLIT_RE.split(value) if key in DENY_LIST_SLOTS else [value]
+    for clause in clauses:
+        if key in DENY_LIST_SLOTS and not _TURN_RE.search(clause) and (key == "OUT_OF_SCOPE" or _NEGATION_RE.match(clause)):
+            continue
+        match = CREDENTIAL_RE.search(clause) or SECRET_VAR_PRINT_RE.search(clause)
+        if match: return match
+    return None
 # Gate and BASH_ALLOW screen: names a credential path, not a word. test_token_refresh.py and check_credentials_schema.py pass.
 GATE_CREDENTIAL_RE = re.compile(
     _HOME_CRED + r"|(?:^|[\s/='\"])(?:\.env(?:\.[\w.-]+)?|id_rsa|id_ed25519|[^\s/]*\.(?:pem|key))(?=$|[\s/'\"])",
@@ -2176,7 +2221,7 @@ def control_char_hit(slots) -> tuple[str, str, int] | None:
 def credential_hit(slots) -> str | None:
     """#95: `slot <KEY> matched '<text>'` for the first slot value the D51 screen refuses, else None."""
     for key, value in (slots.items() if isinstance(slots, dict) else ()):
-        match = CREDENTIAL_RE.search(value) if isinstance(value, str) else None
+        match = _screen_text(key, value) if isinstance(value, str) else None
         if match:
             return f"slot {key} matched {match.group(0)!r}"
     return None

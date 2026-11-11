@@ -103,8 +103,8 @@ class HostWiringTest(unittest.TestCase):
         from agents_inc.install.host_wiring import HOSTS, add_hooks, strip_hooks
         claude = next(h for h in HOSTS if h.name == "claude")
         config = add_hooks({"sandbox": {"excludedCommands": ["docker *"]}}, self.paths, claude)
-        self.assertEqual(config["sandbox"]["excludedCommands"], ["docker *", "agents-inc *"])
-        self.assertEqual(add_hooks(config, self.paths, claude)["sandbox"]["excludedCommands"], ["docker *", "agents-inc *"])
+        self.assertEqual(config["sandbox"]["excludedCommands"], ["docker *", "agents-inc dispatch *", "agents-inc run *", "agents-inc repair *", "agents-inc install *"])
+        self.assertEqual(add_hooks(config, self.paths, claude)["sandbox"]["excludedCommands"], ["docker *", "agents-inc dispatch *", "agents-inc run *", "agents-inc repair *", "agents-inc install *"])
         self.assertEqual(strip_hooks(config, self.paths)["sandbox"], {"excludedCommands": ["docker *"]})
         codex = next(h for h in HOSTS if h.name == "codex")
         self.assertNotIn("sandbox", add_hooks({}, self.paths, codex))
@@ -114,8 +114,40 @@ class HostWiringTest(unittest.TestCase):
         self._hosts("claude")
         install_host_wiring(self.paths, _receipt())
         removed = unwire_hooks(self.paths, "claude")
-        self.assertIn('sandbox.excludedCommands: agents-inc *', removed)
+        self.assertIn('sandbox.excludedCommands: agents-inc dispatch *', removed)
         self.assertNotIn("sandbox", json.loads((self.home / ".claude/settings.json").read_text()))
+
+    # H (2026-11-11): narrow exclusion, migration of the legacy broad entry, unwire removes both forms.
+    def test_repair_migrates_legacy_broad_entry(self):
+        from agents_inc.install.host_wiring import HOSTS, add_hooks
+        claude = next(h for h in HOSTS if h.name == "claude")
+        config = add_hooks({"sandbox": {"excludedCommands": ["agents-inc *", "docker *"]}}, self.paths, claude)
+        self.assertNotIn("agents-inc *", config["sandbox"]["excludedCommands"])
+        self.assertIn("agents-inc dispatch *", config["sandbox"]["excludedCommands"])
+        self.assertIn("docker *", config["sandbox"]["excludedCommands"])
+
+    def test_unwire_removes_legacy_and_narrow_forms(self):
+        from agents_inc.install.host_wiring import unwire_hooks
+        self._hosts("claude")
+        install_host_wiring(self.paths, _receipt())
+        target = self.home / ".claude/settings.json"
+        config = json.loads(target.read_text()); config["sandbox"]["excludedCommands"].append("agents-inc *")
+        target.write_text(json.dumps(config))
+        removed = unwire_hooks(self.paths, "claude")
+        self.assertIn("sandbox.excludedCommands: agents-inc *", removed)
+        self.assertIn("sandbox.excludedCommands: agents-inc run *", removed)
+        self.assertNotIn("sandbox", json.loads(target.read_text()))
+
+    def test_no_sandbox_exclude_adds_no_entry(self):
+        self._hosts("claude")
+        install_host_wiring(self.paths, _receipt(), sandbox_exclude=False)
+        self.assertNotIn("sandbox", json.loads((self.home / ".claude/settings.json").read_text()))
+
+    def test_no_consent_writes_no_claude_settings(self):
+        self._hosts("claude")
+        install_host_wiring(self.paths, _receipt(), claude_settings=False)
+        self.assertFalse((self.home / ".claude/settings.json").exists())
+        self.assertIn(BEGIN, (self.home / ".claude/AGENTS.md").read_text())
 
     def test_bash_nudge_handlers_carry_if_filters(self):
         from agents_inc.install.host_wiring import HOSTS, add_hooks, hook_command

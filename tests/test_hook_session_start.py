@@ -42,7 +42,7 @@ class SessionStartWarningsTest(unittest.TestCase):
     def test_sandbox_exclusion_warning_names_the_operator_ask(self):
         text = self._text(("WB_SANDBOX_EXCLUDE_MISSING",))
         self.assertIn("WARNING: WB_SANDBOX_EXCLUDE_MISSING", text)
-        self.assertIn('"agents-inc *"', text)
+        self.assertIn('"agents-inc dispatch *"', text)
         self.assertIn("sandbox.excludedCommands", text)
 
     def test_stale_warning_explains_itself(self):

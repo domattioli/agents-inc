@@ -93,7 +93,7 @@ class RepairTest(unittest.TestCase):
                 (tmp / d).mkdir(parents=True); f = tmp / d / "codex"; f.write_text("#!/bin/sh\n"); f.chmod(0o755)
             home = tmp / "home"; (home / ".claude").mkdir(parents=True)
             paths = InstallPaths.for_home(home)
-            args = argparse.Namespace(source=str(source), adopt_existing_workerbee=False, without_codex=False, no_host_wiring=False)
+            args = argparse.Namespace(source=str(source), adopt_existing_workerbee=False, without_codex=False, no_host_wiring=False, yes=True)
             env = {"PATH": f"{tmp / 'x-shims' / 'abc'}:{tmp / 'real'}"}
             with mock.patch.object(cli, "_paths", return_value=paths), mock.patch.dict(os.environ, env), \
                  mock.patch("agents_inc.install.runtime.tempfile.gettempdir", return_value=str(tmp / "t")):
@@ -112,7 +112,7 @@ class RepairTest(unittest.TestCase):
                 (source / "skills" / name).mkdir(parents=True); (source / "skills" / name / "SKILL.md").write_text("x")
             home = Path(raw) / "home"; (home / ".claude").mkdir(parents=True)
             paths = InstallPaths.for_home(home)
-            args = argparse.Namespace(source=str(source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False)
+            args = argparse.Namespace(source=str(source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False, yes=True)
             with mock.patch.object(cli, "_paths", return_value=paths):
                 self.assertEqual(cli.install(args), 0)
                 (source / "skills" / "workerbee" / "SKILL.md").write_text("y")  # new release
@@ -133,7 +133,7 @@ class RepairFailureTest(unittest.TestCase):
             (source / "skills" / name).mkdir(parents=True); (source / "skills" / name / "SKILL.md").write_text("x")
         home = Path(raw) / "home"; (home / ".claude").mkdir(parents=True)
         paths = InstallPaths.for_home(home)
-        args = argparse.Namespace(command="repair", source=str(source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False, no_mod=True)
+        args = argparse.Namespace(command="repair", source=str(source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False, no_mod=True, yes=True)
         return paths, args
 
     def test_failed_repair_is_loud_and_marks_doctor_then_clears(self):
@@ -152,6 +152,7 @@ class RepairFailureTest(unittest.TestCase):
                     self.assertEqual(cli.install(args), 1)
                 self.assertIn("FAIL: agents-inc repair", err.getvalue())
                 self.assertIn("Operation not permitted", err.getvalue())
+                self.assertIn("run `agents-inc repair` from a normal terminal", err.getvalue())  # #155 (b): names the sandbox cause
                 marker = paths.state / "repair-failed.json"
                 self.assertTrue(marker.is_file())
                 report = check_install(paths, which=lambda *a, **k: '/x/claude', sandbox_probe=lambda: True)
@@ -175,7 +176,7 @@ class PackagedInstallTest(unittest.TestCase):
             (data / "docs/governance").mkdir(parents=True); (data / "docs/governance/SCHEMA-3NF.md").write_text("s")
             home = tmp / "home"; (home / ".claude").mkdir(parents=True)
             paths = InstallPaths.for_home(home)
-            args = argparse.Namespace(source=None, adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False)
+            args = argparse.Namespace(source=None, adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False, yes=True)
             with mock.patch.object(cli, "_paths", return_value=paths), \
                  mock.patch.object(cli.datafiles, "repo_file", side_effect=lambda rel: data / rel):
                 self.assertEqual(cli.install(args), 0)

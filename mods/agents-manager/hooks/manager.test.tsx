@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-const RUN = '20261107T000000Z-luna-aaaaaa'
+const RUN = '20991107T000000Z-luna-aaaaaa'
 const PANE = {
   plugin: 'agents-manager',
   component: 'Pane',
@@ -222,7 +222,7 @@ test('a dispatch job row ends once its run dir appears', async ($, on) => {
   await ui.input({ key: 'task', text: 'count lines' })
   expect((await ui.findAll({ type: 'Button', text: /count lines/ })).length).toBe(1)
   const slots = seen[0]?.[seen[0].indexOf('--slots') + 1] ?? ''
-  const NEW = '20261107T000100Z-terra-bbbbbb'
+  const NEW = '20991107T000100Z-terra-bbbbbb'
   world.dirs = [NEW, RUN]
   world.read = p => (p.endsWith('run.json') && p.includes(NEW) ? JSON.stringify({ model: 'terra', slots }) : DONE)
   await world.advance(2100)
@@ -334,11 +334,23 @@ test('ask to stop sends the stop text and says "stop requested", never "stopped"
   await ui.unmount()
 })
 
+// 5b OLD FINISHED RUNS ARE HISTORY
+test('finished runs from before this session are not listed', async ($, on) => {
+  const world = await start($, on)
+  world.dirs = Array.from({ length: 12 }, (_, i) => `20200101T${String(i).padStart(2, '0')}0000Z-luna-old${String(i).padStart(3, '0')}`)
+  world.read = () => DONE
+  await world.advance(2100)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Button', text: /0000 luna/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /0 running · 0 finished/ }))?.text).toContain('showing 0')
+  await ui.unmount()
+})
+
 // 5 ACTIVE STAYS VISIBLE
 test('every running run stays listed beyond the newest eight finished', async ($, on) => {
   const world = await start($, on)
   const OLD = '20261101T000000Z-luna-oldrun'
-  const fin = Array.from({ length: 12 }, (_, i) => `20261107T${String(i).padStart(2, '0')}0000Z-luna-fin${String(i).padStart(3, '0')}`)
+  const fin = Array.from({ length: 12 }, (_, i) => `20991107T${String(i).padStart(2, '0')}0000Z-luna-fin${String(i).padStart(3, '0')}`)
   world.dirs = [...fin, OLD]
   world.read = p => (p.includes(OLD) && p.endsWith('events.jsonl') ? LIVE : DONE)
   await world.advance(2100)

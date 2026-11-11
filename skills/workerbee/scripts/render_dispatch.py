@@ -97,7 +97,7 @@ def default_fan_out(slots: dict, model: str | None = None) -> str:
 # Commands a delegate may never be granted or have dispatch run: pushes, commits, privilege, deletion, network.
 DANGER_RE = re.compile(r"\bgit\b[^;&|]*\b(?:push|commit)\b|\bsudo\b|\brm\b(?=[^;&|]*\s-\w*r)(?=[^;&|]*\s-\w*f)"
                        r"|\brm\b[^;&|]*\s--recursive\b|\bcurl\b|\bssh\b", re.IGNORECASE)
-_GATE_KEYS = {"argv", "cwd", "timeout_s", "expect_rc"}
+_GATE_KEYS = {"argv", "cwd", "timeout_s", "expect_rc", "network"}
 # Filled when the slot is absent or blank, so a routine Worker dispatch needs only ROLE, TASK, CONSTRAINTS,
 # OUT_OF_SCOPE, FILES_IN_SCOPE, STOP_RULE, SUCCESS_GATE and FAILURE_GATE (PRE_EXISTING_CHANGES defaults to the snapshot placeholder text; dispatch fills the path).
 # Each default is the Worker case; a Lead, a confidential input or a plan deliverable sets the slot explicitly.
@@ -117,7 +117,7 @@ def _num(value) -> bool:
 
 def parse_gates(value) -> tuple[list | None, str | None]:
     """Return (normalized gates, None), (None, None) when absent or empty, or (None, why). value: a list, or a
-    JSON string that decodes to a list. Entry keys: argv (required), cwd (default "."), timeout_s (600), expect_rc (0)."""
+    JSON string that decodes to a list. Entry keys: argv (required), cwd (default "."), timeout_s (600), expect_rc (0), network (false)."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None, None
     if isinstance(value, str):
@@ -135,7 +135,7 @@ def parse_gates(value) -> tuple[list | None, str | None]:
         if isinstance(g, str):  # #100: a plain command string is one gate; shlex splits it, no shell runs it
             g = {"argv": shlex.split(g)} if g.strip() else {}
         if not isinstance(g, dict) or not set(g) <= _GATE_KEYS:
-            return None, f"{who} must be an object with keys from argv, cwd, timeout_s, expect_rc"
+            return None, f"{who} must be an object with keys from argv, cwd, timeout_s, expect_rc, network"
         argv = g.get("argv")
         if (not isinstance(argv, list) or not argv
                 or not all(isinstance(a, str) and a and "\0" not in a and "\n" not in a for a in argv)):
@@ -152,7 +152,13 @@ def parse_gates(value) -> tuple[list | None, str | None]:
             return None, f"{who} expect_rc must be an integer"
         if DANGER_RE.search(" ".join(argv)):
             return None, f"{who} argv matches the danger list"
-        out.append({"argv": list(argv), "cwd": cwd, "timeout_s": timeout, "expect_rc": expect})
+        network = g.get("network", False)  # gates run sandboxed with no network unless the gate opts in
+        if not isinstance(network, bool):
+            return None, f"{who} network must be true or false"
+        entry = {"argv": list(argv), "cwd": cwd, "timeout_s": timeout, "expect_rc": expect}
+        if network:
+            entry["network"] = True
+        out.append(entry)
     return out, None
 
 

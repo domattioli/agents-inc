@@ -107,26 +107,36 @@ def strip_hooks(config: dict, paths: InstallPaths, legacy: bool = False) -> dict
     return config
 
 BASH_NUDGE_PATTERNS = ("agents-inc", "gask.sh", "mask.sh", "oask.sh", "agent.sh", "codex exec")
-SANDBOX_EXCLUDE = "agents-inc *"  # #100: a sandboxed Bash cannot start a dispatch (#94); Claude Code skips the sandbox for this match
+# #100: a sandboxed Bash cannot start a dispatch (#94); Claude Code skips its sandbox for these matches. 2026-11-11: only
+# the subcommands that must leave it: dispatch and run start delegates (provider API, their own sandbox-exec, which cannot
+# nest); install and repair write ~/.claude/settings.json and ~/.local, which the sandbox denies (#155). Every other
+# subcommand (doctor, events, ledger, models, luna, hook, unwire, report) works inside the sandbox or is run by the host.
+SANDBOX_EXCLUDES = ("agents-inc dispatch *", "agents-inc run *", "agents-inc repair *", "agents-inc install *")
+LEGACY_SANDBOX_EXCLUDE = "agents-inc *"  # pre-2026-11-11 broad entry; repair migrates it, unwire removes it
+SANDBOX_EXCLUDE = SANDBOX_EXCLUDES[0]  # the entry a dispatch needs (doctor, hints)
+OWNED_EXCLUDES = SANDBOX_EXCLUDES + (LEGACY_SANDBOX_EXCLUDE,)
 
 def add_sandbox_exclusion(config: dict) -> dict:
-    """Claude host only: list `agents-inc *` under sandbox.excludedCommands. Other entries are left as they are."""
+    """Claude host only: list SANDBOX_EXCLUDES under sandbox.excludedCommands, replacing the legacy `agents-inc *`.
+    Other entries are left as they are."""
     sandbox = config.setdefault("sandbox", {})
     if not isinstance(sandbox, dict): return config
     excluded = sandbox.setdefault("excludedCommands", [])
-    if isinstance(excluded, list) and SANDBOX_EXCLUDE not in excluded: excluded.append(SANDBOX_EXCLUDE)
+    if not isinstance(excluded, list): return config
+    excluded[:] = [e for e in excluded if e != LEGACY_SANDBOX_EXCLUDE]
+    excluded.extend(e for e in SANDBOX_EXCLUDES if e not in excluded)
     return config
 
 def strip_sandbox_exclusion(config: dict) -> dict:
-    """Remove only our entry; drop the keys we created when nothing else is left in them."""
+    """Remove only our entries (narrow and legacy); drop the keys we created when nothing else is left in them."""
     sandbox = config.get("sandbox")
     if not isinstance(sandbox, dict) or not isinstance(sandbox.get("excludedCommands"), list): return config
-    sandbox["excludedCommands"] = [e for e in sandbox["excludedCommands"] if e != SANDBOX_EXCLUDE]
+    sandbox["excludedCommands"] = [e for e in sandbox["excludedCommands"] if e not in OWNED_EXCLUDES]
     if not sandbox["excludedCommands"]: del sandbox["excludedCommands"]
     if not sandbox: del config["sandbox"]
     return config
 
-def add_hooks(config: dict, paths: InstallPaths, host: Host) -> dict:
+def add_hooks(config: dict, paths: InstallPaths, host: Host, sandbox_exclude: bool = True) -> dict:
     config = strip_hooks(config, paths, legacy=True)
     hooks = config.setdefault("hooks", {})
     hooks.setdefault("SessionStart", []).append({"hooks": [{"type": "command", "command": hook_command(paths, f"session-start --host {host.name}"), "timeout": 10}]})
@@ -141,8 +151,29 @@ def add_hooks(config: dict, paths: InstallPaths, host: Host) -> dict:
         hooks["PostToolUse"].append({"matcher": "mcp__.*__DelegateAgent", "hooks": [{"type": "command", "command": hook_command(paths, "agent-done"), "timeout": 5}]})
     if host.prompt_hook:  # timeout above the hook's own 120 s alarm
         hooks.setdefault("UserPromptSubmit", []).append({"hooks": [{"type": "command", "command": at_route_command(paths), "timeout": 130}]})
-    if host.name == "claude": add_sandbox_exclusion(config)
+    if host.name == "claude" and sandbox_exclude: add_sandbox_exclusion(config)
     return config
+
+AT_ROUTE_NOTE = ("The UserPromptSubmit hook reads each prompt on this machine. A prompt that does not start with @<alias> "
+                 "is not sent anywhere. A prompt that starts with @<alias> (for example @gemini or @luna) is sent to that "
+                 "alias's model provider; ~@ opts out.")
+
+def settings_plan(paths: InstallPaths, sandbox_exclude: bool = True) -> tuple[Path, str | None, list[str]]:
+    """(Claude settings path, new text or None when nothing changes, one line per entry agents-inc owns there)."""
+    host = next(h for h in HOSTS if h.name == "claude")
+    target = paths.home / host.hooks_file
+    current = target.read_text() if target.exists() else ""
+    config = add_hooks(_load_json(target), paths, host, sandbox_exclude)
+    lines = []
+    for event, groups in config.get("hooks", {}).items():
+        for group in groups if isinstance(groups, list) else ():
+            for h in group.get("hooks", []) if isinstance(group, dict) else ():
+                if isinstance(h, dict) and _owned(h.get("command"), paths):
+                    when = h.get("if") or group.get("matcher") or "*"
+                    lines.append(f"hooks.{event} [{when}]: {h['command']}")
+    if sandbox_exclude: lines += [f"sandbox.excludedCommands: {e}" for e in SANDBOX_EXCLUDES]
+    text = _dump_json(config)
+    return target, (None if text == current else text), lines
 
 def gemini_reads_agents_md(config: dict) -> dict:
     context = config.setdefault("context", {})
@@ -185,7 +216,10 @@ def write_file(path: Path, content: str, paths: InstallPaths, journal=None) -> s
     else: mutate()
     return backup
 
-def install_host_wiring(paths: InstallPaths, receipt: InstallReceipt, journal=None) -> InstallReceipt:
+def install_host_wiring(paths: InstallPaths, receipt: InstallReceipt, journal=None, sandbox_exclude: bool = True,
+                        claude_settings: bool = True) -> InstallReceipt:
+    """claude_settings=False (no consent): write nothing to ~/.claude/settings.json; the other hosts and the AGENTS.md
+    blocks are still written."""
     owned = [item for item in receipt.owned_paths if item.kind not in {"block", "hooks", "context"}]
     block = block_text(paths)
     for host in detected(paths.home):
@@ -194,9 +228,12 @@ def install_host_wiring(paths: InstallPaths, receipt: InstallReceipt, journal=No
         updated = upsert_block(current, block)
         if updated != current: write_file(target, updated, paths, journal)
         owned.append(OwnedPath(target, "block", None, _sha(block.encode())))
-        if host.hooks_file:
+        if host.hooks_file and host.name == "claude" and not claude_settings:
             target = paths.home / host.hooks_file
-            config = add_hooks(_load_json(target), paths, host)
+            if target.exists(): owned.append(OwnedPath(target, "hooks"))  # earlier entries stay removable
+        elif host.hooks_file:
+            target = paths.home / host.hooks_file
+            config = add_hooks(_load_json(target), paths, host, sandbox_exclude)
             if _dump_json(config) != (target.read_text() if target.exists() else ""): write_file(target, _dump_json(config), paths, journal)
             owned.append(OwnedPath(target, "hooks"))
         if host.name == "gemini":
@@ -233,8 +270,8 @@ def unwire_hooks(paths: InstallPaths, host_name: str) -> list[str]:
             if not isinstance(group, dict) or not isinstance(group.get("hooks"), list): continue
             removed += [f"{event} {group.get('matcher') or '*'}: {h['command']}" for h in group["hooks"]
                         if isinstance(h, dict) and _owned(h.get("command"), paths)]
-    if SANDBOX_EXCLUDE in ((config.get("sandbox") or {}).get("excludedCommands") or []):
-        removed.append(f"sandbox.excludedCommands: {SANDBOX_EXCLUDE}")
+    excluded = (config.get("sandbox") or {}).get("excludedCommands") or []
+    removed += [f"sandbox.excludedCommands: {e}" for e in OWNED_EXCLUDES if e in excluded]
     if not removed: return []
     write_file(target, _dump_json(strip_hooks(config, paths)), paths)
     return removed

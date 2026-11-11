@@ -291,6 +291,41 @@ class EmptyReplyReasonTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("returned an empty reply (request_user_input calls: 3)", err)
 
+    def _run_failing(self, script):
+        from agents_inc.install import runtime
+        with tempfile.TemporaryDirectory() as raw:
+            raw = Path(raw)
+            fake = raw / "codex"; fake.write_text(script); fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+            receipt = InstallReceipt(release_hash="a" * 64, python_path=Path("/usr/bin/python3"), codex_path=fake)
+            err, prompt = io.StringIO(), raw / "p"
+            prompt.write_text("edit the file")
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()), open(prompt) as stdin:
+                rc = run_codex("luna", "medium", raw, stdin, receipt, {"gpt-6-luna": ["medium"]}, tools=True)
+            return rc, err.getvalue()
+
+    def test_160_unavailable_ask_names_cause(self):
+        line = "ERROR codex_core::tools::router: error=request_user_input is unavailable in Default mode"
+        rc, err = self._run_failing(f"#!/bin/sh\ncat >/dev/null\necho '{line}' >&2\necho '{line}' >&2\nexit 1\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("returned an empty reply (request_user_input calls: 2); cause: the model asked the user", err)
+
+    def test_160_other_failure_keeps_plain_exit(self):
+        rc, err = self._run_failing("#!/bin/sh\ncat >/dev/null\necho boom >&2\nexit 3\n")
+        self.assertEqual(rc, 3)
+        self.assertNotIn("empty reply", err)
+
+    def test_160_tools_prompt_says_no_questions(self):
+        from agents_inc.install import runtime
+        with tempfile.TemporaryDirectory() as raw:
+            raw = Path(raw); seen = raw / "seen"
+            fake = raw / "codex"; fake.write_text(f"#!/bin/sh\ncat > {seen}\necho ok\n")
+            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+            receipt = InstallReceipt(release_hash="a" * 64, python_path=Path("/usr/bin/python3"), codex_path=fake)
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                run_codex("luna", "medium", raw, io.StringIO("do it"), receipt, {"gpt-6-luna": ["medium"]}, tools=True)
+            text = seen.read_text()
+        self.assertTrue(text.startswith(runtime.NO_ASK_PREAMBLE)); self.assertTrue(text.endswith("do it"))
+
     def test_red_line_says_unknown_without_thread_id(self):
         rc, err = self._run([], tid=None)
         self.assertEqual(rc, 1)

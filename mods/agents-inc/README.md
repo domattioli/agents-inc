@@ -37,8 +37,7 @@ mcp__agents-inc__run
 Start a relay with the Agent tool: `subagent_type: "agents-inc:relay"`, with the model and the slots file path in the prompt. The tool refuses these calls:
 
 - not made through a subagent (no `agentId`);
-- free models (gemini, mistral, openrouter): use `agent.sh` for those;
-- a model outside `fable opus sonnet haiku astra sol terra luna`;
+- a model outside `fable opus sonnet haiku astra sol terra luna` and the free slugs that `agents-inc dispatch` runs (spec 037: `agents_inc/install/free_launch.py` FREE_MODELS, such as `gemini-3.8-flash` or `codestral-latest`); a family name such as `gemini` is not a slug;
 - a slots path that is not inside the session directory.
 
 Rows are capped at 600 notices per call. Later rows are held back, and one notice per 60 s says how many; the full log stays in `<run dir>/events.jsonl`.

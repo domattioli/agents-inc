@@ -45,7 +45,7 @@ class AtRouteInstallTest(unittest.TestCase):
 
     def tearDown(self): self.tmp.cleanup()
 
-    def _args(self): return argparse.Namespace(source=str(self.source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False)
+    def _args(self): return argparse.Namespace(source=str(self.source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False, yes=True)
 
     def _install(self):
         with mock.patch.object(cli, "_paths", return_value=self.paths):

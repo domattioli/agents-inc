@@ -46,22 +46,38 @@ def _model_drift(models: list[dict] | None) -> list[str]:
     return out
 
 def _install_stale(paths: InstallPaths, release_hash: str) -> list[str]:
-    """D52: warn when the checkout recorded at install time would now stage to a different release hash.
-    Staging goes to a temp dir so nothing is written under ~/.local; any failure is silent."""
+    """D52: warn when the checkout recorded at install time would now stage to a different release hash."""
+    return ["INSTALL_STALE"] if _stale_checkout(paths, release_hash) else []
+
+def _stale_checkout(paths: InstallPaths, release_hash: str) -> Path | None:
+    """The recorded source checkout when it would now stage to a different release hash, else None. Staging goes to
+    a temp dir so nothing is written under ~/.local; any failure (no record, packaged install, unreadable) is None."""
     record = paths.state / "source-checkout"
     try:
-        if not record.is_file(): return []
+        if not record.is_file(): return None
         source = Path(record.read_text().strip())
         tmp = Path(tempfile.mkdtemp(prefix="agents-inc-stale-"))
         try:
             digest = stage_bundle(source, replace(paths, releases=tmp / "releases")).digest
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-    except (OSError, ValueError, RuntimeError): return []
-    return ["INSTALL_STALE"] if digest != release_hash else []
+    except (OSError, ValueError, RuntimeError): return None
+    return source if digest != release_hash else None
+
+def stale_refusal(paths: InstallPaths) -> str:
+    """Operator rule 2026-11-11: a stale install stops dispatch. One-line refusal naming the repair command, or ""
+    when there is no receipt (source-checkout run) or the install matches its checkout."""
+    try: receipt = InstallReceipt.load(paths.receipt)
+    except (OSError, ValueError): return ""
+    release_hash = getattr(receipt, "release_hash", None)
+    if not isinstance(release_hash, str): return ""  # a stub receipt (tests) has no hash to compare
+    source = _stale_checkout(paths, release_hash)
+    if source is None: return ""
+    return (f"agents-inc dispatch refused: INSTALL_STALE (installed bundle differs from {source}). "
+            f"Run: agents-inc repair --source {source}")
 
 def _sandbox_exclusion(paths: InstallPaths) -> list[str]:
-    """#100: a Claude Code session that sandboxes Bash cannot start a dispatch (#94) until `agents-inc *` sits in
+    """#100: a Claude Code session that sandboxes Bash cannot start a dispatch (#94) until `agents-inc dispatch *` (or the legacy `agents-inc *`) sits in
     `sandbox.excludedCommands` of ~/.claude/settings.json. Warn only when that settings file exists."""
     settings = paths.home / ".claude/settings.json"
     try:
@@ -70,7 +86,8 @@ def _sandbox_exclusion(paths: InstallPaths) -> list[str]:
     sandbox = data.get("sandbox") if isinstance(data, dict) else None
     excluded = sandbox.get("excludedCommands", []) if isinstance(sandbox, dict) else []
     out = []
-    if not any(isinstance(e, str) and e.split()[:1] == ["agents-inc"] for e in excluded): out.append("WB_SANDBOX_EXCLUDE_MISSING")
+    if not any(e in ("agents-inc *", "agents-inc dispatch *") for e in excluded if isinstance(e, str)):
+        out.append("WB_SANDBOX_EXCLUDE_MISSING")  # the narrow `agents-inc dispatch *` or the legacy `agents-inc *`
     network = sandbox.get("network") if isinstance(sandbox, dict) else None
     domains = network.get("allowedDomains", []) if isinstance(network, dict) else []
     if not isinstance(domains, list) or "api.anthropic.com" not in domains: out.append("WB_SANDBOX_API_DOMAIN_MISSING")
