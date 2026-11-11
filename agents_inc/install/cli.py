@@ -344,12 +344,12 @@ def main(argv=None):
     p = subs.add_parser("run"); p.add_argument("--model", required=True); p.add_argument("--effort", default="medium"); p.add_argument("--cwd", required=True); p.add_argument("--tools", action="store_true"); p.add_argument("--no-tools", action="store_true"); p.add_argument("--host-tools", action="store_true", help="tools off; the caller's host runs the tools the model names (the agents-inc:luna type)"); p.add_argument("--write", action="store_true"); p.add_argument("--network", action="store_true"); p.add_argument("--run-dir"); p.add_argument("--lead", metavar="RUN_DIR"); p.add_argument("--home-repo"); p.add_argument("--thread", metavar="FILE", help="keep one Codex thread in FILE: start it when missing or empty, resume it otherwise"); p.add_argument("--timeout", type=float, metavar="SECONDS", help="kill Codex after SECONDS and exit 124 (the agents-inc:luna step limit)")
     p = subs.add_parser("dispatch"); p.add_argument("--slots"); p.add_argument("--model"); p.add_argument("--effort"); p.add_argument("--cwd"); p.add_argument("--tier", choices=("grunt",)); p.add_argument("--run-dir"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--resume"); p.add_argument("--message"); p.add_argument("--home-repo"); p.add_argument("--serve", metavar="RUN_DIR"); p.add_argument("--poll-interval", type=float, default=1.0); p.add_argument("--idle-timeout", type=float, default=600.0); p.add_argument("--cancel", metavar="RUN_DIR"); p.add_argument("--wait", nargs=2, metavar=("RUN_DIR", "REQUEST_ID")); p.add_argument("--timeout", type=float, default=600.0)
     p = subs.add_parser("events", help="follow or redact live delegate events (spec 027)"); p.add_argument("verb", choices=("follow", "redact")); p.add_argument("run_dir", nargs="?")
-    p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model")
+    p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model"); p.add_argument("--probe", action="store_true", help="also run the tool-use probe for each free guest agent model (one free request each)")
     p = subs.add_parser("repair"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES)
     p = subs.add_parser("unwire"); p.add_argument("--host", choices=("claude",), default="claude")
     p = subs.add_parser("hook"); p.add_argument("event", choices=("session-start", "agent-nudge", "agent-done")); p.add_argument("--host", choices=("claude", "codex", "gemini"))
     p = subs.add_parser("ledger", add_help=False); p.add_argument("rest", nargs=argparse.REMAINDER)
-    p = subs.add_parser("models"); p.add_argument("verb", nargs="?", choices=("bump", "chain")); p.add_argument("alias", nargs="?"); p.add_argument("slug", nargs="?"); p.add_argument("extra", nargs="*"); p.add_argument("--unpin", action="store_true"); p.add_argument("--clear", action="store_true")
+    p = subs.add_parser("models"); p.add_argument("verb", nargs="?", choices=("bump", "chain", "probe")); p.add_argument("alias", nargs="?"); p.add_argument("slug", nargs="?"); p.add_argument("extra", nargs="*"); p.add_argument("--unpin", action="store_true"); p.add_argument("--clear", action="store_true")
     p = subs.add_parser("report", help="draft a bug report or feature request for agents-inc; --submit files it"); p.add_argument("kind", choices=("bug", "feature")); p.add_argument("--title", required=True); p.add_argument("--body", required=True, help="text, or - to read stdin"); p.add_argument("--submit", action="store_true")
     p = subs.add_parser("luna", help="the native agents-inc:luna subagent type (spec 028)"); p.add_argument("verb", choices=("status", "on", "off", "begin", "end")); p.add_argument("--json", action="store_true"); p.add_argument("--session"); p.add_argument("--agent"); p.add_argument("--cwd", default="."); p.add_argument("--outcome", choices=("done", "failed", "quota-paused", "aborted")); p.add_argument("--usage", help="JSON object of step usage sums (end)"); p.add_argument("--task", help="the Agent description (begin)"); p.add_argument("--all", action="store_true", help="status of every native type (the mod reads this once at session start)")
     p = subs.add_parser("native", help="guest agent types: native subagent types answered by a non-Claude model (spec 038)"); p.add_argument("verb", choices=("status", "on", "off", "allow", "begin", "end", "step")); p.add_argument("target", nargs="?", help="nickname or all (on|off); provider (allow)"); p.add_argument("--model"); p.add_argument("--provider"); p.add_argument("--workspace"); p.add_argument("--write-dir", action="append", help="a directory the free model may write (allow; repeatable; default .scratch)"); p.add_argument("--json", action="store_true"); p.add_argument("--session"); p.add_argument("--agent"); p.add_argument("--cwd", default="."); p.add_argument("--outcome", choices=("done", "failed", "quota-paused", "aborted")); p.add_argument("--usage"); p.add_argument("--task"); p.add_argument("--timeout", type=float, metavar="SECONDS", help="step: give up on the provider after SECONDS (exit 124)"); p.add_argument("--thread", metavar="FILE", help="step: accepted and ignored; stateless models resend the whole conversation")
@@ -390,6 +390,9 @@ def main(argv=None):
             if args.verb == "redact": sys.stdout.write(live_rows.redact(sys.stdin.read())); return 0
             if not args.run_dir: parser.error("events follow needs a run directory")
             return live_rows.follow(args.run_dir, sys.stdout)
+        if args.command == "models" and args.verb == "probe":
+            from . import native_probe  # spec 038 T026: one free request per model; target = nickname or all
+            return native_probe.run(paths, args.alias)
         if args.command == "models":
             from . import models_cmd  # works from a source checkout, before the receipt check
             return models_cmd.run(args.verb, args.alias, args.slug, unpin=args.unpin, extra=args.extra, clear=args.clear)
@@ -405,6 +408,9 @@ def main(argv=None):
             from .. import host_ledger  # lazy: hook events must not depend on the ledger import
             return host_ledger.cli(args.rest, paths.state)
         if args.command == "doctor":
+            if args.probe:
+                from . import native_probe
+                native_probe.run(paths, None)
             report = check_install(paths, args.live_model)
             if args.json:
                 print(json.dumps(report.as_dict()))
@@ -417,6 +423,8 @@ def main(argv=None):
                 print("agent gate: {} ({})".format(*host_hook.agent_gate_mode(paths)))
                 line = luna_line(paths)
                 if line: print(line)
+                from . import native  # files only: one line per free guest agent model (US2 scenario 3)
+                for nl in native.doctor_lines(paths): print(nl)
                 for w in report.warnings: print(f"WARNING: {w}")
                 if "WB_CLI_NOT_FOUND" not in (*report.codes, *report.warnings):
                     print("NOTE: Codex delegates have no network by default; a dispatch opts in with "
