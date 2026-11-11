@@ -90,5 +90,52 @@ class GeminiCall(unittest.TestCase):
             self.assertIsNone(nh.read_key(Path(d), "mistral"))
 
 
+class KeyLookupOrder(unittest.TestCase):
+    """Key store, then the wrapper's key file, then ~/Projects/.env (the gask.sh/mask.sh/oask.sh order and length rule)."""
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+
+    def write(self, rel, text):
+        p = self.home / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
+
+    def test_each_source_alone(self):
+        for provider, var in (("gemini", "GEMINI_API_KEY"), ("mistral", "MISTRAL_API_KEY"), ("openrouter", "OPENROUTER_API_KEY")):
+            with self.subTest(provider=provider):
+                fake = f"FAKE-{provider}-file-0000000000000000"
+                self.write(nh.KEY_FILES[provider], fake + "\n")
+                self.assertEqual(nh.read_key(self.home, provider), fake)
+                (self.home / nh.KEY_FILES[provider]).unlink()
+                self.assertIsNone(nh.read_key(self.home, provider))
+                self.write(nh.PROJECTS_ENV, f'{var}="FAKE-{provider}-projects-000000000000"\n')
+                self.assertEqual(nh.read_key(self.home, provider), f"FAKE-{provider}-projects-000000000000")
+                (self.home / nh.PROJECTS_ENV).unlink()
+
+    def test_order_store_then_file_then_projects(self):
+        self.write(nh.PROJECTS_ENV, "MISTRAL_API_KEY=FAKE-projects-00000000000000000\n")
+        self.assertEqual(nh.read_key(self.home, "mistral"), "FAKE-projects-00000000000000000")
+        self.write(nh.KEY_FILES["mistral"], "FAKE-file-0000000000000000000000")
+        self.assertEqual(nh.read_key(self.home, "mistral"), "FAKE-file-0000000000000000000000")
+        self.write(".config/workerbees/.env", "MISTRAL_API_KEY=FAKE-store-1\n")
+        self.assertEqual(nh.read_key(self.home, "mistral"), "FAKE-store-1")
+
+    def test_short_values_are_placeholders(self):
+        self.write(nh.KEY_FILES["gemini"], "short")
+        self.write(nh.PROJECTS_ENV, "GEMINI_API_KEY=also-short\nOPEN_ROUTER_API_KEY=FAKE-legacy-name-000000000000\n")
+        self.assertIsNone(nh.read_key(self.home, "gemini"))
+        self.assertEqual(nh.read_key(self.home, "openrouter"), "FAKE-legacy-name-000000000000")
+
+    def test_missing_text_names_every_place_and_no_value(self):
+        from agents_inc.install import native
+        from agents_inc.install.paths import InstallPaths
+        self.write(nh.KEY_FILES["gemini"], "short-placeholder")
+        s = native.status_one(InstallPaths.for_home(self.home), "gemini-flash")
+        for place in ("~/.config/workerbees/.env", "~/.codex-bridge/gemini-key", "~/Projects/.env"):
+            self.assertIn(place, s["reason"])
+        self.assertNotIn("short-placeholder", s["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

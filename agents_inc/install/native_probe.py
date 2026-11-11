@@ -42,7 +42,7 @@ def probe_one(paths: InstallPaths, nick: str, env: dict | None = None, now: floa
     rec = {"result": "fail", "at_epoch": now if now is not None else time.time(), "slug": entry["slug"], "reason": ""}
     key = native_http.read_key(paths.home, entry["provider"])
     if key is None:
-        rec["reason"] = f"no {entry['provider']} key (WB_NATIVE_KEY_MISSING)"
+        rec["reason"] = f"no {entry['provider']} key (WB_NATIVE_KEY_MISSING; checked {', '.join(native_http.key_places(entry['provider']))})"
     else:
         try:
             text, _ = native_http.ask(entry["provider"], entry["slug"], PROBE_PROMPT, key,

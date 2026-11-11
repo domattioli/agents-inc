@@ -1,6 +1,7 @@
 """Spec 038 T022: one provider call for a stateless guest agent (Gemini first), standard library only.
 
-The key is read in-process from the 0600 key store (`~/.config/workerbees/.env`, D75 operator storage rule) and sent
+The key is read in-process (the 0600 key store `~/.config/workerbees/.env`, then the legacy wrapper's key file, then
+`~/Projects/.env`, the operator's canonical store per the D2 amendment) and sent
 only as a request header. It never goes in argv, a child env, a prompt, stdout, stderr or a file: nothing here spawns a
 child, and every text this module prints passes `scrub` first.
 
@@ -16,7 +17,9 @@ import urllib.request
 from pathlib import Path
 
 EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_NOT_OFFERED, EXIT_BLOCKED, EXIT_QUOTA, EXIT_TIMEOUT = 0, 1, 2, 3, 69, 75, 124
-KEY_VARS = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+# Key names as the legacy wrappers read them (gask.sh, mask.sh, oask.sh), first one wins.
+KEY_VARS = {"gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"), "mistral": ("MISTRAL_API_KEY",),
+            "openrouter": ("OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY")}
 HOSTS = {"gemini": "https://generativelanguage.googleapis.com"}
 # Tests point a provider at the fake server. Only a loopback URL is honoured, so the variable cannot send a key elsewhere.
 URL_ENV = {"gemini": "AGENTS_INC_NATIVE_GEMINI_URL"}
@@ -43,10 +46,26 @@ def key_store(home: Path) -> Path:
     return Path(home) / ".config" / "workerbees" / ".env"
 
 
-def read_key(home: Path, provider: str) -> str | None:
-    """The provider key from the key store, or None. The value is returned to the caller only, never printed."""
+# The per-provider key file the legacy wrapper reads first (gask.sh, mask.sh, oask.sh KEY_FILE), relative to HOME.
+KEY_FILES = {"gemini": ".codex-bridge/gemini-key", "mistral": ".config/devstral/api_key",
+             "openrouter": ".codex-bridge/openrouter-key"}
+# The operator's canonical store (D2 amendment); the wrappers read it last.
+PROJECTS_ENV = "Projects/.env"
+# The wrappers' rule: a key file or ~/Projects/.env value shorter than this is a placeholder.
+MIN_KEY_LEN = 20
+
+
+def key_places(provider: str) -> list[str]:
+    """The places read_key checks, in order, as ~ paths (names only, never a value)."""
+    places = [str(key_store(Path("~")))]
+    if provider in KEY_FILES: places.append(f"~/{KEY_FILES[provider]}")
+    places.append(f"~/{PROJECTS_ENV}")
+    return places
+
+
+def _env_key(path: Path, provider: str, min_len: int = 1) -> str | None:
     try:
-        lines = key_store(home).read_text(encoding="utf-8").splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
         return None
     found = {}
@@ -54,10 +73,24 @@ def read_key(home: Path, provider: str) -> str | None:
         name, sep, value = line.strip().partition("=")
         if sep and name.strip() in KEY_VARS.get(provider, ()):
             value = value.strip().strip('"').strip("'")
-            if value: found.setdefault(name.strip(), value)
+            if len(value) >= min_len: found.setdefault(name.strip(), value)
     for var in KEY_VARS.get(provider, ()):
         if var in found: return found[var]
     return None
+
+
+def read_key(home: Path, provider: str) -> str | None:
+    """The provider key, or None. Checked in order: the key store, the wrapper's key file, ~/Projects/.env. The value
+    is returned to the caller only, never printed."""
+    key = _env_key(key_store(home), provider)
+    if key: return key
+    if provider in KEY_FILES:
+        try:
+            value = (Path(home) / KEY_FILES[provider]).read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            value = ""
+        if len(value) >= MIN_KEY_LEN: return value
+    return _env_key(Path(home) / PROJECTS_ENV, provider, MIN_KEY_LEN)
 
 
 def scrub(text: str, key: str | None) -> str:

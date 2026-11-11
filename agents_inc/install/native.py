@@ -163,7 +163,7 @@ def status_one(paths: InstallPaths, nick: str, cwd: str = ".") -> dict:
     # A failed probe means chat only: offered with no tools. none, stale and the rest stay not offered.
     chat_only = probe == "fail"
     if switch == "off": reason = f"switched off (agents-inc native on {nick})"
-    elif not has_key: reason = f"no {entry['provider']} key in the key store (WB_NATIVE_KEY_MISSING)"
+    elif not has_key: reason = f"no {entry['provider']} key (WB_NATIVE_KEY_MISSING; checked {', '.join(native_http.key_places(entry['provider']))})"
     elif probe == "fail": reason = f"chat only, no tools ({probe_reason})"
     elif probe != "pass": reason = probe_reason
     else: reason = "ready" if authorized else "ready; first start in this workspace asks for authorization"
@@ -227,7 +227,7 @@ def step(paths: InstallPaths, nick: str, cwd: str, prompt: str, timeout: float |
         if len(prompt) > entry["max_input_chars"]:
             raise native_http.StepError(native_http.EXIT_USAGE, f"WB_NATIVE_CONTEXT_OVER: context over {entry['max_input_chars']} chars (prompt {len(prompt)} chars); not sent")
         if key is None:
-            raise native_http.StepError(native_http.EXIT_NOT_OFFERED, f"WB_NATIVE_KEY_MISSING: no {provider} key in {native_http.key_store(Path('~'))}")
+            raise native_http.StepError(native_http.EXIT_NOT_OFFERED, f"WB_NATIVE_KEY_MISSING: no {provider} key (checked {', '.join(native_http.key_places(provider))})")
         native_http.progress(err, "record", {"model": nick, "slug": entry["slug"], "provider": provider})
         native_http.progress(err, "event", {"kind": "status", "text": f"{nick}: request sent to {entry['slug']}"})
         text, usage = native_http.ask(provider, entry["slug"], prompt, key, max_chars=entry["max_input_chars"],
