@@ -208,6 +208,31 @@ class PaneModsTest(unittest.TestCase):
         self.assertIn(["plugin", "update", "delegate-pane@delegate-pane-local"], calls)
         self.assertFalse(any(c[:2] == ["plugin", "install"] for c in calls))
 
+    def test_repair_repoints_a_marketplace_pinned_to_an_old_release(self):
+        """MOD_VERSION_MISMATCH after repair: the marketplace is a directory source pinned to the old release dir, so
+        `marketplace update` re-read the old plugin.json. A path that differs from the current release is re-added."""
+        paths = self._paths(["delegate-pane"])
+        plugins = paths.home / ".claude/plugins"
+        plugins.mkdir(parents=True)
+        (plugins / "known_marketplaces.json").write_text(json.dumps(
+            {"delegate-pane-local": {"source": {"source": "directory", "path": "/old/release/mods/delegate-pane"}}}))
+        calls, notices = self._run(paths, listed="delegate-pane@delegate-pane-local")
+        target = str((paths.current / "mods/delegate-pane").resolve())
+        self.assertEqual([c for c in calls if c[:2] != ["plugin", "list"]],
+                         [["plugin", "marketplace", "remove", "delegate-pane-local"], ["plugin", "marketplace", "add", target],
+                          ["plugin", "install", "delegate-pane@delegate-pane-local"]])
+        self.assertEqual(notices, [])
+
+    def test_repair_on_the_current_release_only_refreshes(self):
+        paths = self._paths(["delegate-pane"])
+        plugins = paths.home / ".claude/plugins"
+        plugins.mkdir(parents=True)
+        target = str((paths.current / "mods/delegate-pane").resolve())
+        (plugins / "known_marketplaces.json").write_text(json.dumps({"delegate-pane-local": {"source": {"path": target}}}))
+        calls, _ = self._run(paths, listed="delegate-pane@delegate-pane-local")
+        self.assertNotIn(["plugin", "marketplace", "remove", "delegate-pane-local"], calls)
+        self.assertIn(["plugin", "update", "delegate-pane@delegate-pane-local"], calls)
+
     def test_uninstall_covers_pane_mods(self):
         from agents_inc.install import cli
         flat = [" ".join(a) for a in cli.MOD_UNINSTALL_ARGVS]

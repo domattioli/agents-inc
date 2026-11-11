@@ -103,24 +103,44 @@ def _claude(home: Path, *argv, timeout=60):
     try: return subprocess.run([claude, *argv], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except (OSError, subprocess.SubprocessError): return None
 
+def _marketplace_path(home: Path, market: str) -> str | None:
+    """The directory Claude Code registered for marketplace `market`, from its own known_marketplaces.json; None when unknown."""
+    try: entry = json.loads((home / ".claude/plugins/known_marketplaces.json").read_text()).get(market)
+    except (OSError, ValueError, AttributeError): return None
+    source = entry.get("source") if isinstance(entry, dict) else None
+    path = source.get("path") if isinstance(source, dict) else None
+    return path if isinstance(path, str) else None
+
+def _mod_argvs(home: Path, mod: Path, plugin: str, market: str, installed: bool) -> tuple:
+    """The Claude CLI calls that bring one mod to the release at `mod`. The marketplace is a directory source pinned to
+    one release dir (`mod` resolved), so a repair into a new release must re-point it: `marketplace update` only re-reads
+    the old dir, and the installed mod kept its old version (MOD_VERSION_MISMATCH right after repair)."""
+    target = str(mod.resolve())
+    if not installed: return (("plugin", "marketplace", "add", target), ("plugin", "install", plugin))
+    registered = _marketplace_path(home, market)
+    if registered is not None and registered != target:
+        return (("plugin", "marketplace", "remove", market), ("plugin", "marketplace", "add", target), ("plugin", "install", plugin))
+    # Spec 031 FR-014: refresh an installed plugin so a new manifest (mcpServers) reaches it.
+    return (("plugin", "marketplace", "update", market), ("plugin", "update", plugin))
+
+def _apply_mod(paths: InstallPaths, mod: Path, plugin: str, market: str, listed, failed: str) -> None | str:
+    """Run _mod_argvs; returns a warning line on the first failed call, else None. Never raises."""
+    for argv in _mod_argvs(paths.home, mod, plugin, market, plugin in (listed.stdout or "")):
+        done = _claude(paths.home, *argv, timeout=300)
+        if done is None or done.returncode != 0:
+            return failed.format(argv=" ".join(argv), rc="unavailable" if done is None else done.returncode)
+    return None
+
 def install_mod(paths: InstallPaths, notices: list) -> None:
     """Register the bundled mod with Claude Code (spec 027 FR-028). Never fails the install: a problem is a warning."""
     mod = paths.current / "mods/agents-inc"
     if not (mod / ".claude-plugin/plugin.json").is_file(): return
     listed = _claude(paths.home, "plugin", "list")
     if listed is None: return
-    if MOD_PLUGIN in (listed.stdout or ""):
-        # Spec 031 FR-014: refresh an installed plugin so a new manifest (mcpServers) reaches it. Warning only on failure.
-        for argv in (("plugin", "marketplace", "update", MOD_MARKETPLACE), ("plugin", "update", MOD_PLUGIN)):
-            done = _claude(paths.home, *argv, timeout=300)
-            if done is None or done.returncode != 0:
-                notices.append(f"warning: `claude {' '.join(argv)}` failed; the mod may be out of date")
-                return
-        return
-    added = _claude(paths.home, "plugin", "marketplace", "add", str(mod.resolve()))
-    done = _claude(paths.home, "plugin", "install", MOD_PLUGIN) if added is not None and added.returncode == 0 else added
-    if done is None or done.returncode != 0:
-        notices.append(f"warning: mod install failed ({'unavailable' if done is None else done.returncode}); the live view is off, delegation still works")
+    failed = ("warning: `claude {argv}` failed ({rc}); the mod may be out of date" if MOD_PLUGIN in (listed.stdout or "")
+              else "warning: mod install failed ({rc}); the live view is off, delegation still works")
+    warn = _apply_mod(paths, mod, MOD_PLUGIN, MOD_MARKETPLACE, listed, failed)
+    if warn: notices.append(warn)
 
 def install_pane_mods(paths: InstallPaths, notices: list) -> None:
     """Register the bundled pane mods. Same contract as install_mod: a problem is a warning, never a failed install."""
@@ -131,16 +151,9 @@ def install_pane_mods(paths: InstallPaths, notices: list) -> None:
         if listed is None:
             listed = _claude(paths.home, "plugin", "list")
             if listed is None: return
-        if plugin in (listed.stdout or ""):
-            for argv in (("plugin", "marketplace", "update", market), ("plugin", "update", plugin)):
-                done = _claude(paths.home, *argv, timeout=300)
-                if done is None or done.returncode != 0:
-                    notices.append(f"warning: `claude {' '.join(argv)}` failed; the {name} pane may be out of date"); break
-            continue
-        added = _claude(paths.home, "plugin", "marketplace", "add", str(mod.resolve()))
-        done = _claude(paths.home, "plugin", "install", plugin) if added is not None and added.returncode == 0 else added
-        if done is None or done.returncode != 0:
-            notices.append(f"warning: {name} pane install failed ({'unavailable' if done is None else done.returncode}); delegation still works")
+        warn = _apply_mod(paths, mod, plugin, market, listed,
+                          f"warning: `claude {{argv}}` failed ({{rc}}); the {name} pane may be out of date, delegation still works")
+        if warn: notices.append(warn)
 
 MOD_UNINSTALL_ARGVS = (("plugin", "uninstall", MOD_PLUGIN), ("plugin", "marketplace", "remove", MOD_MARKETPLACE),
                        *[a for _, p, m in PANE_MODS for a in (("plugin", "uninstall", p), ("plugin", "marketplace", "remove", m))])
