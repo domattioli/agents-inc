@@ -2,7 +2,7 @@
 // The hooks are captured from registerLoop through a stand-in `on` and driven with a stand-in `$`.
 import { expect, test } from 'claude-code/testing'
 import type { Adapter } from './adapter'
-import { outsideWrites, ranTool, registerAgent, registerLoop, registerLoops, skipsTools } from './loop'
+import { outsideWrites, ranTool, registerAgent, registerLoop, registerLoops, skipsTools, stopsEarly, ungroundedValues } from './loop'
 
 type Run = { out?: string; code?: number; hang?: boolean }
 type Chunk = { kind: string; [k: string]: unknown }
@@ -351,4 +351,61 @@ test('a model with tools true or no tools field keeps the normal prompt and desc
   await h.spawn('c3')
   await h.step('c3')
   expect(h.runs[0].input).toContain('- Bash:')
+})
+
+const FIVE = 'Run five wc -l commands, each its own Bash call. Report A=<n> B=<n> C=<n> D=<n> E=<n>.'
+const ran = (...counts: [string, string][]) => counts.flatMap(([cmd, out], i) => [
+  { role: 'assistant', content: [{ type: 'tool_use', id: `t${i}`, name: 'Bash', input: { command: cmd } }] },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${i}`, content: out }] },
+])
+const FOUR = ran(['wc -l a.txt', '173 a.txt'], ['wc -l b.txt', '95 b.txt'], ['wc -l c.txt', '41 c.txt'], ['wc -l d.txt', '7 d.txt'])
+const TWO = FOUR.slice(0, 4)
+const hb = (m: string) => ({ say: '', tools: [{ name: 'SubagentHandback', input: { message: m } }] })
+const asMsgs = (m: unknown[]) => m as never
+
+test('ungroundedValues: a grounded report is clean; run 7 and run 10 reports name their invented values', () => {
+  const task = [{ role: 'user', content: [{ type: 'text', text: FIVE }] }]
+  expect(ungroundedValues(hb('A=173 B=95 C=41 D=7'), asMsgs(FOUR), FIVE)).toEqual([])
+  expect(ungroundedValues(hb('A=173 B=95 C=41 D=7 E=2'), asMsgs(FOUR), FIVE)).toEqual(['E=2'])
+  expect(ungroundedValues(hb('A=173 B=95 C=208 D=64 E=127'), asMsgs(TWO), FIVE)).toEqual(['C=208', 'D=64', 'E=127'])
+  expect(ungroundedValues(hb('A: 999'), asMsgs(TWO), FIVE)).toEqual(['A=999'])
+  expect(ungroundedValues(hb('A=173 B=95 C=208'), asMsgs(task), FIVE)).toEqual([]) // no tool result yet: skipsTools' business
+  expect(ungroundedValues(hb('A=173 B=95 E=12'), asMsgs(TWO), `${FIVE} The expected E=12.`)).toEqual([]) // number in the task text
+  expect(ungroundedValues({ say: 'x=5', tools: [{ name: 'Bash', input: {} }] }, asMsgs(TWO), FIVE)).toEqual([]) // not a hand-back
+})
+
+test('an ungrounded hand-back is pushed once, naming the pairs; a second ungrounded reply stands', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const bad = JSON.stringify({ say: '', tools: [{ name: 'SubagentHandback', input: { message: 'A=173 B=95 C=208' } }] })
+  const h = harness(a, { replies: [{ out: bad }, { out: bad }], task: FIVE, messages: TWO })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('g1')
+  const { result } = await h.step('g1')
+  expect(h.runs.length).toBe(2)
+  expect(h.runs[1].input).toContain('Your report gives C=208, but no tool result in this conversation contains that value')
+  expect(message(result)).toBe('A=173 B=95 C=208')
+  const good = harness(a, { replies: [{ out: bad }, { out: BASH }], task: FIVE, messages: TWO })
+  await registerAgent(good.$ as never, a, { cwd: '/w' })
+  await good.spawn('g2')
+  expect(nameOf((await good.step('g2')).result)).toBe('Bash')
+})
+
+test('a grounded hand-back runs once with no push', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const ok = JSON.stringify({ say: '', tools: [{ name: 'SubagentHandback', input: { message: 'A=173 B=95' } }] })
+  const h = harness(a, { replies: [{ out: ok }], task: FIVE, messages: TWO })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('g3')
+  await h.step('g3')
+  expect(h.runs.length).toBe(1)
+})
+
+test('stopsEarly catches run 9 and similar wording, not a finished report', () => {
+  const say = (t: string) => ({ say: t, tools: [] })
+  expect(stopsEarly(say('Ran each requested command in its own Bash call. Visible results: a.txt 173; b.txt 95; c.txt 41. Results for d.txt and e.txt have not been provided, so their counts are unavailable.'))).toBe(true)
+  expect(stopsEarly(say('A=173. The counts are unavailable for the rest.'))).toBe(true)
+  expect(stopsEarly(say('A=173 so far; the remaining results are not in.'))).toBe(true)
+  expect(stopsEarly(say('d.txt has not yet run through wc.'))).toBe(true)
+  expect(stopsEarly(say('Done. No errors were provided by the tool. A=173 B=95 C=41 D=7 E=12.'))).toBe(false)
+  expect(stopsEarly(say('A=173 B=95 C=41 D=7 E=12'))).toBe(false)
 })

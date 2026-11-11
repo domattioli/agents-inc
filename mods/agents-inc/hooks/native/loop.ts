@@ -77,9 +77,10 @@ export function taskText(messages: readonly Msg[]): string {
   return messages.filter(m => m.role === 'user').flatMap(m => m.content ?? []).filter(b => b.type === 'text')
     .map(b => String(b.text ?? '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')).join('\n')
 }
+// steps5 run 9 (2026-11-11): "Results for d.txt and e.txt have not been provided, so their counts are unavailable."
 // luna ran one of five commands and answered "A=173. I haven't run the other four commands yet." (steps5, spec 028 Docker run).
 // luna also said "the other four remain unrun" and "their results have not arrived".
-const UNFINISHED = /\b(haven['’]?t|have not|not yet|yet to)\b[^.]*\b(run|read|done|finish|complete|execute)|\bremaining (\w+ )?(commands?|steps?)\b|\bremain(s)? (unrun|to run|undone)\b|\bunrun\b|\b(have|has) not arrived\b|\b(haven|hasn)['’]?t arrived\b/i
+const UNFINISHED = /\b(haven['’]?t|have not|not yet|yet to)\b[^.]*\b(run|read|done|finish|complete|execute)|\bremaining (\w+ )?(commands?|steps?)\b|\bremain(s)? (unrun|to run|undone)\b|\bunrun\b|\b(have|has) not arrived\b|\b(haven|hasn)['’]?t arrived\b|\b(have|has|had) not been (provided|returned|received|run)\b|\b(results?|counts?|values?|outputs?) (are|is|were) (still )?(unavailable|missing|pending)\b|\bnot yet (available|provided)\b|\bremaining (\w+ )?results?\b/i
 export const stopsEarly = (reply: Reply | string | null): boolean =>
   reply !== null && typeof reply !== 'string' && reply.tools.length === 0 && UNFINISHED.test(reply.say)
 const CORRECTION = (why: string) => `Your previous reply was rejected: ${why}. Reply with exactly one JSON object, only tools from the Tools list.\n`
@@ -114,6 +115,28 @@ const FINAL_RULES =
 
 const AGENT_PROMPT = 'You are a general-purpose agent. Complete the task you are given, then hand your report back.'
 
+// Ungrounded values (steps5 runs 7 and 10, 2026-11-11): luna handed back "A=173 B=95 C=41 D=7 E=2" after four Bash steps, and
+// "C=208 D=64 E=127" after two, numbers no tool produced. In a hand-back, a KEY=<number> or KEY: <number> whose number is in
+// no tool result and not in the task text is ungrounded. Only checked once the conversation holds a tool result.
+const KEYED_NUMBER = /\b([A-Za-z][A-Za-z0-9_]*)\s*[=:]\s*(-?\d+(?:\.\d+)?)(?![\d.]*\d)/g
+export function ungroundedValues(reply: Reply | string | null, messages: readonly Msg[], task: string): string[] {
+  if (reply === null || typeof reply === 'string' || !reply.tools.every(t => t.name === HANDBACK)) return []
+  const text = handbackText(reply)
+  if (text.trim() === '') return []
+  const results = messages.flatMap(m => m.content ?? []).filter(b => b.type === 'tool_result')
+  if (results.length === 0) return []
+  const known = `${results.map(b => resultText(b.content)).join('\n')}\n${task}`
+  const bad: string[] = []
+  for (const m of text.matchAll(KEYED_NUMBER)) {
+    const n = m[2].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (!new RegExp(`(?<![\\d.])${n}(?![\\d])`).test(known) && !bad.includes(`${m[1]}=${m[2]}`)) bad.push(`${m[1]}=${m[2]}`)
+  }
+  return bad
+}
+const ungroundedPush = (pairs: readonly string[]) =>
+  `Your report gives ${pairs.join(', ')}, but no tool result in this conversation contains ${pairs.length > 1 ? 'those values' : 'that value'}. ` +
+  'A reported value must come from a tool result in this conversation, never from a guess. Run the missing tool calls now: name them in "tools". ' +
+  'Reply with exactly one JSON object.\n'
 type Block = { type: string; [field: string]: unknown }
 type Msg = { role: 'user' | 'assistant'; content: Block[] }
 type Tool = { name: string; description: string; mcp?: boolean }
@@ -751,6 +774,12 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     } else if (!run.failed && !S.chatOnly && stopsEarly(run.reply)) {
       // One push to go on; a second early stop stands as luna's answer.
       prompt = more(adapter.pushes.unfinished)
+      chars += prompt.length
+      const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
+      if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
+    } else if (!run.failed && !S.chatOnly && ungroundedValues(run.reply, messages, taskText(messages)).length > 0) {
+      // One push naming the pairs (built here, since it needs the list); a second ungrounded report stands as the answer.
+      prompt = more(ungroundedPush(ungroundedValues(run.reply, messages, taskText(messages))))
       chars += prompt.length
       const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
