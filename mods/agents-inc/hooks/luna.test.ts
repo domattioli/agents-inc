@@ -223,6 +223,10 @@ test('the second step sends only the new messages on the same thread', async ($,
   const delta = two.stdin ?? ''
   expect(delta).toContain('New messages since your last reply.')
   expect(delta).toContain('tool result: 12 lines')
+  // Asks started on later steps (macOS stress, 2026-11-11): the no-ask rule rides the delta prompt too.
+  expect(delta).toContain('never ask one and never ask for confirmation')
+  expect(one.stdin).toContain('never ask one and never ask for confirmation')
+  expect(one.stdin).toContain('Session-start steps in the instructions')
   expect(delta).not.toContain('System prompt:')
   expect(delta).not.toContain('- Read: Reads a file.')
   expect(delta).not.toContain(`user: ${TASK}`)
@@ -751,6 +755,18 @@ test('exit 77 (runaway Codex tool loop) retries fresh and then names the cap', a
   const msg = String((result.toolUses[0]?.input as { message?: string }).message)
   expect(msg).toContain('luna failed: Codex looped on its own tools and was stopped to cap token use (stopped Codex after 4 request_user_input calls (cap 4))')
   expect(msg).toContain('after one retry on a fresh thread')
+  // The retry says the first attempt asked and was stopped; the first prompt does not.
+  expect(calls[1].stdin).toContain('Your previous attempt at this step asked a question and was stopped')
+  expect(calls[0].stdin).not.toContain('Your previous attempt')
+})
+
+test('a retry after any other failure carries no ask note', async ($, on) => {
+  const calls: Call[] = []
+  const boom = { out: '', code: 1, err: ['agents-inc run: boom'] }
+  await setup($, on, { agentId: 'rw2', replies: [boom, boom], calls })
+  await step($, 'rw2')
+  expect(calls.length).toBe(2)
+  expect(calls[1].stdin).not.toContain('Your previous attempt')
 })
 
 test('a hand-back that refuses before any tool ran (the sandbox note) gets the push', async ($, on) => {

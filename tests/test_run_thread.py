@@ -214,11 +214,13 @@ class BurnWatchTest(unittest.TestCase):
         return json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
             "total_token_usage": {"input_tokens": 999999}, "last_token_usage": {"input_tokens": n}}}}) + "\n"
 
+    ASK = json.dumps({"questions": [{"id": "go", "header": "Proceed", "question": "Proceed?", "options": []}]})
+
     def test_feed_counts_asks_and_tokens_and_trips_at_a_cap(self):
         w = runtime.BurnWatch("tid-7", 0, ask_cap=4, token_cap=100_000)
-        w.feed((self.rui("{}") + self.tokens(20_000)) .encode() * 3)
+        w.feed((self.rui(self.ASK) + self.tokens(20_000)) .encode() * 3)
         self.assertEqual((w.asks, w.tokens, w.tripped), (3, 60_000, None))
-        w.feed(self.rui("{}").encode())
+        w.feed(self.rui(self.ASK).encode())
         self.assertEqual(w.tripped, "4 request_user_input calls (cap 4)")
         t = runtime.BurnWatch("tid-7", 0, ask_cap=99, token_cap=50_000)
         half = self.tokens(60_000)
@@ -227,15 +229,25 @@ class BurnWatchTest(unittest.TestCase):
         t.feed(half[10:].encode())
         self.assertEqual(t.tripped, "60000 input tokens (cap 50000)")
 
+    def test_empty_calls_and_tool_requests_are_not_asks(self):
+        # 2026-11-11 rollouts: luna also sent {}, {"questions": []} and host tool requests; none asks the user, so only
+        # the token cap bounds them.
+        w = runtime.BurnWatch("tid-7", 0, ask_cap=4, token_cap=10**9)
+        tool_req = json.dumps({"say": "", "tools": [{"name": "Bash", "input": {"command": "wc -l a.txt"}}]})
+        w.feed((self.rui("{}") + self.rui(json.dumps({"questions": []})) + self.rui(tool_req)).encode() * 3)
+        self.assertEqual((w.asks, w.tripped), (0, None))
+        w.feed(self.rui("not json").encode())  # unparsable arguments count, to stay safe
+        self.assertEqual(w.asks, 1)
+
     def test_offset_skips_earlier_runs_and_thread_started_names_the_thread(self):
-        old = self.rui("{}") * 5
+        old = self.rui(self.ASK) * 5
         self.rollout.write_text(old)
         w = runtime.BurnWatch(None, len(old.encode()), ask_cap=4, token_cap=10**9)
         w.on_line(json.dumps({"type": "thread.started", "thread_id": "tid-7"}))
         self.assertEqual(w.tid, "tid-7")
         with mock.patch.object(runtime, "real_codex_home", return_value=self.home / ".codex"):
             self.assertFalse(w.check())
-            with self.rollout.open("a") as f: f.write(self.rui("{}"))
+            with self.rollout.open("a") as f: f.write(self.rui(self.ASK))
             self.assertFalse(w.check())
         self.assertEqual(w.asks, 1)
 
@@ -250,7 +262,7 @@ class BurnWatchTest(unittest.TestCase):
             proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
             on_start(proc.pid)
             with self.rollout.open("a") as f:
-                f.write(self.rui(json.dumps({"questions": []})) * 5)
+                f.write(self.rui(self.ASK) * 5)
             t0 = time.monotonic()
             proc.wait(timeout=10)
             seen["elapsed"], seen["rc"] = time.monotonic() - t0, proc.returncode

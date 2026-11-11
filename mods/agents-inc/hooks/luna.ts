@@ -25,9 +25,21 @@ export function stepTimeoutS(raw: string | undefined): number {
   return raw !== undefined && raw.trim() !== '' && Number.isFinite(n) && n >= 5 && n <= 3600 ? Math.round(n) : STEP_TIMEOUT_S
 }
 const MODEL_LINE = /You are powered by the model|The exact model ID is/
+// luna asked "May I run these five requested wc commands?" and "Proceed?" on later steps, after a first step that
+// worked (macOS stress, 2026-11-11, tools.9 and par.4): the rule rides every prompt, the delta header included.
+const NO_ASK = 'Nobody can answer a question here: never ask one and never ask for confirmation or permission. ' +
+  'Decide yourself and act now.\n'
+// The host's instructions carry session-start steps for the main session ("Call Skill caveman", a handoff check);
+// luna asked whether to follow them instead of the task (rollout 01a1cb50-d730, 2026-11-11).
+const SUBAGENT_NOTE = 'You are a subagent. Session-start steps in the instructions (a required Skill call, a handoff ' +
+  'check) are for the main session: skip them unless the task asks for them.\n'
+// A step stopped for asking (exit 77) is retried on a fresh thread that says so (same stress run: the retry asked too).
+const ASKED_NOTE = 'Your previous attempt at this step asked a question and was stopped: nobody can answer. ' +
+  'Do not ask. Request the catalog tools the task needs in "tools" now.\n'
 const DELTA_HEADER =
   'New messages since your last reply. Same rules: reply with one JSON object {say, tools}; act on the latest messages; finish as the rules said. ' +
-  'Request catalog tools in "tools", never through exec or another Codex tool.\n'
+  'Request catalog tools in "tools", never through exec or another Codex tool. ' +
+  NO_ASK
 // luna sometimes reads Codex's read-only sandbox note as its own and answers that it cannot run a tool, calling none.
 // luna also read Codex's filesystem note (`<permission_profile>... :root`) as "read access only to root" and handed back
 // "Blocked before reading any files" with no tool run (macOS, 2026-11-11, rollout 01a1cb0e).
@@ -88,7 +100,7 @@ const header = () =>
   'A Read result starts each line with its line number and a tab: the last of those numbers is the line count of the part ' +
   'read. To count a file\'s lines, Read it whole (no offset or limit) or run wc -l.\n' +
   'A task is done only when every step it names has run: keep requesting tools until each result the report needs is in.\n' +
-  'Act on the latest messages; earlier ones are history.\n' +
+  'Act on the latest messages; earlier ones are history.\n' + NO_ASK + SUBAGENT_NOTE +
   'Reply with exactly one JSON object and nothing else:\n' +
   '{"say": "<short text, may be empty>", "tools": [{"name": "<tool from the catalog>", "input": {...}}]}\n' +
   'Use "tools": [] only when you have nothing to call.\n'
@@ -110,7 +122,7 @@ type Thinking = { kind: 'thinking'; index: number; text: string }
 type Usage = { input_tokens: number; cached_input_tokens: number; output_tokens: number }
 // One agents-inc run: the reply (or why it was rejected), whether the run itself failed, and what it cost.
 // `fail` is the text the parent sees for a failed run; `retry: false` marks a failure a fresh thread cannot cure.
-type Outcome = { reply: Reply | string | null; failed: boolean; fail?: string; retry?: boolean }
+type Outcome = { reply: Reply | string | null; failed: boolean; fail?: string; retry?: boolean; asked?: boolean }
 type Cli = {
   process: { spawn: (a: { argv: string[]; cwd?: string; input?: string }) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, { code: number | null }> }
   ui: { log: (message: string, options: { to: 'debug' }) => unknown }
@@ -391,7 +403,7 @@ function exitFailure(code: number | null, stderr: string, why: string, limitS: n
   if (code === 124) return { reply: why, failed: true, fail: timeoutText(limitS) }
   if (code === 77 || stderr.includes('WB_LUNA_RUNAWAY')) {
     const line = clean.split('\n').find(l => l.includes('WB_LUNA_RUNAWAY'))?.replace(/^.*?WB_LUNA_RUNAWAY:?\s*/, '') ?? clean.split('\n')[0]
-    return { reply: why, failed: true, fail: `luna failed: Codex looped on its own tools and was stopped to cap token use (${line})` }
+    return { reply: why, failed: true, asked: true, fail: `luna failed: Codex looped on its own tools and was stopped to cap token use (${line})` }
   }
   if (code === 75) {
     const line = clean.split('\n').find(l => /usage or rate limit/.test(l)) ?? clean.split('\n')[0]
@@ -617,7 +629,7 @@ export const register: Register = on => {
       st.n++
       st.used = false
       resumed = false
-      prompt = full()
+      prompt = run.asked ? ASKED_NOTE + full() : full()
       chars += prompt.length
       run = yield* ask(prompt, threadPath(id, st.n), allowed)
       if (run.failed && run.fail && !run.fail.startsWith('luna quota-paused')) run = { ...run, fail: run.fail + RETRIED }
