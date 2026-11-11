@@ -64,7 +64,7 @@ Restart Claude Code (and Codex, if used) after the install. `agents-inc install 
 - `SessionStart`: loads the delegation mandate into each session.
 - `PreToolUse` on `Agent`/`Task`, dispatch-shaped `Bash` and `DelegateAgent`: adds a routing nudge, warns on duplicate dispatches, blocks persona impersonation, and runs the agent gate.
 - `PostToolUse` on `Agent`/`Task`: marks the dispatch done.
-- `UserPromptSubmit`: routes `@alias` side questions.
+- `UserPromptSubmit`: routes `@alias` side questions. Only with `--legacy-routes` (see below).
 
 **Agent gate.** Claude's `Agent` tool skips agents-inc routing, prompt lint, the ledger and verification. The gate decides what happens to those calls.
 
@@ -78,6 +78,10 @@ Restart Claude Code (and Codex, if used) after the install. `agents-inc install 
 - One session only: launch with `AGENTS_INC_AGENT_GATE=off claude` (or `enforce`).
 - Check: `agents-inc doctor` prints `agent gate: <mode> (<source>)`.
 - Remove every agents-inc hook: `agents-inc unwire`. Other hooks stay. `agents-inc repair` adds them back.
+
+**The route: native agent types.** With the agents-inc mod, Claude Code lists each delegate model as its own subagent type, such as `agents-inc:luna` or `agents-inc:gemini-flash`. Call it with the `Agent` tool like any subagent; its transcript is the normal subagent view, and the delegate pane lists the registered types and this session's native agents. `agents-inc native status` shows which types are offered and why. `agents-inc dispatch` stays as a command for scripts, CI and broker Workers.
+
+The older routes (the `agents-inc:relay` type, the `mcp__agents-inc__run` tool and `@alias` side questions) are off by default. `agents-inc install --legacy-routes` (or `repair --legacy-routes`) keeps them; the choice is stored in `~/.config/agents-inc/settings.json`, so a later plain `repair` keeps it, and `--no-legacy-routes` turns them off again. This change is proposed in D79 and awaits operator acceptance.
 
 **Using agents-inc without the gate.**
 
@@ -117,7 +121,7 @@ Every dispatch prompt carries a `REPORTING CHAIN` line derived from the ladder, 
 
 **Narrate (prototype, macOS).** `agents-inc narrate on` enables a watcher; `agents-inc narrate run` follows the active Claude Code transcript and speaks a two-sentence digest of each new assistant message with `say`. luna writes the digest through `agents-inc run`, so message text leaves the machine: messages with a classification marker are skipped, and `--summarizer local` makes no model call. Other options: `--voice`, `--transcript`, `--decide-only`, `--once`, `--dry-run`; `off` and `status` complete the set. Design: [docs/proposals/narrate.md](https://github.com/domattioli/agents-inc/blob/main/docs/proposals/narrate.md).
 
-Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. `@haiku <question>` inside any Claude Code session sends one side question to a cheaper model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
+Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. With `--legacy-routes`, `@haiku <question>` inside any Claude Code session sends one side question to a cheaper model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
 

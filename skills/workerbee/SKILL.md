@@ -272,6 +272,8 @@ assume, re-verify per Step 1b if stale). Only vendors with a working
 credential or CLI on this machine are listed; do not invent a row for a
 vendor that isn't wired up here.
 
+Route (D79, proposed). Claude Code with the agents-inc mod: native agent types are the one route. Claude rung: `Agent(model=...)`. Codex or free model: `Agent(subagent_type="agents-inc:<nickname>")`, registered when its status says offered (`agents-inc native status`; delegate pane lists them). Relay type, `mcp__agents-inc__run`, `@alias`: only after `agents-inc install --legacy-routes`. The dispatch column below is the route without the mod and for scripts, CI and broker Workers; `agents-inc dispatch` stays.
+
 | nickname | vendor | slug | dispatch | tier | when-to-use |
 |---|---|---|---|---|---|
 | astra | OpenAI (Codex) | `gpt-6-astra` | `@AGENTS_INC_LAUNCHER@ run --model astra --cwd <dir>` | executive | hardest reasoning |
