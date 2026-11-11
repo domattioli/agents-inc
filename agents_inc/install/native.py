@@ -282,6 +282,7 @@ def end(paths, nick, session, agent, outcome, cwd, usage) -> dict:
 
 
 STEP_TIMEOUT_S = 60.0
+STEP_RETRIES = 3  # rate-limit retries inside one step (waits 2, 5, 12 s; native_http.RETRY_WAITS)
 
 
 def step(paths: InstallPaths, nick: str, cwd: str, prompt: str, timeout: float | None, out=None, err=None,
@@ -319,8 +320,13 @@ def _step(paths, nick, cwd, prompt, timeout, out, err, env, seen: dict) -> int:
             raise native_http.StepError(native_http.EXIT_NOT_OFFERED, f"WB_NATIVE_KEY_MISSING: no {provider} key (checked {', '.join(native_http.key_places(provider))})")
         native_http.progress(err, "record", {"model": nick, "slug": entry["slug"], "provider": provider})
         native_http.progress(err, "event", {"kind": "status", "text": f"{nick}: request sent to {entry['slug']}"})
+        def on_retry(n, of, wait):
+            native_http.progress(err, "event", {"kind": "status", "text": f"{nick}: rate limited, retry {n} of {of} in {wait:g} s"})
+        stats: dict = {}
+        policy = native_http.live_policy(provider, os.environ if env is None else env, STEP_RETRIES, paths.state)
         text, usage = native_http.ask(provider, entry["slug"], prompt, key, max_chars=entry["max_input_chars"],
-                                      timeout=timeout or STEP_TIMEOUT_S, env=env)
+                                      timeout=timeout or STEP_TIMEOUT_S, env=env, stats=stats, on_retry=on_retry, **policy)
+        if stats.get("retries"): err.write(f"agents-inc native step: {nick} succeeded after {stats['retries']} retries\n")
     except native_http.StepError as exc:
         err.write(f"agents-inc native step: {native_http.scrub(exc.text, key)}\n")
         return exc.code

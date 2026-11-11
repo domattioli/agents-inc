@@ -8,6 +8,7 @@ younger than PROBE_TTL_S. Run by `agents-inc models probe [nick]` and `agents-in
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 
@@ -22,6 +23,7 @@ PROBE_PROMPT = (
     "Conversation:\nuser: Read the file probe.txt.\n"
 )
 PROBE_TIMEOUT_S = 60.0
+PROBE_RETRIES = 1  # one short retry on a rate limit, so a probe stays fast
 
 
 def _names_read(text: str) -> bool:
@@ -46,7 +48,8 @@ def probe_one(paths: InstallPaths, nick: str, env: dict | None = None, now: floa
     else:
         try:
             text, _ = native_http.ask(entry["provider"], entry["slug"], PROBE_PROMPT, key,
-                                      max_chars=entry["max_input_chars"], timeout=PROBE_TIMEOUT_S, env=env)
+                                      max_chars=entry["max_input_chars"], timeout=PROBE_TIMEOUT_S, env=env,
+                                      **native_http.live_policy(entry["provider"], os.environ if env is None else env, PROBE_RETRIES, paths.state))
             ok = _names_read(text)
             rec.update(result="pass" if ok else "fail", reason="reply named Read" if ok else "reply did not name Read in tools")
         except native_http.StepError as exc:

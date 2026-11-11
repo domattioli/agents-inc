@@ -20,7 +20,7 @@ from pathlib import Path
 NICK = "gemini-flash"
 FILES = {"a.txt": 173, "b.txt": 95, "c.txt": 41, "d.txt": 7, "e.txt": 12}
 TASKS = {"tools": [["a.txt", "b.txt"]], "par": [["a.txt"], ["b.txt"], ["c.txt"]], "steps5": [list(FILES)],
-         "bigcat": [["a.txt", "b.txt"]]}  # bigcat: the same task behind the prompt of a real 77-tool session
+         "bigcat": [["a.txt", "b.txt"]], "flaky": [list(FILES)]}  # flaky: every 3rd request answers 429 and is retried  # bigcat: the same task behind the prompt of a real 77-tool session
 GUEST_CORE = ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit")  # mirrors GUEST_TOOLS in native/loop.ts
 
 
@@ -44,14 +44,20 @@ FAKE_KEY = "AIzaFAKE-stress-000000000000000000000000"
 class Fake:
     """Answers like a model that runs `wc -l <file>` once per step for each file the task names, then reports."""
 
-    def __init__(self):
-        self.count, self.lock = 0, threading.Lock()
+    def __init__(self, flaky: int = 0):
+        self.count, self.lock, self.flaky = 0, threading.Lock(), flaky  # flaky=N: every Nth request answers 429
         fake = self
 
         class H(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-                with fake.lock: fake.count += 1
+                with fake.lock:
+                    fake.count += 1
+                    limited = bool(fake.flaky) and fake.count % fake.flaky == 0
+                if limited:
+                    raw = json.dumps({"error": {"message": "Rate limit exceeded"}}).encode()
+                    self.send_response(429); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+                    return
                 prompt = "\n".join(p.get("text", "") for c in body.get("contents", []) for p in c.get("parts", []))
                 raw = json.dumps({"candidates": [{"content": {"parts": [{"text": json.dumps(fake.answer(prompt))}]}}],
                                   "usageMetadata": {"promptTokenCount": len(prompt) // 4, "candidatesTokenCount": 9}}).encode()
@@ -115,14 +121,14 @@ def check_events(state: Path, session, agent, steps, usage) -> list[str]:
 
 
 def one(src: Path, scenario: str, i: int) -> tuple[bool, str, float, int, int]:
-    t0, fake = time.time(), Fake()
+    t0, fake = time.time(), Fake(3 if scenario == "flaky" else 0)
     with tempfile.TemporaryDirectory() as tmp:
         home, work = Path(tmp) / "home", Path(tmp) / "work"; work.mkdir(parents=True)
         for name, n in FILES.items(): (work / name).write_text("".join(f"{k}\n" for k in range(1, n + 1)))
         store = home / ".config" / "workerbees" / ".env"; store.parent.mkdir(parents=True)
         store.write_text(f"GEMINI_API_KEY={FAKE_KEY}\n"); store.chmod(0o600)
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "PYTHONPATH": str(src),
-               "AGENTS_INC_NATIVE_GEMINI_URL": fake.url}
+               "AGENTS_INC_NATIVE_GEMINI_URL": fake.url, "AGENTS_INC_NATIVE_RETRY_WAITS": "0.05,0.05,0.05"}
         bad = []
         if cli(env, "models", "probe", NICK).returncode: bad.append("probe")
         if cli(env, "native", "allow", "gemini", "--workspace", str(work)).returncode: bad.append("allow")
@@ -156,7 +162,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--src", default=str(Path(__file__).resolve().parents[1]))
     ap.add_argument("--r", type=int, default=int(os.environ.get("R", 10)))
-    ap.add_argument("--scenarios", default=os.environ.get("SCENARIOS", "tools par steps5 bigcat"))
+    ap.add_argument("--scenarios", default=os.environ.get("SCENARIOS", "tools par steps5 bigcat flaky"))
     a = ap.parse_args(argv)
     passed = total = 0
     print(f"{'scenario':<8} {'run':<3} {'ok':<4} {'secs':>5} {'start':>5} {'reqs':>4} problems")

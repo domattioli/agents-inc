@@ -10,7 +10,10 @@ workspace authorization, unknown model); 2 usage or context over the model limit
 """
 from __future__ import annotations
 import json
+import os
+import re
 import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -174,14 +177,104 @@ def free_only(provider: str, slug: str) -> None:
         raise StepError(EXIT_NOT_OFFERED, f"WB_NATIVE_NOT_FREE: OpenRouter slug {slug!r} is not a ':free' slug; not sent")
 
 
+# Rate limits (429) and overload (503) are short: retry inside the step before the agent is called quota-paused.
+RETRY_WAITS = (2.0, 5.0, 12.0)  # seconds before retry 1, 2, 3
+RETRY_AFTER_CAP_S = 15.0  # a Retry-After header is honoured up to this
+WAIT_BUDGET_S = 20.0  # total sleeping per call, well inside the 60 s step timeout
+RETRY_WAITS_ENV, PACE_ENV, PACE_DIR_NAME = "AGENTS_INC_NATIVE_RETRY_WAITS", "AGENTS_INC_NATIVE_PACE_S", "native-pace"
+# Minimum seconds between two requests to one provider (all agents, through a lock file per provider).
+PACE_S = {"gemini": 1.0, "mistral": 1.1, "openrouter": 3.1}
+PACE_DEFAULT_S = 1.0
+# A body that says the daily or monthly quota is gone is not a passing rate limit: no retry.
+_EXHAUSTED = re.compile(r"per[ -]?day|per[ -]?month|daily|monthly|day limit|month limit|RequestsPerDay|exhausted", re.I)
+
+
+def is_loopback(base: str) -> bool:
+    return urllib.parse.urlsplit(base).hostname in LOOPBACK
+
+
+def live_policy(provider: str, env: dict, retries: int, state: Path | None) -> dict:
+    """Keyword arguments for `ask`: retries, waits and pacing for a live provider. A loopback test server gets none of it
+    unless AGENTS_INC_NATIVE_RETRY_WAITS (comma list of seconds) or AGENTS_INC_NATIVE_PACE_S is set."""
+    if provider not in HOSTS: return {}
+    loop = is_loopback(base_url(provider, env))
+    out: dict = {"retries": 0 if loop else retries, "pace_dir": None if loop else state}
+    raw = env.get(RETRY_WAITS_ENV)
+    if raw is not None:
+        out["waits"] = tuple(float(x) for x in raw.split(",") if x.strip())
+        out["retries"] = retries
+    if env.get(PACE_ENV) is not None: out["pace_dir"] = state
+    return out
+
+
+def pace_gap(provider: str, env: dict | None = None) -> float:
+    raw = (os.environ if env is None else env).get(PACE_ENV)
+    try: return max(0.0, float(raw)) if raw is not None else PACE_S.get(provider, PACE_DEFAULT_S)
+    except ValueError: return PACE_S.get(provider, PACE_DEFAULT_S)
+
+
+def pace(provider: str, state: Path, gap: float, sleep=time.sleep, clock=time.time) -> None:
+    """Wait until `gap` seconds after the last request to this provider, then stamp now. The stamp file is locked, so
+    parallel agents queue behind each other. Best effort: a lock or file error skips the pacing."""
+    if gap <= 0: return
+    try:
+        import fcntl
+        folder = Path(state) / PACE_DIR_NAME
+        folder.mkdir(parents=True, exist_ok=True)
+        with open(folder / provider, "a+") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            fh.seek(0)
+            try: last = float(fh.read().strip() or 0)
+            except ValueError: last = 0.0
+            wait = last + gap - clock()
+            if 0 < wait <= gap: sleep(wait)
+            fh.seek(0); fh.truncate(); fh.write(repr(clock()))
+    except (OSError, ImportError):
+        return
+
+
+def _retry_after(exc) -> float | None:
+    try: return max(0.0, float(exc.headers.get("Retry-After")))
+    except (TypeError, ValueError, AttributeError): return None
+
+
 def ask(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, timeout: float,
-        env: dict | None = None) -> tuple[str, dict]:
-    """One request. Returns (reply text, usage). Raises StepError with the exit code and a scrubbed line."""
+        env: dict | None = None, retries: int = 0, waits: tuple = RETRY_WAITS, sleep=time.sleep,
+        pace_dir: Path | None = None, stats: dict | None = None, on_retry=None) -> tuple[str, dict]:
+    """One request, with up to `retries` retries on 429 or 503 after bounded waits (Retry-After honoured, capped; total
+    wait at most WAIT_BUDGET_S) and a per-provider pace when `pace_dir` is set. `stats["retries"]` counts the retries made.
+    Returns (reply text, usage). Raises StepError with the exit code and a scrubbed line."""
+    used = 0
+    slept = 0.0
+    while True:
+        try:
+            if pace_dir is not None: pace(provider, pace_dir, pace_gap(provider, env), sleep)
+            return _ask_once(provider, slug, prompt, key, max_chars=max_chars, timeout=timeout, env=env)
+        except _Retryable as r:
+            wait = min(r.after, RETRY_AFTER_CAP_S) if r.after is not None else (waits[used] if used < len(waits) else waits[-1] if waits else 0.0)
+            if r.exhausted or used >= retries or slept + wait > WAIT_BUDGET_S:
+                err = r.error
+                if used: err.text += f" (after {used} retries)"; err.args = (err.text,)
+                raise err from None
+            used += 1
+            slept += wait
+            if stats is not None: stats["retries"] = used
+            if on_retry: on_retry(used, retries, wait)
+            sleep(wait)
+
+
+class _Retryable(Exception):
+    def __init__(self, error: StepError, after: float | None, exhausted: bool):
+        super().__init__(error.text)
+        self.error, self.after, self.exhausted = error, after, exhausted
+
+
+def _ask_once(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, timeout: float,
+              env: dict | None = None) -> tuple[str, dict]:
     if provider not in HOSTS: raise StepError(EXIT_NOT_OFFERED, f"WB_NATIVE_UNKNOWN_PROVIDER: {provider}")
     free_only(provider, slug)
     if len(prompt) > max_chars:
         raise StepError(EXIT_USAGE, f"WB_NATIVE_CONTEXT_OVER: context over {max_chars} chars (prompt {len(prompt)} chars); not sent")
-    import os
     base = base_url(provider, os.environ if env is None else env)
     host = urllib.parse.urlsplit(base).hostname
     req = _build(provider, base, slug, prompt, key)
@@ -192,7 +285,13 @@ def ask(provider: str, slug: str, prompt: str, key: str, *, max_chars: int, time
         if 300 <= exc.code < 400:
             raise StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP {exc.code}: redirect refused") from None
         detail = scrub(exc.read().decode("utf-8", "replace")[:300].replace("\n", " "), key)
-        if exc.code == 429: raise StepError(EXIT_QUOTA, f"{provider} {slug} hit a usage or rate limit (HTTP 429): {detail}") from None
+        retry_after = _retry_after(exc)
+        exc.close()
+        if exc.code == 429:
+            raise _Retryable(StepError(EXIT_QUOTA, f"{provider} {slug} hit a usage or rate limit (HTTP 429): {detail}"),
+                             retry_after, bool(_EXHAUSTED.search(detail))) from None
+        if exc.code == 503:
+            raise _Retryable(StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP 503: {detail}"), retry_after, False) from None
         raise StepError(EXIT_FAIL, f"{provider} {slug} answered HTTP {exc.code}: {detail}") from None
     except (TimeoutError, socket.timeout):
         raise StepError(EXIT_TIMEOUT, f"WB_NATIVE_TIMEOUT: no reply from {host} within {timeout:g} s") from None
