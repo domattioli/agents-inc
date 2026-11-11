@@ -20,6 +20,12 @@ type ModelStatus = Status & { nickname: string }
 
 // A function declaration with `$` first: the engine follows `$` past an import only into one.
 export async function readNativeStatus($: Native$, cwd: string): Promise<ModelStatus[] | null> {
+  return (await readStatusReport($, cwd)).models
+}
+
+// The whole status answer: the models, and legacy_routes (spec 038 FR-016: true only after install --legacy-routes).
+export async function readStatusReport($: Native$, cwd: string): Promise<{ models: ModelStatus[] | null; legacyRoutes: boolean }> {
+  const none = { models: null, legacyRoutes: false }
   try {
     // `luna status --all` (same answer as `native status --json`): a luna verb, so hosts and fakes that already allow
     // the luna status call need no new rule.
@@ -28,20 +34,25 @@ export async function readNativeStatus($: Native$, cwd: string): Promise<ModelSt
     for (;;) {
       const n = await stream.next()
       if (n.done) {
-        if (n.value.code !== 0) return null
+        if (n.value.code !== 0) return none
         break
       }
       if (n.value.stream === 'stdout') out += n.value.text
     }
-    const models = (JSON.parse(out) as { models?: unknown }).models
-    return Array.isArray(models) ? (models as ModelStatus[]).filter(m => m && typeof m.nickname === 'string') : null
+    const report = JSON.parse(out) as { models?: unknown; legacy_routes?: unknown }
+    const models = report.models
+    return {
+      models: Array.isArray(models) ? (models as ModelStatus[]).filter(m => m && typeof m.nickname === 'string') : null,
+      legacyRoutes: report.legacy_routes === true,
+    }
   } catch {
-    return null
+    return none
   }
 }
 
-export async function registerNativeAgents($: Native$, e: { cwd: string }): Promise<void> {
-  const models = await readNativeStatus($, e.cwd)
+// Returns legacy_routes from the same read, so mod.ts registers the relay route only when it is kept.
+export async function registerNativeAgents($: Native$, e: { cwd: string }): Promise<boolean> {
+  const { models, legacyRoutes } = await readStatusReport($, e.cwd)
   if (models === null) $.ui.log('agents-inc native: not registered: agents-inc native status gave no usable answer', { to: 'debug' })
   for (const adapter of ADAPTERS) {
     const m = models?.find(x => x.nickname === adapter.nickname)
@@ -49,6 +60,7 @@ export async function registerNativeAgents($: Native$, e: { cwd: string }): Prom
     const known = m && typeof m.offered === 'boolean' && typeof m.slug === 'string' ? m : null
     await registerAgent($, adapter, e, known)
   }
+  return legacyRoutes
 }
 
 // The engine reads `register` from source: a const function that passes `on` only to an imported function.

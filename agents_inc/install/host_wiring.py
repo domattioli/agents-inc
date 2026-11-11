@@ -135,6 +135,10 @@ def strip_sandbox_exclusion(config: dict) -> dict:
     if not sandbox: del config["sandbox"]
     return config
 
+def _legacy_routes(paths: InstallPaths) -> bool:
+    from .hook import legacy_routes  # late import: hook.py imports from this package
+    return legacy_routes(paths)
+
 def add_hooks(config: dict, paths: InstallPaths, host: Host, sandbox_exclude: bool = True) -> dict:
     config = strip_hooks(config, paths, legacy=True)
     hooks = config.setdefault("hooks", {})
@@ -148,7 +152,7 @@ def add_hooks(config: dict, paths: InstallPaths, host: Host, sandbox_exclude: bo
         hooks["PreToolUse"].append({"matcher": "mcp__.*__DelegateAgent", "hooks": [{"type": "command", "command": nudge, "timeout": 5}]})
         hooks.setdefault("PostToolUse", []).append({"matcher": "Agent|Task", "hooks": [{"type": "command", "command": hook_command(paths, "agent-done"), "timeout": 5}]})
         hooks["PostToolUse"].append({"matcher": "mcp__.*__DelegateAgent", "hooks": [{"type": "command", "command": hook_command(paths, "agent-done"), "timeout": 5}]})
-    if host.prompt_hook:  # timeout above the hook's own 120 s alarm
+    if host.prompt_hook and _legacy_routes(paths):  # @alias route: --legacy-routes only (FR-016); timeout above the hook's own 120 s alarm
         hooks.setdefault("UserPromptSubmit", []).append({"hooks": [{"type": "command", "command": at_route_command(paths), "timeout": 130}]})
     if host.name == "claude" and sandbox_exclude: add_sandbox_exclusion(config)
     return config

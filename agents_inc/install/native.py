@@ -244,7 +244,9 @@ def codex_status(paths: InstallPaths, nick: str) -> dict:
 
 
 def status_all(paths: InstallPaths, cwd: str = ".") -> dict:
-    return {"models": [status_one(paths, nick, cwd) for nick in NATIVE_MODELS]}
+    # legacy_routes: the mod registers the relay type and mcp__agents-inc__run only when it is true (FR-016).
+    from .hook import legacy_routes
+    return {"models": [status_one(paths, nick, cwd) for nick in NATIVE_MODELS], "legacy_routes": legacy_routes(paths)}
 
 
 def doctor_lines(paths: InstallPaths) -> list[str]:

@@ -26,11 +26,18 @@ class ConsentTest(unittest.TestCase):
         return ok, out.getvalue()
 
     def test_plan_lists_entries_and_prompt_note(self):
+        from agents_inc.install import hook as host_hook
+        host_hook.write_legacy_routes(self.paths, True)  # the @alias hook and its note come only with --legacy-routes
         _, out = self._ask(io.StringIO(), yes=True)
         self.assertIn("hooks.UserPromptSubmit", out)
         self.assertIn("sandbox.excludedCommands: agents-inc dispatch *", out)
         self.assertNotIn("sandbox.excludedCommands: agents-inc *\n", out)
         self.assertIn("does not start with @<alias> is not sent anywhere", out)
+
+    def test_default_plan_has_no_prompt_hook_and_no_prompt_note(self):
+        _, out = self._ask(io.StringIO(), yes=True)
+        self.assertNotIn("hooks.UserPromptSubmit", out)
+        self.assertNotIn("@<alias>", out)
 
     def test_confirm_yes(self):
         ok, _ = self._ask(_Tty("y\n"))

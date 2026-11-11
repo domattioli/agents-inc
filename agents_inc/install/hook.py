@@ -399,6 +399,18 @@ def write_agent_gate(paths: InstallPaths, mode: str) -> None:
     if mode not in AGENT_GATE_MODES: raise ValueError(f"agent gate mode must be one of {', '.join(AGENT_GATE_MODES)}: {mode!r}")
     write_setting(paths, "agent_gate", mode)
 
+LEGACY_ROUTES_KEY = "legacy_routes"  # spec 038 FR-016: relay type, mcp__agents-inc__run, @alias hook
+
+def legacy_routes(paths: InstallPaths) -> bool:
+    """True only when settings.json says legacy_routes is 'on' (set by install/repair --legacy-routes). Default off:
+    native agent types are the one user-facing route. Never raises; an unreadable file reads as off."""
+    try: data = json.loads(paths.settings.read_text(encoding="utf-8"))
+    except (OSError, ValueError): return False
+    return isinstance(data, dict) and data.get(LEGACY_ROUTES_KEY) == "on"
+
+def write_legacy_routes(paths: InstallPaths, on: bool) -> None:
+    write_setting(paths, LEGACY_ROUTES_KEY, "on" if on else "off")
+
 def write_setting(paths: InstallPaths, key: str, value: str) -> None:
     """Persist one key in settings.json atomically with mode 0600, keeping other keys; a malformed file raises."""
     data = {}

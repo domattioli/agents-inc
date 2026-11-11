@@ -39,8 +39,12 @@ export async function registerRelay(
     tool: { register: (t: Record<string, unknown>) => Promise<unknown> }
   },
   e: { cwd: string },
+  legacyRoutes = true,
 ): Promise<void> {
   sessionCwd = e.cwd
+  // Spec 038 FR-016: native agent types are the one route; the relay type and its tool stay only after
+  // `agents-inc install --legacy-routes` (status --all reports legacy_routes).
+  if (!legacyRoutes) return
   await $.agent.register({
     name: 'relay',
     description: 'Runs one agents-inc delegate and relays its live rows. Use only for agents-inc dispatch.',

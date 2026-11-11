@@ -7,9 +7,9 @@ import { register as native, registerNativeAgents } from './native/registry'
 // so this entry owns session.start and hands it to every feature.
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
-    await registerRelay($, e)
     await registerLunaAgent($, e)
-    await registerNativeAgents($, e)
+    const legacyRoutes = await registerNativeAgents($, e)
+    await registerRelay($, e, legacyRoutes)
     return next(e)
   })
   relay(on, options)

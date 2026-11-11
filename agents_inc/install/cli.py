@@ -170,6 +170,10 @@ def install(args):
     A failure is loud (FAIL line, exit 1) and leaves a marker that doctor reports (#155)."""
     command = getattr(args, "command", None) or "install"
     paths = _paths()
+    if getattr(args, "legacy_routes", None) is not None:  # before the settings plan: it decides the @alias hook
+        try: host_hook.write_legacy_routes(paths, args.legacy_routes)
+        except (OSError, RuntimeError) as exc:
+            _report_install_failure(paths, command, exc); return 1
     if not getattr(args, "no_host_wiring", False) and (paths.home / ".claude").is_dir():
         try: args.claude_settings = _settings_consent(args, paths, command)
         except (OSError, ValueError, RuntimeError) as exc:
@@ -200,7 +204,7 @@ def _settings_consent(args, paths: InstallPaths, command: str, stdin=None) -> bo
     if text is None: return True
     print(f"agents-inc {command} will write these entries to {target} (backup kept; `agents-inc unwire` removes them):")
     for line in lines: print(f"  {line}")
-    print(AT_ROUTE_NOTE)
+    if host_hook.legacy_routes(paths): print(AT_ROUTE_NOTE)
     if getattr(args, "yes", False): return True
     stdin = sys.stdin if stdin is None else stdin
     if stdin.isatty():
@@ -252,7 +256,7 @@ def _install(args, source: Path):
             if not getattr(args, "no_host_wiring", False):
                 receipt = install_host_wiring(paths, receipt, journal, not getattr(args, "no_sandbox_exclude", False),
                                               getattr(args, "claude_settings", True))
-                if (paths.home / ".claude").is_dir():
+                if (paths.home / ".claude").is_dir() and host_hook.legacy_routes(paths):
                     receipt, link_notices = install_alias_links(paths, receipt, journal); notices.extend(link_notices)
             paths.roster.parent.mkdir(parents=True, exist_ok=True)
             if not paths.roster.exists(): paths.roster.write_text("{}\n")  # empty, user-editable; never overwritten
@@ -353,12 +357,12 @@ def uninstall(paths: InstallPaths, receipt: InstallReceipt) -> set[Path]:
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="agents-inc")
     subs = parser.add_subparsers(dest="command", required=True)
-    p = subs.add_parser("install"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES)
+    p = subs.add_parser("install"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES); p.add_argument("--legacy-routes", action=argparse.BooleanOptionalAction, default=None, help="keep the relay agent, mcp__agents-inc__run and @alias routes (off by default; the choice persists across repair)")
     p = subs.add_parser("run"); p.add_argument("--model", required=True); p.add_argument("--effort", default="medium"); p.add_argument("--cwd", required=True); p.add_argument("--tools", action="store_true"); p.add_argument("--no-tools", action="store_true"); p.add_argument("--host-tools", action="store_true", help="tools off; the caller's host runs the tools the model names (the agents-inc:luna type)"); p.add_argument("--write", action="store_true"); p.add_argument("--network", action="store_true"); p.add_argument("--run-dir"); p.add_argument("--lead", metavar="RUN_DIR"); p.add_argument("--home-repo"); p.add_argument("--thread", metavar="FILE", help="keep one Codex thread in FILE: start it when missing or empty, resume it otherwise"); p.add_argument("--timeout", type=float, metavar="SECONDS", help="kill Codex after SECONDS and exit 124 (the agents-inc:luna step limit)")
     p = subs.add_parser("dispatch"); p.add_argument("--slots"); p.add_argument("--model"); p.add_argument("--effort"); p.add_argument("--cwd"); p.add_argument("--tier", choices=("grunt",)); p.add_argument("--run-dir"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--resume"); p.add_argument("--message"); p.add_argument("--home-repo"); p.add_argument("--serve", metavar="RUN_DIR"); p.add_argument("--poll-interval", type=float, default=1.0); p.add_argument("--idle-timeout", type=float, default=600.0); p.add_argument("--cancel", metavar="RUN_DIR"); p.add_argument("--wait", nargs=2, metavar=("RUN_DIR", "REQUEST_ID")); p.add_argument("--timeout", type=float, default=600.0)
     p = subs.add_parser("events", help="follow or redact live delegate events (spec 027)"); p.add_argument("verb", choices=("follow", "redact")); p.add_argument("run_dir", nargs="?")
     p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model"); p.add_argument("--probe", action="store_true", help="also run the tool-use probe for each free guest agent model (one free request each)")
-    p = subs.add_parser("repair"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES)
+    p = subs.add_parser("repair"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES); p.add_argument("--legacy-routes", action=argparse.BooleanOptionalAction, default=None, help="keep the relay agent, mcp__agents-inc__run and @alias routes (off by default; the choice persists across repair)")
     p = subs.add_parser("unwire"); p.add_argument("--host", choices=("claude",), default="claude")
     p = subs.add_parser("hook"); p.add_argument("event", choices=("session-start", "agent-nudge", "agent-done")); p.add_argument("--host", choices=("claude", "codex", "gemini"))
     p = subs.add_parser("ledger", add_help=False); p.add_argument("rest", nargs=argparse.REMAINDER)
