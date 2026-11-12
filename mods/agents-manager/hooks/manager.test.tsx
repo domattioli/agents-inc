@@ -375,3 +375,48 @@ test('every running run stays listed beyond the newest eight finished', async ($
     await ui.unmount()
   }
 })
+
+// 6 DISPLAY FIXES
+test('a guest agent row shows nickname and provider, other types keep the raw type', async ($, on) => {
+  const world = await start($, on)
+  world.agents = [
+    { id: 'a1', name: 'scout', type: 'agents-inc:luna', description: 'scout', status: 'running' },
+    { id: 'a2', name: 'g', type: 'agents-inc:codestral', description: 'guest', status: 'running' },
+    { id: 'a3', name: 'x', type: 'Explore', description: 'x', status: 'running' },
+  ]
+  await world.advance(2100)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('luna · OpenAI')
+  const g = (await ui.find({ type: 'Button', text: /guest/ }))?.text ?? ''
+  expect(g).toContain('codestral')
+  expect(g).not.toContain('agents-inc:codestral')
+  expect((await ui.find({ type: 'Button', text: /x ·/ }))?.text).toContain('Explore')
+  await ui.unmount()
+})
+
+test('the run count line is hidden with no run directories and shown with one', async ($, on) => {
+  const world = await start($, on)
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /finished \(showing/ })).toBeDefined()
+  await ui.unmount()
+  world.dirs = []
+  await world.advance(2100)
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /finished \(showing/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a poll error note clears after a later poll succeeds', async ($, on) => {
+  const world = await start($, on)
+  const real = world.agents
+  world.agents = null as any
+  await world.advance(2100)
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /poll error/ })).toBeDefined()
+  await ui.unmount()
+  world.agents = real
+  await world.advance(2100)
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /poll error/ })).toBeUndefined()
+  await ui.unmount()
+})

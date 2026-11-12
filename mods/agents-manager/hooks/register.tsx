@@ -64,6 +64,15 @@ const compose = (): Row[] => {
   return [...jobs, ...BASE].map((r, i) => ({ ...r, n: i + 1 }))
 }
 
+// Row meta for an agent: `<nickname> · <Provider>` for an agents-inc type, the provider read from the MODELS labels; the raw type otherwise.
+function agentMeta(type: string): string {
+  if (!type.startsWith('agents-inc:')) return type
+  const nick = type.slice('agents-inc:'.length)
+  const label = MODELS.find(m => m.value === nick)?.label ?? ''
+  const provider = /^[^·]*·\s*([^(]+?)\s*(\(|$)/.exec(label)?.[1]
+  return provider ? `${nick} · ${provider}` : nick
+}
+
 // Native: a Claude Code subagent (transcript view, SendMessage, stop). Dispatch: an agents-inc run (resume by message).
 type Pick = { value: string; label: string; native?: { subagentType: string; model?: string } }
 const MODELS: Pick[] = [
@@ -234,7 +243,7 @@ export const register: Register = on => {
         const agents = await $.agent.list()
         const known = new Set(agents.map(a => a.id))
         const add = (a: (typeof agents)[number], depth: number) => {
-          const meta = a.type === 'agents-inc:luna' ? 'luna · OpenAI' : a.type
+          const meta = agentMeta(a.type)
           rows.push({ n: rows.length + 1, depth, kind: 'agent', id: a.id, label: `${a.name ?? a.type} · ${a.description}`, state: a.status, meta })
           for (const c of agents.filter(x => x.parentId === a.id)) add(c, depth + 1)
         }
@@ -312,7 +321,7 @@ export const register: Register = on => {
           keptFinished++
           return keptFinished <= KEEP_RUNS
         })
-        const summary = `${active} running · ${finishedAll} finished (showing ${shown.length})`
+        const summary = runRows.length === 0 ? '' : `${active} running · ${finishedAll} finished (showing ${shown.length})`
         rows.push(...shown)
 
         // A job row ends once the real thing appears in the lists: a new agent (native) or a run dir with its slots path (dispatch).
@@ -336,7 +345,8 @@ export const register: Register = on => {
           cur.summary === summary &&
           cur.rows.length === all.length &&
           cur.rows.every((r, i) => r.id === all[i]?.id && r.kind === all[i]?.kind && r.state === all[i]?.state && r.note === all[i]?.note)
-        if (!same) await update($, view, v => ({ ...v, rows: all, summary }))
+        const stale = cur.note.startsWith('poll error: ')
+        if (!same || stale) await update($, view, v => ({ ...v, rows: all, summary, note: v.note.startsWith('poll error: ') ? EMPTY.note : v.note }))
 
         if (Object.keys(fresh).length) {
           const had = await read($, runs)
