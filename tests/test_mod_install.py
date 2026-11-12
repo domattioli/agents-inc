@@ -18,7 +18,7 @@ echo "$@" >> "$HOME/claude.log"
 if [ "$1 $2" = "plugin list" ]; then cat "$HOME/claude.plugins" 2>/dev/null; fi
 if [ "$1 $2 $3" = "plugin install %(plugin)s" ] && [ -z "$FAKE_CLAUDE_FAIL" ]; then echo %(plugin)s > "$HOME/claude.plugins"; fi
 if [ "$1 $2" = "plugin uninstall" ]; then rm -f "$HOME/claude.plugins"; fi
-if [ -n "$FAKE_CLAUDE_FAIL" ]; then exit 1; fi
+if [ -n "$FAKE_CLAUDE_FAIL" ]; then printf 'first\n\nboom: marketplace unreachable\n\n' >&2; exit 1; fi
 exit 0
 """ % {"plugin": PLUGIN}
 
@@ -133,6 +133,7 @@ class ModInstallTest(unittest.TestCase):
         r = self._install(FAKE_CLAUDE_FAIL="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("warning: mod install failed", r.stdout + r.stderr)
+        self.assertIn("(1: boom: marketplace unreachable)", r.stdout + r.stderr)
 
     def test_uninstall_removes_the_plugin_and_the_marketplace(self):
         self._install()
