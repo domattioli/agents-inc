@@ -6,6 +6,19 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-11-12
+
+### Changed
+
+- The Zenodo description of 0.6.3 called it a license-only release, but 0.6.3 shipped the changes listed under 0.6.3 below. 0.6.4 corrects the description and covers both versions, because 0.6.3 has no Zenodo record.
+
+### Fixed
+
+- Dispatch warns on stderr when a Codex delegate's TASK or FILES_IN_SCOPE names a path outside the dispatch cwd, which it cannot read (#167, #112, #155).
+- The update hint also names `pipx upgrade agents-inc` and `uv tool upgrade agents-inc` on a Python that pip refuses (PEP 668) (#155).
+- The `mod install failed` warning now includes the last line of the Claude CLI error (#155).
+- The `3 failure-gate` lint failure now states that a gate line needs a backticked command; QUICKREF lists the CLASSIFICATION values and the BASH_ALLOW rule (#155).
+
 ## [0.6.3] — 2026-11-11
 
 ### Changed

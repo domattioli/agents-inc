@@ -273,6 +273,23 @@ def allow_paths(files_in_scope: str) -> list[str]:
     return out
 
 
+def outside_cwd_paths(text: str, cwd: Path) -> list[str]:
+    """Tokens of `text` that start with /, ~/ or ../ and resolve outside `cwd` (a Codex delegate cannot read them)."""
+    out = []
+    for token in re.split(r"[\s,;]+", text or ""):
+        token = token.strip("`'\"()[]<>").rstrip(":.")
+        if len(token) < 2 or token.startswith("//") or not token.startswith(("/", "~/", "../")):
+            continue
+        try:
+            path = Path(os.path.expanduser(token))
+            path = (path if path.is_absolute() else Path(cwd) / path).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if path != Path(cwd).resolve() and Path(cwd).resolve() not in path.parents and token not in out:
+            out.append(token)
+    return out
+
+
 def scope_globs(files_in_scope: str) -> list[str]:
     """Tokens of FILES_IN_SCOPE that hold a glob character. The scope gate compares exact paths, so a glob never matches."""
     tokens = (t.strip("`'\"()") for t in re.split(r"[\s,;]+", files_in_scope or ""))
@@ -1655,6 +1672,12 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
             print(f"dispatch {run_id} {model} refused {refusal}: {refusal.detail} lint={lint}")
             return EXIT_USAGE
     globs = scope_globs(_slot_str("FILES_IN_SCOPE", slots.get("FILES_IN_SCOPE", "")))
+    if kind == "codex":  # #167: the Codex sandbox reads only inside cwd; warn, never refuse
+        outside = outside_cwd_paths(_slot_str("TASK", slots.get("TASK", "")) + "\n"
+                                    + _slot_str("FILES_IN_SCOPE", slots.get("FILES_IN_SCOPE", "")), cwd)
+        if outside:
+            print(f"warning: {model} is a Codex delegate and cannot read outside cwd {cwd}: {' '.join(outside)}; "
+                  "copy the text inside cwd or inline it in the brief", file=sys.stderr)
     gates, bash_allow, why = _grants_from_slots(slots, cwd, sdir)
     if globs:
         why = ("refused-scope", f"FILES_IN_SCOPE has glob patterns the scope gate cannot match: {' '.join(globs)}; list exact paths")

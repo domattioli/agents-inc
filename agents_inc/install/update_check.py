@@ -104,8 +104,9 @@ def update_command(kind: str, detail: str = "", managed: bool = False) -> str:
         return "`python3 -m pip install --user -U agents-inc && agents-inc repair`"
     if kind == "pip-user":
         return ("this Python is externally managed (PEP 668), so pip refuses; reinstall with "
-                "`pipx install --force agents-inc && agents-inc repair`")
-    return ("pipx: `pipx upgrade agents-inc && agents-inc repair`; checkout: "
+                "`pipx install --force agents-inc && agents-inc repair` (or `pipx upgrade agents-inc`, "
+                "`uv tool upgrade agents-inc`)")
+    return ("pipx: `pipx upgrade agents-inc && agents-inc repair`; uv: `uv tool upgrade agents-inc && agents-inc repair`; checkout: "
             "`git -C <checkout> pull && agents-inc repair --source <checkout>`. "
             "A bare pip install fails on a Python that is externally managed (PEP 668)")
 
