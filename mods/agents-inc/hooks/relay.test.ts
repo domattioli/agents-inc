@@ -28,8 +28,8 @@ function fakeProcesses(on: On, seen: string[][]) {
   })
 }
 
-// The luna agent shares the plugin's one session.start (mod.ts), so it registers after the relay pair.
-test('session.start registers the relay agent and the run tool', async ($, on) => {
+// Spec 038 FR-016: the relay type and its tool register only when status --all says legacy_routes (install --legacy-routes).
+async function registeredAtStart($: Dollar, on: On, legacy?: boolean): Promise<string[]> {
   const registered: string[] = []
   on('agent.register', (_$, e) => {
     registered.push(`agent:${e.name}`)
@@ -42,12 +42,28 @@ test('session.start registers the relay agent and the run tool', async ($, on) =
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 's1' }))
   on('ui.log', () => ({ value: undefined }))
-  on('process.spawn', async function* () {
-    yield { stream: 'stdout' as const, text: JSON.stringify({ offered: true, slug: 'gpt-6-luna', reason: 'ready' }) }
+  on('process.spawn', async function* (_$, e) {
+    const all = e.argv.includes('--all')
+    const text = all
+      ? JSON.stringify(legacy === undefined ? { models: [] } : { models: [], legacy_routes: legacy })
+      : JSON.stringify({ offered: true, slug: 'gpt-6-luna', reason: 'ready' })
+    yield { stream: 'stdout' as const, text }
     return { value: { code: 0, signal: null } }
   })
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
-  expect(registered).toEqual(['agent:relay', 'tool:run', 'agent:luna'])
+  return registered
+}
+
+test('by default session.start registers no relay agent and no run tool (FR-016)', async ($, on) => {
+  expect(await registeredAtStart($, on)).toEqual(['agent:luna'])
+})
+
+test('legacy_routes false registers no relay route', async ($, on) => {
+  expect(await registeredAtStart($, on, false)).toEqual(['agent:luna'])
+})
+
+test('legacy_routes true keeps the relay agent and the run tool', async ($, on) => {
+  expect(await registeredAtStart($, on, true)).toEqual(['agent:luna', 'agent:relay', 'tool:run'])
 })
 
 test('a direct call from the main session is no longer refused for the missing relay', async ($, on) => {
@@ -63,10 +79,32 @@ test('an unknown model is refused', async ($, on) => {
   expect(out.deny).toBeDefined()
 })
 
-test('a free model is refused and names agent.sh', async ($, on) => {
+test('a free family name is refused and lists the free slugs', async ($, on) => {
   await start($, on)
   const out = await $.tool.call({ tool: TOOL, model: 'gemini', slots: '/work/s.md', agentId: 'a1' })
-  expect(out.deny).toContain('agent.sh')
+  expect(out.deny).toContain('gemini-3.8-flash')
+  expect(out.deny).not.toContain('agent.sh')
+})
+
+test('a free slug reaches agents-inc dispatch --model (spec 037)', async ($, on) => {
+  const seen: string[][] = []
+  fakeProcesses(on, seen)
+  on('fs.stat', STAT)
+  on('fs.read', () => ({ value: 'delegate answer' }))
+  mock.clock(on)
+  mock.session(on)
+  await start($, on)
+  const out = await $.tool.call({ tool: TOOL, model: 'codestral-latest', slots: '/work/s.md', agentId: 'a1' })
+  expect(out.deny).toBeUndefined()
+  const d = seen.find(a => a.includes('dispatch'))
+  expect(d?.[d.indexOf('--model') + 1]).toBe('codestral-latest')
+})
+
+test('a free slug with slots outside the session cwd is still refused', async ($, on) => {
+  on('fs.stat', (_$, e) => ({ value: { kind: 'file', size: 0, mtimeMs: 0, isLink: false, realPath: e.path } }))
+  await start($, on)
+  const out = await $.tool.call({ tool: TOOL, model: 'codestral-latest', slots: '/etc/passwd', agentId: 'a1' })
+  expect(out.deny).toContain('slots must be')
 })
 
 test('a slots path outside the session cwd is refused', async ($, on) => {

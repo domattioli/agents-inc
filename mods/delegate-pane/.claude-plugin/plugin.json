@@ -1,0 +1,1 @@
+{ "name": "delegate-pane", "version": "0.2.0", "description": "One pane listing the registered agents-inc native agent types and the native agents of this session.", "types": "./types/index.d.ts" }

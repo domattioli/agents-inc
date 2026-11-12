@@ -186,10 +186,9 @@ def _stream_run(proc, prompt: str, limit: float | None, on_line=None, mark: str 
     try:
         for t in threads:
             t.start()
-        on_start = on_start or CHILD_START
-        if on_start is not None:
+        for start in dict.fromkeys(f for f in (on_start, CHILD_START) if f is not None):  # both, each once
             try:
-                on_start(proc.pid)
+                start(proc.pid)
             except Exception:
                 pass  # recording the group is best effort: the delegate still runs
         deadline = None if not limit else time.monotonic() + limit

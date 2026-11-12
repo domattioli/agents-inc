@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { failureText, pickReply, render, skipsTools, stopsEarly, taskText, trimSkillList } from './luna'
+import { failureText, pickReply, refuses, render, skipsTools, stepTimeoutS, stopsEarly, taskText, trimSkillList } from './luna'
 
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Dollar = Parameters<Parameters<typeof test>[1]>[0]
@@ -31,14 +31,14 @@ const toolResult = (id: string, content: string) => ({ role: 'user' as const, co
 const CUE = '<system-reminder>SubagentHandback: when your work is complete, call SubagentHandback({message: <your full report>})</system-reminder>'
 
 // Stands for the engine beneath the plugin: agent.register, agent.spawn, session messages, tools, prompt and the luna process.
-type Run = { out: string; err?: string[]; code?: number; throws?: string }
+type Run = { out: string; err?: string[]; code?: number; throws?: string; hang?: boolean }
 
 const STATUS = { offered: true, reason: 'ready', slug: 'gpt-6-luna', codex: 'ready', catalog: 'ok', switch: 'on' }
 
 async function setup($: Dollar, on: On, opts: {
   agentId: string; rows?: unknown[]; replies: (string | Run)[]; calls?: Call[]; sections?: string[]; task?: string
   status?: object | 'fail'; luna?: Call[]; logs?: string[]; writes?: string[]; end?: object; agents?: unknown[] | 'throw'; spawnType?: string; registered?: unknown[]
-  session?: string; registerThrows?: boolean; beginGate?: Promise<void>; failVerbs?: string[]
+  session?: string; registerThrows?: boolean; beginGate?: Promise<void>; failVerbs?: string[]; env?: Record<string, string>
 }) {
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: opts.session ?? 's1' }))
@@ -75,6 +75,7 @@ async function setup($: Dollar, on: On, opts: {
     const next = opts.replies.shift() ?? ''
     const r = typeof next === 'string' ? { out: next } : next
     if (r.throws) throw new Error(r.throws)
+    if (r.hang) await new Promise<never>(() => {}) // a Codex call that never answers
     // Progress lines first, split mid-line the way a pipe may deliver them.
     for (const line of r.err ?? []) {
       yield { stream: 'stderr' as const, text: line.slice(0, 7) }
@@ -88,9 +89,11 @@ async function setup($: Dollar, on: On, opts: {
     return { turnId: e.turnId, index: e.index, answer: 'from anthropic', toolUses: [], stopReason: 'end_turn', usage: null }
   })
   on('ui.log', (_$, e) => { opts.logs?.push(e.text); return { value: undefined } })
-  mock.clock(on)
+  const clock = mock.clock(on)
+  if (opts.env) mock.env(on, opts.env)
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
   await $.agent.spawn({ prompt: TASK, subagentType: opts.spawnType ?? 'agents-inc:luna' })
+  return clock
 }
 
 async function step($: Dollar, agentId: string | undefined, index = 0) {
@@ -114,7 +117,7 @@ test('a Read call becomes tool chunks and stopReason tool_use', async ($, on) =>
   expect(result.stopReason).toBe('tool_use')
   expect(result.toolUses).toEqual([{ name: 'Read', input: { file_path: '/work/a.py' } }])
   expect(result.usage).toBeNull()
-  expect(calls[0].argv).toEqual(['agents-inc', 'run', '--model', 'luna', '--effort', 'low', '--no-tools', '--host-tools', '--cwd', '/work', '--thread', '/work/.scratch/agents-inc-luna/s1/a1.thread'])
+  expect(calls[0].argv).toEqual(['agents-inc', 'run', '--model', 'luna', '--effort', 'low', '--no-tools', '--host-tools', '--timeout', '60', '--cwd', '/work', '--thread', '/work/.scratch/agents-inc-luna/s1/a1.thread'])
   const stdin = calls[0].stdin ?? ''
   expect(stdin).toContain('You are Claude Code.')
   expect(stdin).toContain('- Read: Reads a file.')
@@ -220,6 +223,10 @@ test('the second step sends only the new messages on the same thread', async ($,
   const delta = two.stdin ?? ''
   expect(delta).toContain('New messages since your last reply.')
   expect(delta).toContain('tool result: 12 lines')
+  // Asks started on later steps (macOS stress, 2026-11-11): the no-ask rule rides the delta prompt too.
+  expect(delta).toContain('never ask one and never ask for confirmation')
+  expect(one.stdin).toContain('never ask one and never ask for confirmation')
+  expect(one.stdin).toContain('Session-start steps in the instructions')
   expect(delta).not.toContain('System prompt:')
   expect(delta).not.toContain('- Read: Reads a file.')
   expect(delta).not.toContain(`user: ${TASK}`)
@@ -689,4 +696,118 @@ test('render drops the commit-attribution reminder, which names a Claude model',
   const out = render(msgs)
   expect(out.includes('Haiku')).toBe(false)
   expect(out.includes('do x') && out.includes('then y')).toBe(true)
+})
+
+// Hardening, 2026-11-11: step limit, runaway stop, hand-back refusal, correction after a retry.
+const READ = JSON.stringify({ say: '', tools: [{ name: 'Read', input: { file_path: '/work/a.py' } }] })
+
+test('the step limit comes from AGENTS_INC_LUNA_STEP_TIMEOUT_S, else 60 s', async ($, on) => {
+  expect(stepTimeoutS(undefined)).toBe(60)
+  expect(stepTimeoutS('')).toBe(60)
+  expect(stepTimeoutS('abc')).toBe(60)
+  expect(stepTimeoutS('1')).toBe(60) // below the 5 s floor
+  expect(stepTimeoutS('90')).toBe(90)
+  const calls: Call[] = []
+  await setup($, on, { agentId: 'to1', replies: [READ], calls, env: { AGENTS_INC_LUNA_STEP_TIMEOUT_S: '90' } })
+  await step($, 'to1')
+  expect(calls[0].argv).toEqual(expect.arrayContaining(['--timeout', '90']))
+})
+
+test('exit 124 retries once on a fresh thread, then names the timeout and the retry', async ($, on) => {
+  const calls: Call[] = []
+  const late = { out: '', code: 124, err: ['turn timeout after 60 s'] }
+  await setup($, on, { agentId: 'to2', replies: [late, late], calls })
+  const { result } = await step($, 'to2')
+  expect(calls.length).toBe(2)
+  expect(calls[1].argv.at(-1)).toMatch(/to2-2\.thread$/)
+  const msg = String((result.toolUses[0]?.input as { message?: string }).message)
+  expect(msg).toBe('luna failed: timeout: Codex sent no reply within 60 s (limit AGENTS_INC_LUNA_STEP_TIMEOUT_S) (after one retry on a fresh thread)')
+})
+
+test('a timed-out first run whose retry answers gives the retry\'s reply', async ($, on) => {
+  const calls: Call[] = []
+  await setup($, on, { agentId: 'to3', replies: [{ out: '', code: 124 }, READ], calls })
+  const { result } = await step($, 'to3')
+  expect(calls.length).toBe(2)
+  expect(result.toolUses).toEqual([{ name: 'Read', input: { file_path: '/work/a.py' } }])
+})
+
+test('a run that never answers shows still-working lines, then the hook timer ends it and one retry runs', async ($, on) => {
+  const calls: Call[] = []
+  const clock = await setup($, on, { agentId: 'to4', replies: [{ out: '', hang: true }, READ], calls })
+  const chunks: { kind: string; [k: string]: unknown }[] = []
+  const stream = $.turn.step({ turnId: 't1', index: 3, model: 'haiku', messageCount: 1, agentId: 'to4' })
+  const done = (async () => { for (;;) { const n = await stream.next(); if (n.done) return n.value; chunks.push(n.value) } })()
+  for (let i = 0; i < 8; i++) await clock.advance(10_000)
+  const result = await done
+  expect(calls.length).toBe(2)
+  const live = chunks.filter(c => c.kind === 'thinking').map(c => String(c.text))
+  expect(live.some(t => /still working on step 3 \(\d+ s of 60 s\)/.test(t))).toBe(true)
+  expect(result.toolUses).toEqual([{ name: 'Read', input: { file_path: '/work/a.py' } }])
+})
+
+test('exit 77 (runaway Codex tool loop) retries fresh and then names the cap', async ($, on) => {
+  const calls: Call[] = []
+  const loop = { out: '', code: 77, err: ['agents-inc run: WB_LUNA_RUNAWAY: stopped Codex after 4 request_user_input calls (cap 4)'] }
+  await setup($, on, { agentId: 'rw1', replies: [loop, loop], calls })
+  const { result } = await step($, 'rw1')
+  expect(calls.length).toBe(2)
+  const msg = String((result.toolUses[0]?.input as { message?: string }).message)
+  expect(msg).toContain('luna failed: Codex looped on its own tools and was stopped to cap token use (stopped Codex after 4 request_user_input calls (cap 4))')
+  expect(msg).toContain('after one retry on a fresh thread')
+  // The retry says the first attempt asked and was stopped; the first prompt does not.
+  expect(calls[1].stdin).toContain('Your previous attempt at this step asked a question and was stopped')
+  expect(calls[0].stdin).not.toContain('Your previous attempt')
+})
+
+test('a retry after any other failure carries no ask note', async ($, on) => {
+  const calls: Call[] = []
+  const boom = { out: '', code: 1, err: ['agents-inc run: boom'] }
+  await setup($, on, { agentId: 'rw2', replies: [boom, boom], calls })
+  await step($, 'rw2')
+  expect(calls.length).toBe(2)
+  expect(calls[1].stdin).not.toContain('Your previous attempt')
+})
+
+test('a hand-back that refuses before any tool ran (the sandbox note) gets the push', async ($, on) => {
+  const calls: Call[] = []
+  const blocked = JSON.stringify({ say: 'Blocked: the active filesystem permission profile grants read access only to root.', tools: [{ name: 'SubagentHandback', input: { message: 'Blocked before reading any files: the active filesystem permission profile grants read access only to root, not the repository.' } }] })
+  await setup($, on, { agentId: 'hb1', replies: [blocked, READ], calls, task: 'Read the first 40 lines of a.py.' })
+  const { result } = await step($, 'hb1')
+  expect(calls.length).toBe(2)
+  expect(calls[1].stdin).toContain('Every catalog tool is real')
+  expect(result.toolUses).toEqual([{ name: 'Read', input: { file_path: '/work/a.py' } }])
+})
+
+test('refuses reads say and hand-back messages; a plain report is no refusal', () => {
+  const hb = (message: string) => ({ say: '', tools: [{ name: 'SubagentHandback', input: { message } }] })
+  expect(refuses(hb('Blocked before reading any files: read access only to root.'))).toBe(true)
+  expect(refuses(hb('a.py has 173 lines.'))).toBe(false)
+  expect(refuses({ say: 'I did not read the files: the sandbox only allows root.', tools: [] })).toBe(true)
+  expect(refuses({ say: '', tools: [{ name: 'Read', input: {} }] })).toBe(false)
+  expect(skipsTools(hb('a.py has 173 lines.'), false, 'Read a.py', ['Read'])).toBe(false)
+  expect(skipsTools(hb('Blocked: read access only to root.'), true, 'Read a.py', ['Read'])).toBe(false) // a tool ran
+})
+
+test('an unparsable reply after a fresh-thread retry still gets one correction', async ($, on) => {
+  const calls: Call[] = []
+  await setup($, on, { agentId: 'cr1', replies: [{ out: '', code: 124 }, 'I could not invoke Read in this turn.', READ], calls })
+  const { result } = await step($, 'cr1')
+  expect(calls.length).toBe(3)
+  expect(calls[2].stdin).toContain('Your previous reply was rejected')
+  expect(calls[2].argv.at(-1)).toMatch(/cr1-2\.thread$/)
+  expect(result.toolUses).toEqual([{ name: 'Read', input: { file_path: '/work/a.py' } }])
+})
+
+test('an installed agents-inc without --timeout gets the run again without it', async ($, on) => {
+  const calls: Call[] = []
+  const old = { out: '', code: 2, err: ['agents-inc: error: unrecognized arguments: --timeout 60'] }
+  await setup($, on, { agentId: 'ol1', replies: [old, READ, READ], calls })
+  const { result } = await step($, 'ol1')
+  expect(calls.length).toBe(2)
+  expect(calls[1].argv).not.toContain('--timeout')
+  expect(calls[1].argv.at(-1)).toMatch(/ol1\.thread$/) // same thread: nothing ran
+  expect(result.toolUses).toEqual([{ name: 'Read', input: { file_path: '/work/a.py' } }])
+  await step($, 'ol1', 1)
+  expect(calls[2].argv).not.toContain('--timeout') // remembered for the session
 })

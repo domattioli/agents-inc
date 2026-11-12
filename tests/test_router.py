@@ -34,8 +34,9 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(r.model, _TABLE["tiers"]["grunt"]["codex"])
         self.assertIn("luna", r.model)
 
-    def test_catalog_excludes_unavailable_mistral(self):
-        self.assertIsNone(pick_model("extract", "grunt", {"mistral"}, True))
+    def test_catalog_routes_available_mistral(self):
+        r = pick_model("extract", "grunt", {"mistral"}, True)
+        self.assertEqual(r.model, "ministral-3b-latest")
 
     def test_openrouter_named_chain_with_auto_last(self):
         chain = pick_model_chain("extract", "grunt", {"openrouter"}, True)

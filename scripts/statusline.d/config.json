@@ -4,7 +4,7 @@
   "labels": {"claude-opus-5-5": "OPUS55", "claude-sonnet-5-5": "SON55", "claude-haiku-4-5": "HAI45", "claude-fable-5-1": "FAB51",
              "gpt-6-astra": "ASTRA", "gpt-6-sol": "SOL", "gpt-5.6-terra": "TERRA", "gpt-6-luna": "LUNA"},
   "subscriptions": {"claude": 100, "openai": 20},
-  "prices_json": ["~/Projects/agents_Inc/skills/codex-bridge/reference/prices.json"],
+  "prices_json": ["~/Projects/agents-inc/skills/codex-bridge/reference/prices.json"],
   "openai_price_estimates": {"gpt-6-astra": "claude-fable-5-1", "gpt-6-sol": "claude-opus-5", "gpt-5.6-terra": "claude-sonnet-5", "gpt-6-luna": "claude-haiku-4-5"},
   "usage_db": "~/.codex-bridge/usage.db",
   "codex_state_db": "~/.codex/state_5.sqlite",

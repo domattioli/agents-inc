@@ -1,1 +1,0 @@
-{ "name": "luna-pane", "version": "0.1.0", "description": "A pane beside the chat that streams the newest agents-inc delegate's live events (luna, haiku, any rung).", "types": "./types/index.d.ts" }

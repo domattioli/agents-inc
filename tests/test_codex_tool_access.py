@@ -122,10 +122,26 @@ class RungArgvTest(unittest.TestCase):
         resume = runtime.build_codex_resume_argv(EXE, "019a0000-0000-7000-8000-000000000000", "hi", "luna", "medium",
                                                  Path("/w"), EFF, MAP, host_tools=True)
         for setting in ("include_permissions_instructions=false", "include_collaboration_mode_instructions=false",
-                        "skills.include_instructions=false", "project_doc_max_bytes=0"):
+                        "skills.include_instructions=false", "project_doc_max_bytes=0",
+                        "include_environment_context=false"):  # the <filesystem> permission note (2026-11-11)
             self.assertIn(setting, argv)
             self.assertIn(setting, resume)
             self.assertNotIn(setting, _argv("luna"))
+
+    def test_host_tools_argv_removes_request_user_input(self):
+        # luna asked "Proceed?" through request_user_input until BurnWatch stopped the step (macOS stress, 2026-11-11);
+        # the setting drops the tool from fresh and resumed requests (Codex 0.159.2, captured offline).
+        self._fake_home()
+        setting = "tools.experimental_request_user_input={enabled=false}"
+        argv = build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, False, host_tools=True)
+        resume = runtime.build_codex_resume_argv(EXE, "019a0000-0000-7000-8000-000000000000", "hi", "luna", "medium",
+                                                 Path("/w"), EFF, MAP, host_tools=True)
+        self.assertEqual(argv[argv.index(setting) - 1], "-c")
+        self.assertIn(setting, resume)
+        self.assertNotIn(setting, _argv("luna"))
+        with mock.patch.dict(os.environ, {"AGENTS_INC_LUNA_KEEP_ASK_TOOL": "1"}):
+            kept = build_codex_argv(EXE, "luna", "medium", Path("/w"), EFF, MAP, False, host_tools=True)
+        self.assertNotIn(setting, kept)
 
     def test_host_tools_catalog_ignores_the_env_codex_home(self):
         # plan D3 item 2: the catalog comes from HOME/.codex, the directory auth.json is linked from.

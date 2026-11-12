@@ -171,5 +171,74 @@ class ModHomeTest(unittest.TestCase):
             self.assertEqual(call.kwargs["env"]["HOME"], str(home))
 
 
+class PaneModsTest(unittest.TestCase):
+    """Pane mods (delegate-pane, agents-manager) install by default and are skipped when the release does not ship them."""
+
+    def _paths(self, shipped):
+        from unittest import mock
+        home = Path(tempfile.mkdtemp())
+        self.addCleanup(_rmtree, home)
+        for name in shipped:
+            (home / "current/mods" / name / ".claude-plugin").mkdir(parents=True)
+            (home / "current/mods" / name / ".claude-plugin/plugin.json").write_text("{}")
+        return mock.Mock(home=home, current=home / "current")
+
+    def _run(self, paths, listed=""):
+        from unittest import mock
+        from agents_inc.install import cli
+        def fake(argv, **kw):
+            return subprocess.CompletedProcess(argv, 0, listed if argv[1:3] == ["plugin", "list"] else "", "")
+        notices = []
+        with mock.patch.object(cli.shutil, "which", return_value="claude"), mock.patch.object(cli.subprocess, "run", side_effect=fake) as run:
+            cli.install_pane_mods(paths, notices)
+        return [list(c.args[0][1:]) for c in run.call_args_list], notices
+
+    def test_both_panes_installed_when_shipped(self):
+        calls, notices = self._run(self._paths(["delegate-pane", "agents-manager"]))
+        self.assertIn(["plugin", "install", "delegate-pane@delegate-pane-local"], calls)
+        self.assertIn(["plugin", "install", "agents-manager@agents-manager-local"], calls)
+        self.assertEqual(notices, [])
+
+    def test_unshipped_pane_skipped_and_no_cli_call(self):
+        calls, _ = self._run(self._paths([]))
+        self.assertEqual(calls, [])
+
+    def test_installed_pane_is_refreshed_not_readded(self):
+        calls, _ = self._run(self._paths(["delegate-pane"]), listed="delegate-pane@delegate-pane-local")
+        self.assertIn(["plugin", "update", "delegate-pane@delegate-pane-local"], calls)
+        self.assertFalse(any(c[:2] == ["plugin", "install"] for c in calls))
+
+    def test_repair_repoints_a_marketplace_pinned_to_an_old_release(self):
+        """MOD_VERSION_MISMATCH after repair: the marketplace is a directory source pinned to the old release dir, so
+        `marketplace update` re-read the old plugin.json. A path that differs from the current release is re-added."""
+        paths = self._paths(["delegate-pane"])
+        plugins = paths.home / ".claude/plugins"
+        plugins.mkdir(parents=True)
+        (plugins / "known_marketplaces.json").write_text(json.dumps(
+            {"delegate-pane-local": {"source": {"source": "directory", "path": "/old/release/mods/delegate-pane"}}}))
+        calls, notices = self._run(paths, listed="delegate-pane@delegate-pane-local")
+        target = str((paths.current / "mods/delegate-pane").resolve())
+        self.assertEqual([c for c in calls if c[:2] != ["plugin", "list"]],
+                         [["plugin", "marketplace", "remove", "delegate-pane-local"], ["plugin", "marketplace", "add", target],
+                          ["plugin", "install", "delegate-pane@delegate-pane-local"]])
+        self.assertEqual(notices, [])
+
+    def test_repair_on_the_current_release_only_refreshes(self):
+        paths = self._paths(["delegate-pane"])
+        plugins = paths.home / ".claude/plugins"
+        plugins.mkdir(parents=True)
+        target = str((paths.current / "mods/delegate-pane").resolve())
+        (plugins / "known_marketplaces.json").write_text(json.dumps({"delegate-pane-local": {"source": {"path": target}}}))
+        calls, _ = self._run(paths, listed="delegate-pane@delegate-pane-local")
+        self.assertNotIn(["plugin", "marketplace", "remove", "delegate-pane-local"], calls)
+        self.assertIn(["plugin", "update", "delegate-pane@delegate-pane-local"], calls)
+
+    def test_uninstall_covers_pane_mods(self):
+        from agents_inc.install import cli
+        flat = [" ".join(a) for a in cli.MOD_UNINSTALL_ARGVS]
+        self.assertIn("plugin uninstall delegate-pane@delegate-pane-local", flat)
+        self.assertIn("plugin marketplace remove agents-manager-local", flat)
+
+
 if __name__ == "__main__":
     unittest.main()

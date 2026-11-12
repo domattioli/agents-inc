@@ -47,14 +47,14 @@ export CODEX_BRIDGE_TOKEN=$(openssl rand -hex 32)
 python3 bridge.py --port 8787
 ```
 
-## Develop and stress-test in docker
+## Develop and stress-test
 
-Operator rule, 2026-11-09. Develop, run the full suite, and stress-test in the docker images (`docker/Dockerfile.dev`, `docker/Dockerfile.ci`). The Mac is the consumer: it installs agents-inc and runs it, nothing more. A fix must work with no setup beyond `agents-inc install`. Stress run: `docker run --rm --network none -v "$PWD:/src:ro" -v "$PWD/docker/stress_check.sh:/stress.sh:ro" agents-inc-ci bash /stress.sh`. Docker commands need the sandbox off on the Mac (the socket is blocked).
+See `docs/CONTRIBUTING.md` for the docker flow.
 
 ## Project rules
 
 - Incremental spend is capped at $0 per task. Pause and report quota exhaustion. Do not add a paid API fallback.
-- Claude is the required provider; Codex is optional (2026-10-03). Optional providers may handle only allowed Grunt work. Current optional-provider routing is limited to `extract` and `summarize` tasks.
+- Claude is the required provider; Codex is optional. Optional providers may handle only allowed Grunt work. Current optional-provider routing is limited to `extract` and `summarize` tasks.
 - Confidential inputs may reach optional providers only after explicit per-workspace authorization.
 - A worker never accepts its own output. Use deterministic verification, then a reviewer; the reviewer comes from a different vendor for canon edits and irreversible changes, and may share the vendor for routine code (D46). Record the result in the ledger.
 - `WORKERBEES_GOVERNANCE` defaults to `off`. Do not describe the governed path as enabled by default.
@@ -62,7 +62,7 @@ Operator rule, 2026-11-09. Develop, run the full suite, and stress-test in the d
 - The 14-field delegation prompt contract lives in `skills/workerbee/SKILL.md` Step 11. Apply it to every dispatch that touches this repository, including dispatches from another repository.
 - Third-party wording skills (`caveman`, `structured-gist`, `write-like-scientist`, `handoff-lint`) are optional user-scope installs, never vendored (D42). Installed: invoke them with a real Skill call. Absent: state one line such as `caveman NOT installed -> checked by hand`, apply the rules by hand, and continue. Never claim activation without a successful call.
 - Handoff lint gate (D41, conditional per D42): before any dispatch, run `python3 skills/workerbee/scripts/check_dispatch_prompt.py <prompt>` (mandatory). Add `--with-handoff-lint` to also run the optional `handoff-lint` tool; when it is absent, check H1 to H6 by hand. Apply the same gate in the report direction (`--profile report`) before verifying a delegate's claims. The gate lints and rejects; it never rewrites text.
-- Free Grunt coding is limited to small, narrow diffs with fixed scope. Work that needs design or scope judgment belongs at Workhorse or above.
+- Roles by rung (D78): Workhorse (sonnet, terra) is the default for anything that writes. Work that needs design or scope judgment, review, or gates belongs at Orchestrator (opus, sol). The haiku and luna grunts are read-only. Free-model coding is limited to small, narrow diffs with fixed scope.
 - A failed check means a supervisor verified returned output against the dispatch gate and found it red. Two failed checks for the same task and delegate trigger escalation by one rung with the same vendor. A quota pause counts as one failed attempt. A Lead may assign work with a recorded gate reason. A delegate's own result does not count.
 
 When `CODEX_BRIDGE_MODE=ultra`:
@@ -91,9 +91,6 @@ Use these sources in order:
 
 The delegation model is in `docs/governance/DELEGATION-MODEL.md`. The routing table is in `docs/governance/ROUTING-RANKING.md`. Do not duplicate either one here.
 
-## Governance
+## Branches
 
-This repository is a downstream consumer of `domattioli/DomI`.
-Universal git, coding dispatch, secrets, session lifecycle, and communication rules live in DomI `.claude/policies/`.
 The working branch is `development`; releases use a PR from `development` to `main`. Never push directly to `main` or force-push.
-Spec-kit artifacts and dated plans for this repository live in DomI `specs/consumers/agents_Inc/`, never in a local `specs/`, `.specify/`, or `docs/superpowers/` directory (archived plans: DomI `specs/consumers/agents_Inc/archive/superpowers-plans/`). Session handoffs and teach-me notes stay local and are git-ignored.

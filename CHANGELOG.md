@@ -6,6 +6,11 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-11-11
+
+### Changed
+
+- License files only, no code change. LICENSE is now the official PolyForm Small Business 1.0.0 text, unmodified; the no-AI-training terms moved to LICENSE-AI.md and the required notices to NOTICE, and both still apply (#157).
 ### Fixed
 
 - Dispatch runs go to `.scratch/agents-inc-runs` under the session directory when git ignores `.scratch`, even before that directory exists, so the agents-manager pane lists Codex delegates (#154).
@@ -16,6 +21,11 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- Guest agents for Gemini, Mistral and OpenRouter free models appear as native Agent types (`agents-inc:codestral`, `agents-inc:gemini-flash`, ...). Each needs a per-workspace authorization first (D76).
+- Codex models (`agents-inc:luna`, `sol`, `terra`, `astra`) are native Agent types too. Click a guest agent in the agents pane to read its session and message it. A free-provider guest agent gets no host instruction files, memory section, skills list or sandbox lists.
+- Luna hand-backs that skip tools, stop early, report values no tool produced, or admit missing results get one push. Rate-limit waits follow provider headers.
+- Role settings: `agents-inc install` and `repair` take `--role KEY=VALUE` to override the role defaults (D78, D80).
+- The agents pane names each guest agent's provider.
 - `agents-inc narrate {on,off,status,run}` (prototype): speaks a short digest of each new Claude Code assistant message with macOS `say`. The luna rung summarizes through `agents-inc run`; `--summarizer local` makes no model call. Classification markers skip a message, a failed or quota-paused luna call falls back to a local digest prefixed "local", and the `narrate-on` flag file gates speech. Design: `docs/proposals/narrate.md`.
 
 ## [0.6.2] — 2026-11-07

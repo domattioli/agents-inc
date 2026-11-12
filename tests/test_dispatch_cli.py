@@ -535,7 +535,23 @@ class DispatchCliTest(CliBase):
     def test_quota_pause_reason(self):
         self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 1, "workers-spawned-missing", quota=True), ("red", "quota-paused"))
         self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 1, None), ("red", "rc-nonzero"))
+        # format-only lint failure: green when gates ran and passed, red when nothing vouches for the work
+        self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, None, True, snap="clean"), ("green", "report-format-advisory"))
+        self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, None, False, snap="clean"), ("red", "report-noncompliant"))
+        self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, "gate-failed", True, snap="clean"), ("red", "report-noncompliant"))
         self.assertTrue(dispatch.QUOTA_RE.search("You've hit your session limit \u00b7 resets 2:50pm"))
+
+    def test_kind_routing_free_codex_claude(self):
+        """spec 037 T005: _kind adds "free" and keeps the codex and claude kinds; any other slug is None."""
+        from agents_inc.install import free_launch
+        for slug in dispatch.CODEX_SLUGS:
+            self.assertEqual(dispatch._kind(slug), "codex", slug)
+        for slug in dispatch.CLAUDE_MODELS:
+            self.assertEqual(dispatch._kind(slug), "claude", slug)
+        for slug in free_launch.FREE_MODELS:
+            self.assertEqual(dispatch._kind(slug), "free", slug)
+        for slug in ("gemini-3.1-pro-preview", "mistral-large-latest", "openrouter/free", "nope", ""):
+            self.assertIsNone(dispatch._kind(slug), slug)
 
     def test_allow_paths(self):
         self.assertEqual(dispatch.allow_paths("none (read-only scout)"), [])

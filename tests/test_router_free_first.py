@@ -48,11 +48,21 @@ class TestRouterGoldenIdeal:
         stale = {
             "minimax/minimax-m3:free",
             "minimax/minimax-m2.7:free",
+            "inclusionai/ling-3.0-flash-fin:free",
+            "inclusionai/ling-3.0-flash-sante:free",
+            "poolside/laguna-s-2.1:free",
+            "poolside/laguna-xs-2.1:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "thinkingmachines/inkling-small:free",
+            "thinkingmachines/inkling:free",
+            "z-ai/glm-5.2:free",
+            "nvidia/nemotron-3.5-content-safety:free",
             "google/lyria-3-pro-preview",
             "google/lyria-3-clip-preview",
             "openrouter/free",
         }
-        return [[p, m, t, c] for p, m, t, c in chain if m not in stale]
+        # Golden predates ministral-3b-latest becoming the available mistral grunt route.
+        return [[p, m, t, c] for p, m, t, c in chain if m not in stale and p != "mistral"]
 
     def _pin_codex(self, chain):
         """Golden predates the codex pin bumps; expect today's routing.json codex pin for each row's tier."""
@@ -618,6 +628,34 @@ class TestRouterCaps:
         providers = [r.provider for r in chain]
         assert not any(p in free_providers_set for p in providers), \
             f"All free should be excluded but found: {[p for p in providers if p in free_providers_set]}"
+
+
+class TestBadTaskRefused:
+    """Spec 037 T023/T024: a catalog entry that lists the task as bad is never picked and is refused by dispatch."""
+
+    def test_router_skips_bad_task_entry(self, monkeypatch):
+        from agents_inc import router
+
+        catalog = {"codestral-latest": {"provider": "mistral", "status": "available", "tasks_good": ["summarize"],
+                                        "tasks_bad": []}}
+        monkeypatch.setattr(router, "_CATALOG", catalog)
+        assert router._eligible("codestral-latest", "summarize")
+        catalog["codestral-latest"]["tasks_bad"] = ["summarize"]
+        assert not router._eligible("codestral-latest", "summarize")
+        assert router._eligible("codestral-latest", "extract")
+
+    def test_dispatch_pre_checks_refuse_bad_task_entry(self, tmp_path, monkeypatch):
+        from agents_inc.install import free_launch
+
+        catalog = tmp_path / "models.json"
+        catalog.write_text(json.dumps({"models": {"codestral-latest": {"tasks_bad": ["extract"]}}}))
+        monkeypatch.setattr(free_launch, "MODELS_PATH", catalog)
+        routing = {"optional_allowed_tasks": ["extract", "summarize"]}
+        slots = {"TASK_KIND": "extract", "CLASSIFICATION": "public (x)"}
+        refusal = free_launch.pre_checks(slots, None, routing, model="codestral-latest")
+        assert refusal == "refused-task" and "bad task" in refusal.detail
+        assert free_launch.pre_checks(slots, None, routing, model="ministral-3b-latest") is None
+        assert free_launch.pre_checks({**slots, "TASK_KIND": "summarize"}, None, routing, model="codestral-latest") is None
 
 
 class TestRouterGuards:

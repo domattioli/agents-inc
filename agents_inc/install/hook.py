@@ -2,18 +2,36 @@
 from __future__ import annotations
 import hashlib, json, os, re, sys, tempfile, time
 from datetime import datetime
+from .. import role_defaults
+from .. import native_names
 from .doctor import check_install
 from .paths import InstallPaths
 
 # The rung is the model; the route is always `agents-inc dispatch` (D59, QUICKREF step 2). The earlier wording
 # ("keep this Agent call only if routing selects a Claude rung") approved every Agent call on a Claude-only
 # install, since sonnet and haiku are Claude rungs (token bench dry run, 2026-10-22).
-NUDGE = ("agents-inc reminder: this Agent call bypasses agents-inc routing, the ledger and verification. Use Agent "
-         "only for a read-only foreground scout (Explore, Plan). Any other delegation, including to a Claude rung "
-         "such as sonnet or haiku, goes through `agents-inc dispatch --slots <json> --model <rung>`: naming a model "
-         "picks the rung, not the route.")
-ROUTE_RULE = ("Naming a model (opus, sonnet, haiku) picks the rung, not the route: delegate through "
-              "`agents-inc dispatch`, and use the Agent tool only for read-only foreground scouts (Explore, Plan).")
+# D78 R3 (2026-11-11): a small edit (role_defaults.SMALL_TASK_CALLS tool calls or fewer) may go to a native workhorse
+# subagent; the supervisor then runs one check itself. Read-only scouts are unchanged. gate_deny is not changed:
+# enforce mode still denies that native edit route (D61).
+# D80: the edit clause renders from the `roles` settings on every call; NUDGE and ROUTE_RULE keep the default text.
+def nudge_text(roles: dict | None = None) -> str:
+    edit = role_defaults.native_edit(roles)
+    allowed = (f"a read-only foreground scout (Explore, Plan) or for {edit}; after that edit, run one check yourself, "
+               "because no harness ran gates." if edit else "a read-only foreground scout (Explore, Plan).")
+    return ("agents-inc reminder: this Agent call bypasses agents-inc routing, the ledger and verification. Use Agent "
+            f"only for {allowed} Any other delegation, including to a Claude rung "
+            "such as sonnet or haiku, goes through `agents-inc dispatch --slots <json> --model <rung>`: naming a model "
+            "picks the rung, not the route.")
+
+def route_rule(roles: dict | None = None) -> str:
+    edit = role_defaults.native_edit(roles)
+    allowed = (f"read-only foreground scouts (Explore, Plan) and for {edit}, then run one check yourself." if edit
+               else "read-only foreground scouts (Explore, Plan); every edit goes through `agents-inc dispatch`.")
+    return ("Naming a model (opus, sonnet, haiku) picks the rung, not the route: delegate through "
+            f"`agents-inc dispatch`. Use the Agent tool only for {allowed}")
+
+NUDGE = nudge_text()
+ROUTE_RULE = route_rule()
 # Spec 015 FR-002: a Codex persona name at the start of a Claude subagent description mislabels the model.
 PERSONA_RE = re.compile(r"(?i)\A(?:astra|sol|terra|luna)(?=\s|:|/|\Z)")
 PERSONA_DENY_REASON = ("FR-002: Agent/Task descriptions cannot begin with a Codex persona name. For Codex execution, "
@@ -25,10 +43,13 @@ AGENT_GATE_ENV = "AGENTS_INC_AGENT_GATE"
 AGENT_GATE_MODES = ("enforce", "advisory", "off")
 GATE_ALLOW = frozenset({"Explore", "Plan", "claude-code-guide", "statusline-setup"})
 # The agents-inc mod's native agent types run a Codex model through `agents-inc run` (spec 028): the persona name is
-# the true model and the call is agents-inc's own route, so neither the FR-002 deny nor the gate applies. Exact names,
+# the true model and the call is agents-inc's own route, so neither the FR-002 deny nor the gate applies. The relay type
+# only holds `mcp__agents-inc__run`, so a description such as "Astra analyze" names the model it really runs. Exact names,
 # not a prefix: a lookalike such as x-agents-inc:luna is still an outside spawn. The spike's luna-brain:* types are
 # no longer exempt; the spike mod stays installable but its types now meet the gate like any other.
-NATIVE_TYPES = frozenset({"agents-inc:luna"})
+# Spec 038 T043 (FR-017): every guest agent type (D76, D77) comes from the one nickname list the native registry
+# reads (agents_inc/native_names.py), plus the relay type; no hand-kept literal.
+NATIVE_TYPES = native_names.guest_types() | {native_names.RELAY_TYPE}
 GATE_DENY_REASON = ("agents-inc agent gate: this Agent/Task call is blocked (subagent_type: {subagent}; background: {background}). "
                     "Agent/Task spawns Claude subagents outside agents-inc routing, ledger, and verification. Allowed here: {allowed} "
                     "(foreground only). For every other delegation run: agents-inc dispatch --slots <json> --model <opus|sonnet|haiku|fable>. "
@@ -45,9 +66,14 @@ def session_start(paths: InstallPaths, host: str) -> str:
     report = check_install(paths)
     status = "READY" if report.ready else " ".join(report.codes)
     skill = paths.current / "skills/workerbee/QUICKREF.md"
+    # D78 R4: on Claude the PreToolUse hook injects QUICKREF on the first Agent, Task, DelegateAgent or Bash dispatch
+    # (D53), so the read instruction stays only for the route it does not cover (a direct mcp__agents-inc__run call).
+    # Codex has no PreToolUse hook, so its session keeps the read instruction.
+    read = (f"the first Agent, Task or Bash dispatch loads the quick reference; read {skill} yourself only before a "
+            "direct mcp__agents-inc__run call" if host == "claude" else f"read {skill} before the first dispatch")
     text = (f"agents-inc is installed (doctor: {status}). Every delegation in this session routes through agents-inc; "
-            f"read {skill} before the first dispatch (full SKILL.md only for a non-Claude rung, a prompt from scratch, "
-            f"or a disputed gate). {ROUTE_RULE} Launcher: {paths.launcher}.")
+            f"{read} (full SKILL.md only for a non-Claude rung, a prompt from scratch, "
+            f"or a disputed gate). {route_rule(role_defaults.load(paths.settings))} Launcher: {paths.launcher}.")
     if not report.ready: text += " Tell the operator doctor is not READY and suggest `agents-inc repair --source <agents-inc checkout>`."
     for warning in report.warnings:
         # An install made --without-codex reports WB_CLI_NOT_FOUND as a warning; say what it means so a session
@@ -59,7 +85,8 @@ def session_start(paths: InstallPaths, host: str) -> str:
                  " disagree. Run `agents-inc repair --source <agents-inc checkout>`.")
     if "WB_SANDBOX_EXCLUDE_MISSING" in report.warnings:
         text += (' WB_SANDBOX_EXCLUDE_MISSING: a sandboxed Bash cannot start a dispatch. Ask the operator once, before the'
-                 ' first dispatch, to add "agents-inc *" to sandbox.excludedCommands in ~/.claude/settings.json.')
+                 ' first dispatch, to run `agents-inc repair --yes`, which adds "agents-inc dispatch *" and the other narrow entries to'
+                 ' sandbox.excludedCommands in ~/.claude/settings.json.')
     from .update_check import notice  # at most one PyPI request a day; silent on any failure
     update = notice(paths.state)
     if update: text += " " + update + " Tell the operator once; do not update without their go-ahead."
@@ -82,7 +109,7 @@ def _nudge_text(paths: InstallPaths, payload: dict) -> str:
     marker = paths.state / "nudged" / _session(payload)
     if marker.exists(): return ""
     marker.parent.mkdir(parents=True, exist_ok=True); marker.touch()
-    return NUDGE
+    return nudge_text(role_defaults.load(paths.settings))
 
 def _is_dispatch(payload: dict) -> bool:
     tool = str(payload.get("tool_name") or "")
@@ -110,8 +137,13 @@ _WRAP_OPT_ARG = frozenset({"-u", "-n", "-C", "-P", "-S", "-I", "-a", "-g", "-s",
 _WRAPPERS = frozenset({"env", "exec", "command", "nohup", "time", "nice", "xargs"})
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-# Command heads that run or re-evaluate what follows; shlex cannot see through them, so they fail closed.
-_HIDING_HEADS = frozenset({"{", "}", "if", "then", "do", "else", "elif", "while", "until", "eval", "alias", "source", "."})
+# Grammar keywords: the command after one is judged as a normal command (#152 F1, F2).
+_KEYWORD_HEADS = frozenset({"{", "}", "if", "then", "do", "else", "elif", "while", "until"})
+# Heads that load or rename what follows; shlex cannot see through them, so they fail closed.
+_HIDING_HEADS = frozenset({"alias", "source", "."})
+# Redirection operators: the next word is a file (or fd) operand, never a command word, and the command goes on
+# after it (#152 B7, B8; a `> $D/out.json` target was read as an expanded command head). `<<` takes a delimiter word.
+_REDIRECTS = frozenset({">", ">>", "<", ">|", "&>", "&>>", ">&", "<&", "<>", "<<", "<<-", "<<<"})
 
 def _unquote(text: str) -> str:
     """Drop quote chars and backslashes so a quoted launcher word ('agents-inc') still matches the dispatch regex."""
@@ -162,16 +194,18 @@ def _parse(s: str, i: int, mode: str):
     and nested substitutions with quote-aware closing. mode is "" (top level), "paren" (after `$(`) or "tick" (after a
     backtick). Raises ValueError on an unterminated quote. A heuristic, not a full shell grammar."""
     cmds, ops, subs, cur = [], [], [], []
-    word, depth, pending, delim, n = None, 0, [], None, len(s)
+    word, depth, pending, delim, target, n = None, 0, [], None, False, len(s)
     def end_word():
-        nonlocal word, delim
+        nonlocal word, delim, target
         if word is None: return
-        cur.append(word)
-        if delim is not None: pending.append((word.text, delim, word.quoted)); delim = None
+        if target:  # a redirection operand or heredoc delimiter: data, not a word of the command
+            target = False
+            if delim is not None: pending.append((word.text, delim, word.quoted)); delim = None
+        else: cur.append(word)
         word = None
     def end_cmd():
-        nonlocal cur
-        end_word()
+        nonlocal cur, target
+        end_word(); target = False
         if cur: cmds.append(cur)
         cur = []
     while i < n:
@@ -193,8 +227,13 @@ def _parse(s: str, i: int, mode: str):
             while j < n and s[j] in _OPERATOR_CHARS: j += 1
             op = s[i:j]
             if op == "<<" and s[j:j + 1] == "-": op, j = "<<-", j + 1
+            if op in _REDIRECTS:
+                # `2>`: an unquoted all-digit word glued to the operator is its fd number, not a command word.
+                if word is not None and word.text.isdigit() and word.prefix == word.text: word = None
+                end_word(); ops.append(op); i = j; target = True
+                if op in ("<<", "<<-"): delim = op == "<<-"
+                continue
             end_cmd(); ops.append(op); i = j
-            if op in ("<<", "<<-"): delim = op == "<<-"
         else:
             if word is None: word = _Word()
             if c == "\\":
@@ -236,6 +275,19 @@ def _words_dispatch(words: list) -> bool:
     return (len(words) >= 2 and os.path.basename(words[0].text) == "agents-inc"
             and words[1].text in ("dispatch", "run", "luna"))
 
+def _script_runs_dispatch(script: str) -> str:
+    """Judge a script string run by eval or sh -c: "" when it only mentions agents-inc, else the offending element.
+    Any executed dispatch/run/luna inside denies, compound or not (D72). An unparsable string falls back to the
+    raw-substring rule."""
+    script = _unquote(script)
+    try:
+        level, _ = _parse(script, 0, "")
+    except ValueError:
+        return "unparsable script string" if COMPOUND_DISPATCH_RE.search(script) else ""
+    found, ran, _ = _judge(level, True)
+    if found: return found
+    return "executed dispatch in script string" if ran else ""
+
 def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
     """(offending element or "", an agents-inc dispatch runs at this level or below, env prefix on it)."""
     cmds, _ops, subs = level
@@ -243,10 +295,15 @@ def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
     for words in cmds:
         rest, skipped = list(words), 0
         while rest and rest[0].assign: rest.pop(0); skipped += 1
+        while rest and rest[0].text in _KEYWORD_HEADS: rest.pop(0)
         if not rest: continue
         if could_hide:
             if rest[0].expands or "\n" in rest[0].text: return f"expanded command word {rest[0].text!r}", False, False
             if rest[0].text in _HIDING_HEADS: return f"shell keyword {rest[0].text}", False, False
+            if rest[0].text == "eval":
+                if any(w.expands for w in rest[1:]): return "eval string", False, False
+                inner = _script_runs_dispatch(" ".join(w.text for w in rest[1:]))
+                if inner: return "eval string", False, False
         wrapped, name = rest, os.path.basename(rest[0].text)
         while name in _WRAPPERS:  # the wrapped command is the first word after the wrapper's own options
             k = 1
@@ -259,8 +316,12 @@ def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
             if not wrapped: break
             if _words_dispatch(wrapped): return f"{os.path.basename(rest[0].text)} wrapper", False, False
             name = os.path.basename(wrapped[0].text)
-        if wrapped and name in _SHELLS and any(re.fullmatch(r"-[a-z]*c[a-z]*", w.text) for w in wrapped[1:]) \
-                and any(COMPOUND_DISPATCH_RE.search(_unquote(w.text)) for w in wrapped[1:]): return f"{name} -c string", False, False
+        if wrapped and name in _SHELLS:
+            c_at = next((k for k, w in enumerate(wrapped) if k and re.fullmatch(r"-[a-z]*c[a-z]*", w.text)), None)
+            if c_at is not None and c_at + 1 < len(wrapped):  # words after the script are positional parameters, not code
+                script = wrapped[c_at + 1]
+                if script.expands and "agents-inc" in "".join(w.text for w in wrapped): return f"{name} -c string", False, False
+                if _script_runs_dispatch(script.text): return f"{name} -c string", False, False
         if _words_dispatch(rest):
             dispatch = True; env_prefix = env_prefix or bool(skipped)
     for sub in subs:
@@ -282,7 +343,10 @@ def _dispatch_shape(command: str) -> str:
         return next((m for m in COMPOUND_MARKERS if m in command), "")
     # Fail closed on shapes that can hide a launcher, but only when the call could involve agents-inc at all.
     flat = re.sub(r"\\\n", "", command)
-    could_hide = "agents-inc" in flat or "agents-inc" in re.sub(r"\$\{[^}]*\}|[\\'\"`]", "", flat)
+    # A mention followed by `/` is a directory in a path (a cwd, a repo checkout), never the launcher name, so it alone
+    # does not make the call suspect; `agents-inc` at a word end (bin/agents-inc, X=agents-inc;) still does.
+    def mentions(text: str) -> bool: return bool(re.search(r"agents-inc(?!/)", text))
+    could_hide = mentions(flat) or mentions(re.sub(r"\$\{[^}]*\}|[\\'\"`]", "", flat))
     found, dispatch, env_prefix = _judge(level, could_hide)
     if found: return found
     if not dispatch: return ""
@@ -344,7 +408,37 @@ def write_agent_gate(paths: InstallPaths, mode: str) -> None:
     if mode not in AGENT_GATE_MODES: raise ValueError(f"agent gate mode must be one of {', '.join(AGENT_GATE_MODES)}: {mode!r}")
     write_setting(paths, "agent_gate", mode)
 
-def write_setting(paths: InstallPaths, key: str, value: str) -> None:
+LEGACY_ROUTES_KEY = "legacy_routes"  # spec 038 FR-016: relay type, mcp__agents-inc__run, @alias hook
+
+def legacy_routes(paths: InstallPaths) -> bool:
+    """True only when settings.json says legacy_routes is 'on' (set by install/repair --legacy-routes). Default off:
+    native agent types are the one user-facing route. Never raises; an unreadable file reads as off."""
+    try: data = json.loads(paths.settings.read_text(encoding="utf-8"))
+    except (OSError, ValueError): return False
+    return isinstance(data, dict) and data.get(LEGACY_ROUTES_KEY) == "on"
+
+def write_legacy_routes(paths: InstallPaths, on: bool) -> None:
+    write_setting(paths, LEGACY_ROUTES_KEY, "on" if on else "off")
+
+def write_role(paths: InstallPaths, assignment: str) -> str:
+    """D80: store one `KEY=VALUE` item in settings.json `roles`; VALUE `default` removes the item. Returns a one-line
+    receipt. A bad key or value raises ValueError; a malformed settings file raises RuntimeError (write_setting)."""
+    key, sep, raw = assignment.partition("=")
+    key = key.strip()
+    if not sep: raise ValueError(f"--role needs KEY=VALUE: {assignment!r}")
+    if key not in role_defaults.DEFAULTS: role_defaults.parse_value(key, raw)  # raises naming the known keys
+    try: data = json.loads(paths.settings.read_text(encoding="utf-8")) if paths.settings.exists() else {}
+    except (OSError, ValueError) as exc: raise RuntimeError(f"{paths.settings} is not readable JSON: {exc}") from exc
+    current = data.get(role_defaults.SETTINGS_KEY) if isinstance(data, dict) else None
+    roles = dict(current) if isinstance(current, dict) else {}
+    if raw.strip().lower() == "default":
+        roles.pop(key, None); shown = f"{json.dumps(role_defaults.DEFAULTS[key])} (default)"
+    else:
+        roles[key] = role_defaults.parse_value(key, raw); shown = json.dumps(roles[key])
+    write_setting(paths, role_defaults.SETTINGS_KEY, roles)
+    return f"role {key}={shown} stored in {paths.settings}"
+
+def write_setting(paths: InstallPaths, key: str, value: object) -> None:
     """Persist one key in settings.json atomically with mode 0600, keeping other keys; a malformed file raises."""
     data = {}
     if paths.settings.exists():
@@ -381,7 +475,7 @@ def gate_notice(paths: InstallPaths) -> str:
     mode, source = agent_gate_mode(paths)
     lines = [f"agents-inc added hooks to {paths.home / '.claude/settings.json'}: SessionStart session-start; PreToolUse agent-nudge "
              "(Agent|Task, dispatch-shaped Bash, DelegateAgent); PostToolUse agent-done; UserPromptSubmit at_route; "
-             'sandbox.excludedCommands "agents-inc *" (dispatch runs outside the Bash sandbox; each delegate still gets '
+             'sandbox.excludedCommands "agents-inc dispatch|run|repair|install *" (these run outside the Bash sandbox; each delegate still gets '
              "its own sandbox-exec, #94).",
              f"agent gate: {mode} ({source}). enforce blocks Agent/Task calls except foreground "
              f"{', '.join(sorted(GATE_ALLOW))}."]

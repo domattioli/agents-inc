@@ -42,7 +42,7 @@ class SessionStartWarningsTest(unittest.TestCase):
     def test_sandbox_exclusion_warning_names_the_operator_ask(self):
         text = self._text(("WB_SANDBOX_EXCLUDE_MISSING",))
         self.assertIn("WARNING: WB_SANDBOX_EXCLUDE_MISSING", text)
-        self.assertIn('"agents-inc *"', text)
+        self.assertIn('"agents-inc dispatch *"', text)
         self.assertIn("sandbox.excludedCommands", text)
 
     def test_stale_warning_explains_itself(self):
@@ -68,6 +68,23 @@ class RouteRuleTest(SessionStartWarningsTest):
 
     def test_session_start_carries_route_rule(self):
         self.assertIn(hook.ROUTE_RULE, self._text(()))
+
+    def test_nudge_and_route_rule_allow_small_native_workhorse_edit(self):
+        # D78 R3: edits of 3 or fewer tool calls may go to a native sonnet subagent; scouts stay read-only.
+        for text in (hook.NUDGE, hook.ROUTE_RULE):
+            self.assertIn("read-only foreground scout", text)
+            self.assertIn("3 or fewer tool calls on a native workhorse subagent (model sonnet)", text)
+            self.assertIn("run one check", text)
+
+    def test_claude_session_drops_quickref_read_except_direct_mcp_run(self):
+        # D78 R4: the PreToolUse hook injects QUICKREF on Agent, Task and Bash dispatch (D53).
+        text = self._text(())
+        self.assertNotIn("before the first dispatch", text)
+        self.assertIn("only before a direct mcp__agents-inc__run call", text)
+
+    def test_codex_session_keeps_quickref_read(self):
+        # Codex has no PreToolUse hook, so nothing injects QUICKREF there.
+        self.assertIn("QUICKREF.md before the first dispatch", self._text((), host="codex"))
 
     def test_codex_missing_is_explained_not_a_bare_warning(self):
         text = self._text(("WB_CLI_NOT_FOUND",))

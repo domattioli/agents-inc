@@ -79,6 +79,29 @@ class PersonaDenyTest(_Home):
         result, _ = self.run_hook("agent-nudge", data)
         self.assertNotEqual(self.decision(result), "deny")
 
+    def test_every_guest_type_may_name_its_model(self):
+        for nick in ("sol", "terra", "astra", "gemini-flash", "codestral", "gemma-31b"):
+            with self.subTest(nick=nick):
+                data = payload(f"{nick}: count lines")
+                data["tool_input"]["subagent_type"] = f"agents-inc:{nick}"
+                result, _ = self.run_hook("agent-nudge", data)
+                self.assertNotEqual(self.decision(result), "deny")
+
+    def test_native_types_come_from_the_native_registry_list(self):
+        """FR-017: the gate, the host ledger and the native registry read one nickname list."""
+        from agents_inc import host_ledger, native_names
+        from agents_inc.install import native
+        want = frozenset(f"agents-inc:{n}" for n in native.NATIVE_MODELS)
+        self.assertEqual(hook.NATIVE_TYPES, want | {"agents-inc:relay"})
+        self.assertEqual(host_ledger.NATIVE_LUNA_TYPES, want)
+        self.assertEqual(native_names.guest_types(), want)
+
+    def test_the_native_relay_type_may_name_any_persona(self):
+        data = payload("Astra analyze via agents-inc")
+        data["tool_input"]["subagent_type"] = "agents-inc:relay"
+        result, _ = self.run_hook("agent-nudge", data)
+        self.assertNotEqual(self.decision(result), "deny")
+
     def test_spike_and_lookalike_types_get_the_persona_check(self):
         for subagent in ("luna-brain:luna", "x-agents-inc:luna"):
             with self.subTest(subagent=subagent):

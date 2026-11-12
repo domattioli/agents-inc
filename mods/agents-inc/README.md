@@ -37,8 +37,7 @@ mcp__agents-inc__run
 Start a relay with the Agent tool: `subagent_type: "agents-inc:relay"`, with the model and the slots file path in the prompt. The tool refuses these calls:
 
 - not made through a subagent (no `agentId`);
-- free models (gemini, mistral, openrouter): use `agent.sh` for those;
-- a model outside `fable opus sonnet haiku astra sol terra luna`;
+- a model outside `fable opus sonnet haiku astra sol terra luna` and the free slugs that `agents-inc dispatch` runs (spec 037: `agents_inc/install/free_launch.py` FREE_MODELS, such as `gemini-3.8-flash` or `codestral-latest`); a family name such as `gemini` is not a slug;
 - a slots path that is not inside the session directory.
 
 Rows are capped at 600 notices per call. Later rows are held back, and one notice per 60 s says how many; the full log stays in `<run dir>/events.jsonl`.
@@ -46,6 +45,8 @@ Rows are capped at 600 notices per call. Later rows are held back, and one notic
 ## The luna subagent type
 
 The mod also adds `agents-inc:luna`, a native subagent type. Start it with the Agent tool: `subagent_type: "agents-inc:luna"`. It works like a haiku subagent in the transcript, but each step is answered by luna through Codex. The Codex process is given no tools of its own, so the Claude Code permission rules are the only gate on what luna does.
+
+The step loop is shared code in `hooks/native/loop.ts`; everything about Codex (prompt lines, pushes, the `agents-inc run` command, exit codes) is in the Codex adapter, `hooks/native/codex.ts`. `hooks/luna.ts` only connects the two. Later providers get their own adapter on the same loop (spec 038).
 
 - The type is registered only when `agents-inc luna status --json` says `offered: true`. Codex must be installed and logged in, and Codex's `models_cache.json` must hold an entry for the luna model. `agents-inc doctor` prints `luna type: ready`, `off` or `unavailable (<code>)`.
 - `agents-inc luna off` hides the type from new sessions. `agents-inc luna on` brings it back.

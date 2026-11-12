@@ -45,11 +45,31 @@ class AtRouteInstallTest(unittest.TestCase):
 
     def tearDown(self): self.tmp.cleanup()
 
-    def _args(self): return argparse.Namespace(source=str(self.source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False)
+    # The @alias route is a legacy route (spec 038 FR-016): these tests install with --legacy-routes.
+    def _args(self, legacy=True): return argparse.Namespace(source=str(self.source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False, yes=True, legacy_routes=legacy)
 
-    def _install(self):
+    def _install(self, legacy=True):
         with mock.patch.object(cli, "_paths", return_value=self.paths):
-            self.assertEqual(cli.install(self._args()), 0)
+            self.assertEqual(cli.install(self._args(legacy)), 0)
+
+    # Spec 038 FR-016: off by default; --legacy-routes keeps it; a plain repair keeps the stored choice.
+    def test_default_install_writes_no_prompt_hook_and_no_alias_links(self):
+        self._install(legacy=None)
+        self.assertEqual(self._prompt_commands(), [])
+        self.assertEqual(sorted(p.name for p in self.bin.glob("@*")), [])
+
+    def test_legacy_routes_choice_persists_across_a_plain_repair(self):
+        self._install(legacy=True)
+        self._install(legacy=None)
+        self.assertEqual(len(self._prompt_commands()), 1)
+        self.assertEqual(json.loads(self.paths.settings.read_text())["legacy_routes"], "on")
+
+    def test_no_legacy_routes_drops_the_prompt_hook(self):
+        self._install(legacy=True)
+        self._install(legacy=False)
+        self.assertEqual(self._prompt_commands(), [])
+        self._install(legacy=None)
+        self.assertEqual(self._prompt_commands(), [])
 
     def _prompt_commands(self):
         config = json.loads(self.settings.read_text())

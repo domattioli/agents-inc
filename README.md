@@ -27,7 +27,7 @@
 
 ## 1. Status & Roadmap
 
-Version 0.6.2. The project is experimental and pre-MVP. The governed path (`WORKERBEES_GOVERNANCE`) is off by default. Changes per release are in the [CHANGELOG](https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md). The build plan and cut line are in [docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md). Open work is tracked in [the issues](https://github.com/domattioli/agents-inc/issues).
+Version 0.6.3. The project is experimental and pre-MVP. The governed path (`WORKERBEES_GOVERNANCE`) is off by default. Changes per release are in the [CHANGELOG](https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md). The build plan and cut line are in [docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md). Open work is tracked in [the issues](https://github.com/domattioli/agents-inc/issues).
 
 - **Now:** measure the token cost of delegation against doing the work in one session, and port the test suite to Windows ([#138](https://github.com/domattioli/agents-inc/issues/138)).
 - **Next:** let a Worker launched by a broker lead its own Workers ([#73](https://github.com/domattioli/agents-inc/issues/73)).
@@ -59,12 +59,12 @@ Restart Claude Code (and Codex, if used) after the install. `agents-inc install 
 
 ### Hooks this installs
 
-`agents-inc install` adds these hooks to `~/.claude/settings.json`, plus `"agents-inc *"` under `sandbox.excludedCommands` so a sandboxed Bash can start a dispatch (each delegate still gets its own `sandbox-exec`). It prints the list when it runs. `agents-inc unwire` removes only these entries.
+`agents-inc install` adds these hooks to `~/.claude/settings.json`, plus `"agents-inc dispatch *"`, `"agents-inc run *"`, `"agents-inc repair *"` and `"agents-inc install *"` under `sandbox.excludedCommands` so a sandboxed Bash can start a dispatch (each delegate and each gate still gets its own `sandbox-exec`). It prints the entries first and asks before writing; `--yes` skips the question, and with no terminal and no `--yes` it writes nothing and prints the command to run. `--no-sandbox-exclude` leaves the exclusion out. `repair` replaces an older `"agents-inc *"` entry with the narrow ones. `agents-inc unwire` removes only these entries.
 
 - `SessionStart`: loads the delegation mandate into each session.
 - `PreToolUse` on `Agent`/`Task`, dispatch-shaped `Bash` and `DelegateAgent`: adds a routing nudge, warns on duplicate dispatches, blocks persona impersonation, and runs the agent gate.
 - `PostToolUse` on `Agent`/`Task`: marks the dispatch done.
-- `UserPromptSubmit`: routes `@alias` side questions.
+- `UserPromptSubmit`: routes `@alias` side questions. Only with `--legacy-routes` (see below).
 
 **Agent gate.** Claude's `Agent` tool skips agents-inc routing, prompt lint, the ledger and verification. The gate decides what happens to those calls.
 
@@ -78,6 +78,10 @@ Restart Claude Code (and Codex, if used) after the install. `agents-inc install 
 - One session only: launch with `AGENTS_INC_AGENT_GATE=off claude` (or `enforce`).
 - Check: `agents-inc doctor` prints `agent gate: <mode> (<source>)`.
 - Remove every agents-inc hook: `agents-inc unwire`. Other hooks stay. `agents-inc repair` adds them back.
+
+**The route: native agent types.** With the agents-inc mod, Claude Code lists each delegate model as its own subagent type, such as `agents-inc:luna` or `agents-inc:gemini-flash`. Call it with the `Agent` tool like any subagent; its transcript is the normal subagent view, and the delegate pane lists the registered types and this session's native agents. `agents-inc native status` shows which types are offered and why. `agents-inc dispatch` stays as a command for scripts, CI and broker Workers.
+
+The older routes (the `agents-inc:relay` type, the `mcp__agents-inc__run` tool and `@alias` side questions) are off by default. `agents-inc install --legacy-routes` (or `repair --legacy-routes`) keeps them; the choice is stored in `~/.config/agents-inc/settings.json`, so a later plain `repair` keeps it, and `--no-legacy-routes` turns them off again. This change is proposed in D79 and awaits operator acceptance.
 
 **Using agents-inc without the gate.**
 
@@ -117,7 +121,7 @@ Every dispatch prompt carries a `REPORTING CHAIN` line derived from the ladder, 
 
 **Narrate (prototype, macOS).** `agents-inc narrate on` enables a watcher; `agents-inc narrate run` follows the active Claude Code transcript and speaks a two-sentence digest of each new assistant message with `say`. luna writes the digest through `agents-inc run`, so message text leaves the machine: messages with a classification marker are skipped, and `--summarizer local` makes no model call. Other options: `--voice`, `--transcript`, `--decide-only`, `--once`, `--dry-run`; `off` and `status` complete the set. Design: [docs/proposals/narrate.md](https://github.com/domattioli/agents-inc/blob/main/docs/proposals/narrate.md).
 
-Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. `@haiku <question>` inside any Claude Code session sends one side question to a cheaper model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
+Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. With `--legacy-routes`, `@haiku <question>` inside any Claude Code session sends one side question to a cheaper model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
 
@@ -141,7 +145,7 @@ The full description, including the delegation limits, the 14-element prompt con
 - The governed path is off by default, so a fresh install does not run the enforced cross-vendor review.
 - Cross-vendor review catches disagreement between models. It does not catch a blind spot that both vendors share.
 - Deterministic checks cover what a script can express, such as a file, a quote or an exit code. They do not replace human judgment on scope or design.
-- `agents-inc dispatch` must run outside the Claude Code or Codex sandbox, because the sandbox blocks the provider API. Inside it, dispatch exits 69 before any delegate starts and prints the fix: add `"agents-inc *"` to `sandbox.excludedCommands`. `agents-inc install` and `repair` add that entry; `agents-inc doctor` warns `WB_SANDBOX_EXCLUDE_MISSING` when it is gone.
+- `agents-inc dispatch` must run outside the Claude Code or Codex sandbox, because the sandbox blocks the provider API. Inside it, dispatch exits 69 before any delegate starts and prints the fix: add `"agents-inc dispatch *"` to `sandbox.excludedCommands`. `agents-inc install` and `repair` add that entry; `agents-inc doctor` warns `WB_SANDBOX_EXCLUDE_MISSING` when it is gone.
 - Free-model capacity varies: a probe on 2026-09-29 found 429 or capacity errors on several free models ([docs/BENCH.md](https://github.com/domattioli/agents-inc/blob/main/docs/BENCH.md)). Artifacts stay local; remote publication (Bindle Backend B) is not built.
 
 Updates: new sessions and `agents-inc doctor` tell you when a newer release is on PyPI (one check a day; `AGENTS_INC_NO_UPDATE_CHECK=1` turns it off).

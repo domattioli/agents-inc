@@ -1,7 +1,7 @@
 {
   "name": "agents-inc",
-  "version": "0.2.0",
-  "description": "Live view of agents-inc delegates: a relay subagent whose transcript shows the delegate's events.",
+  "version": "0.6.3",
+  "description": "agents-inc native agent types: luna and guest models as Claude Code subagent types. The relay route stays only with --legacy-routes.",
   "mcpServers": {
     "delegate-agent": {
       "command": "sh",

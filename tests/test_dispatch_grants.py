@@ -220,7 +220,7 @@ class ToolGrantTest(GrantsBase):
         self.assertIsInstance(spec["allowed_tools"], list)
         self.assertIsInstance(spec["disallowed_tools"], list)
         self.assertEqual(spec["gate_results"][0]["rc"], 0)
-        self.assertEqual(set(spec["gate_results"][0]), {"argv", "cwd", "expect_rc", "rc", "excerpt"})
+        self.assertEqual(set(spec["gate_results"][0]), {"argv", "cwd", "expect_rc", "rc", "excerpt", "network"})  # G: network opt-in recorded
 
     def test_dry_run_records_grants(self):
         rc, out, _ = self._main("--slots", str(self._slots(GATES=[{"argv": PASS}])), "--model", "haiku",
@@ -322,6 +322,13 @@ class GateParseTest(unittest.TestCase):
         self.assertIsNone(why)
         self.assertEqual(gates, [{"argv": ["true"], "cwd": ".", "timeout_s": 1.5, "expect_rc": 3}])
 
+    def test_parse_gates_network_flag(self):
+        rd = dispatch._load("render_dispatch", dispatch.SCRIPTS)
+        gates, why = rd.parse_gates([{"argv": ["true"], "network": True}, {"argv": ["true"]}])
+        self.assertIsNone(why)
+        self.assertTrue(gates[0]["network"]); self.assertNotIn("network", gates[1])
+        self.assertIsNotNone(rd.parse_gates([{"argv": ["true"], "network": "yes"}])[1])
+
     def test_parse_gates_rejects(self):
         bad = ["{nope", {"argv": ["true"]}, 5, [1], [{}], [{"argv": []}], [{"argv": ["a", ""]}], [{"argv": ["a\nb"]}],
                [{"argv": ["a"], "extra": 1}], [{"argv": ["a"], "cwd": "/tmp"}], [{"argv": ["a"], "cwd": "x/../y"}],
@@ -409,6 +416,56 @@ class GateRunTest(GrantsBase):
         rc, out, _ = self._dispatch(GATES=gates, **kw)
         return rc, out, self._spec()
 
+    # G (2026-11-11): gates run under sandbox-exec; without it run.json says gate_sandbox: unavailable.
+    def test_gate_sandbox_unavailable_is_recorded_and_gate_runs(self):
+        with mock.patch.object(dispatch, "sandbox_available", return_value=False):
+            rc, _, spec = self._gate_run([{"argv": PASS}])
+        self.assertEqual((rc, spec["outcome"], spec["gate_sandbox"]), (0, "green", "unavailable"))
+        self.assertFalse(spec["gate_results"][0]["network"])
+
+    def test_gate_network_opt_in_recorded(self):
+        with mock.patch.object(dispatch, "sandbox_available", return_value=False):
+            _, _, spec = self._gate_run([{"argv": PASS, "network": True}])
+        self.assertTrue(spec["gate_results"][0]["network"])
+        self.assertTrue(spec["gate_commands"][0]["network"])
+
+    def test_gate_profile_denies_network_unless_opted_in(self):
+        base = dispatch.gate_sandbox_profile(self.repo, self.root, str(self.root / "t"))
+        self.assertIn("(deny network*)", base)
+        self.assertNotIn("(deny network*)", dispatch.gate_sandbox_profile(self.repo, self.root, str(self.root / "t"), True))
+        self.assertIn(f'(require-not (subpath "{self.repo}"))', base)
+
+    def test_gate_argv_wrapped_in_sandbox_exec_when_available(self):
+        seen = []
+        real = dispatch.subprocess.run
+        def spy(argv, *a, **kw):
+            if kw.get("timeout") is not None and "-f" in argv[:3]: seen.append(list(argv))
+            return real([a for a in argv[3:]] if argv[:1] == [dispatch.SANDBOX_EXEC] else argv, *a, **kw)
+        with mock.patch.object(dispatch, "sandbox_available", return_value=True), \
+             mock.patch.object(dispatch.subprocess, "run", side_effect=spy):
+            rc, _, spec = self._gate_run([{"argv": PASS}])
+        self.assertEqual(spec["gate_sandbox"], "sandbox-exec")
+        self.assertTrue(seen and seen[0][0] == dispatch.SANDBOX_EXEC and seen[0][3:] == PASS, seen)
+
+    def _real_sandbox(self):
+        dispatch._SANDBOX_OK = None
+        if not dispatch.sandbox_available():
+            self.skipTest("sandbox-exec cannot start here (non-macOS, docker, or a nested sandbox)")
+
+    def test_real_sandbox_gate_cannot_write_outside_cwd(self):
+        self._real_sandbox()
+        outside = self.root / "outside.txt"
+        _, _, spec = self._gate_run([{"argv": [sys.executable, "-c", f"open({str(outside)!r}, 'w').write('x')"]}])
+        self.assertNotEqual(spec["gate_results"][0]["rc"], 0)
+        self.assertFalse(outside.exists())
+
+    def test_real_sandbox_gate_can_write_inside_cwd(self):
+        self._real_sandbox()
+        inside = self.repo / "gate-out.txt"
+        _, _, spec = self._gate_run([{"argv": [sys.executable, "-c", f"open({str(inside)!r}, 'w').write('x')"]}])
+        self.assertEqual(spec["gate_results"][0]["rc"], 0)
+        self.assertTrue(inside.exists())
+
     def test_passing_gate_is_green(self):
         rc, out, spec = self._gate_run([{"argv": PASS}])
         self.assertEqual((rc, spec["outcome"], spec["reason"]), (0, "green", None))
@@ -434,6 +491,19 @@ class GateRunTest(GrantsBase):
             rc, _, spec = self._gate_run([{"argv": ["/nonexistent/bin/xyz"]}])
         self.assertEqual((rc, spec["outcome"], spec["reason"]), (1, "red", "gate-missing"))
         self.assertIsNone(spec["gate_results"][0]["rc"])
+        self.assertEqual(spec["gate_results"][0]["error"], "FileNotFoundError")
+
+    def test_missing_binary_is_gate_missing_under_sandbox(self):
+        # Sandboxed gates: sandbox-exec would start and exit non-zero, so the binary is resolved before wrapping.
+        real = subprocess.run
+        with mock.patch.object(dispatch, "capability_preflight", return_value=[]), \
+                mock.patch.object(dispatch, "sandbox_available", return_value=True), \
+                mock.patch.object(dispatch.subprocess, "run") as run:
+            run.side_effect = lambda a, *k, **kw: (mock.Mock(returncode=71, stdout="", stderr="")
+                                                   if a[0] == dispatch.SANDBOX_EXEC else real(a, *k, **kw))
+            rc, _, spec = self._gate_run([{"argv": ["/nonexistent/bin/xyz"]}])
+        self.assertFalse([c for c in run.call_args_list if c.args and c.args[0][0] == dispatch.SANDBOX_EXEC])
+        self.assertEqual((rc, spec["reason"]), (1, "gate-missing"))
         self.assertEqual(spec["gate_results"][0]["error"], "FileNotFoundError")
 
     def test_timeout_is_gate_missing(self):
@@ -505,7 +575,7 @@ class GateRunTest(GrantsBase):
 
 class ResumeGateTest(GrantsBase):
     def test_resume_reuses_lists_and_reruns_gates(self):
-        counter = self.root / "count"
+        counter = self.repo / ".git" / "count"  # inside the gate cwd (sandbox allows it), untracked so the snapshot stays clean
         gate = [{"argv": [sys.executable, "-c", f"open({str(counter)!r}, 'a').write('x')"]}]
         self._dispatch(GATES=gate)
         run = self._run_dir()

@@ -1,5 +1,6 @@
 {
-  "version": "2026-09-05.1",
+  "version": "2026-11-09.1",
+  "probed": "2026-11-09",
   "_note": "tasks_good/tasks_bad = raw per-model task quality, NOT the AGENTS.md economic dispatch policy; the two axes need not agree.",
   "models": {
     "haiku": {
@@ -126,15 +127,38 @@
       "cost_class": "cheap",
       "status": "available"
     },
-    "mistral-small-latest": {
+    "gemini-3.8-flash": {
+      "vendor": "google",
+      "provider": "gemini",
+      "nickname": "gemini-flash",
+      "tier": "grunt",
+      "tasks_good": ["extract", "classify", "summarize"],
+      "tasks_bad": ["review-of-record", "orchestrate"],
+      "ctx_hint": 100000,
+      "cost_class": "cheap",
+      "status": "available"
+    },
+    "codestral-latest": {
       "vendor": "mistral",
       "provider": "mistral",
+      "nickname": "codestral",
       "tier": "grunt",
-      "tasks_good": [],
-      "tasks_bad": ["extract", "summarize", "draft", "code-write", "code-review", "orchestrate"],
+      "tasks_good": ["extract", "classify", "summarize", "code-write"],
+      "tasks_bad": ["review-of-record", "orchestrate"],
       "ctx_hint": 32000,
       "cost_class": "cheap",
-      "status": "unavailable"
+      "status": "available"
+    },
+    "ministral-3b-latest": {
+      "vendor": "mistral",
+      "provider": "mistral",
+      "nickname": "ministral",
+      "tier": "grunt",
+      "tasks_good": ["extract", "summarize", "classify"],
+      "tasks_bad": ["review-of-record", "code-review", "orchestrate"],
+      "ctx_hint": 32000,
+      "cost_class": "cheap",
+      "status": "available"
     },
     "openrouter/auto:free": {
       "vendor": null,
@@ -146,29 +170,10 @@
       "cost_class": "free",
       "status": "unprobed"
     },
-    "inclusionai/ling-3.0-flash-sante:free": {
-      "vendor": "inclusionai",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["extract", "summarize", "classify"],
-      "tasks_bad": ["draft", "code-write", "code-review", "orchestrate"],
-      "ctx_hint": 16000,
-      "cost_class": "free",
-      "status": "unprobed"
-    },
-    "inclusionai/ling-3.0-flash-fin:free": {
-      "vendor": "inclusionai",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["extract", "classify", "summarize"],
-      "tasks_bad": ["draft", "review-draft", "code-write", "code-review", "orchestrate"],
-      "ctx_hint": 16000,
-      "cost_class": "free",
-      "status": "unprobed"
-    },
     "dots-studio/dots-3-note-preview:free": {
       "vendor": "dots-studio",
       "provider": "openrouter",
+      "nickname": "dots-note",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize"],
       "tasks_bad": ["draft", "code-write", "code-review", "orchestrate"],
@@ -189,52 +194,13 @@
     "nvidia/nemotron-3.5-lightning:free": {
       "vendor": "nvidia",
       "provider": "openrouter",
+      "nickname": "nemotron-lightning",
       "tier": "grunt",
       "tasks_good": ["extract", "classify", "summarize"],
       "tasks_bad": ["review-of-record", "code-review", "orchestrate", "code-write"],
       "ctx_hint": 32000,
       "cost_class": "free",
-      "status": "unprobed"
-    },
-    "thinkingmachines/inkling-small:free": {
-      "vendor": "thinkingmachines",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["classify"],
-      "tasks_bad": ["draft", "review-draft", "code-write", "code-review", "orchestrate"],
-      "ctx_hint": 4000,
-      "cost_class": "free",
-      "status": "unprobed"
-    },
-    "poolside/laguna-s-2.1:free": {
-      "vendor": "poolside",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["code-write", "draft"],
-      "tasks_bad": ["review-of-record", "orchestrate"],
-      "ctx_hint": 32000,
-      "cost_class": "free",
-      "status": "unprobed"
-    },
-    "thinkingmachines/inkling:free": {
-      "vendor": "thinkingmachines",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["extract", "summarize", "classify"],
-      "tasks_bad": ["review-of-record", "orchestrate"],
-      "ctx_hint": 32000,
-      "cost_class": "free",
-      "status": "unprobed"
-    },
-    "poolside/laguna-xs-2.1:free": {
-      "vendor": "poolside",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["code-write"],
-      "tasks_bad": ["review-of-record", "code-review", "orchestrate"],
-      "ctx_hint": 8000,
-      "cost_class": "free",
-      "status": "unprobed"
+      "status": "available"
     },
     "cohere/north-mini-code:free": {
       "vendor": "cohere",
@@ -246,29 +212,10 @@
       "cost_class": "free",
       "status": "unprobed"
     },
-    "z-ai/glm-5.2:free": {
-      "vendor": "z-ai",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["extract", "summarize", "draft", "classify"],
-      "tasks_bad": ["review-of-record", "orchestrate", "code-write"],
-      "ctx_hint": 32000,
-      "cost_class": "free",
-      "status": "unprobed"
-    },
-    "nvidia/nemotron-3.5-content-safety:free": {
-      "vendor": "nvidia",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["classify"],
-      "tasks_bad": ["draft", "code-write", "code-review", "orchestrate"],
-      "ctx_hint": 4000,
-      "cost_class": "free",
-      "status": "unprobed"
-    },
     "nvidia/nemotron-3-ultra-550b-a55b:free": {
       "vendor": "nvidia",
       "provider": "openrouter",
+      "nickname": "nemotron-ultra",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize", "draft", "code-write", "classify"],
       "tasks_bad": ["review-of-record"],
@@ -276,19 +223,10 @@
       "cost_class": "free",
       "status": "unprobed"
     },
-    "minimax/minimax-m3:free": {
-      "vendor": "minimax",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["extract", "summarize", "draft", "code-write", "classify", "orchestrate"],
-      "tasks_bad": [],
-      "ctx_hint": 64000,
-      "cost_class": "free",
-      "status": "unavailable"
-    },
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
       "vendor": "nvidia",
       "provider": "openrouter",
+      "nickname": "nemotron-nano",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize", "classify"],
       "tasks_bad": ["review-of-record", "orchestrate"],
@@ -299,6 +237,7 @@
     "google/gemma-4-26b-a4b-it:free": {
       "vendor": "google",
       "provider": "openrouter",
+      "nickname": "gemma-26b",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize", "draft", "classify"],
       "tasks_bad": ["review-of-record", "orchestrate"],
@@ -309,6 +248,7 @@
     "google/gemma-4-31b-it:free": {
       "vendor": "google",
       "provider": "openrouter",
+      "nickname": "gemma-31b",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize", "draft", "code-write", "classify"],
       "tasks_bad": ["review-of-record", "orchestrate"],
@@ -335,26 +275,6 @@
       "ctx_hint": 0,
       "cost_class": "free",
       "status": "unavailable"
-    },
-    "minimax/minimax-m2.7:free": {
-      "vendor": "minimax",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["extract", "summarize", "draft", "code-write", "classify"],
-      "tasks_bad": [],
-      "ctx_hint": 64000,
-      "cost_class": "free",
-      "status": "unavailable"
-    },
-    "nvidia/nemotron-3-super-120b-a12b:free": {
-      "vendor": "nvidia",
-      "provider": "openrouter",
-      "tier": "grunt",
-      "tasks_good": ["extract", "summarize", "draft", "code-write", "classify"],
-      "tasks_bad": [],
-      "ctx_hint": 64000,
-      "cost_class": "free",
-      "status": "unprobed"
     },
     "openrouter/free": {
       "vendor": null,

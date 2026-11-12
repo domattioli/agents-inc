@@ -53,8 +53,8 @@ if [ "$run_collector" -eq 1 ] && [ -n "$sid" ] && [ -f "$SELF_DIR/statusline.d/c
   else runner=""; fi
   cl5_reset_arg=""
   [ -n "$cl5_reset" ] && cl5_reset_arg="--claude-h5-resets-at $cl5_reset"
-  if [ -n "$runner" ]; then "$runner" 5s python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --current-claude-model "$cur_id_raw" $cl5_reset_arg >/dev/null 2>&1 || true
-  else python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --current-claude-model "$cur_id_raw" $cl5_reset_arg >/dev/null 2>&1 || true; fi
+  if [ -n "$runner" ]; then "$runner" 5s python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" $cl5_reset_arg >/dev/null 2>&1 || true
+  else python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" $cl5_reset_arg >/dev/null 2>&1 || true; fi
 fi
 
 # Deterministic time-throttled background usage-DB ingest (not LLM-triggered; fire-and-forget, never blocks render).

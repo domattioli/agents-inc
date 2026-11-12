@@ -39,5 +39,24 @@ class QuickrefMustParityTest(unittest.TestCase):
                 self.assertIn(kw.lower(), quick)
 
 
+class DispatchGateD78Test(unittest.TestCase):
+    """D78: three-way dispatch gate and roles by rung in QUICKREF and SKILL.md."""
+    def test_quickref_gate_and_ladder(self):
+        quick = QUICKREF.read_text(encoding="utf-8")
+        self.assertNotIn("Three or fewer: do it yourself", quick)
+        self.assertIn("Three or fewer that write nothing: do it yourself", quick)
+        self.assertIn("Three or fewer that edit files: a native workhorse subagent", quick)
+        self.assertIn("| grunt | haiku | luna | read-only", quick)
+        self.assertIn("| workhorse | sonnet | terra | default for anything that writes", quick)
+
+    def test_skill_step0_and_grunt_rule(self):
+        skill = SKILL.read_text(encoding="utf-8")
+        step0 = step_text(skill, "Step 0:")
+        self.assertNotIn("If the estimate is 3 or", step0)
+        self.assertIn("3 or fewer, edits files:", step0)
+        self.assertNotIn("editing goes to grunt", skill)
+        self.assertIn("editing goes to workhorse", skill)
+
+
 if __name__ == "__main__":
     unittest.main()

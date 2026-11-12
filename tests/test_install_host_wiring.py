@@ -16,6 +16,59 @@ def _receipt():
     return InstallReceipt("a" * 64, Path("/usr/bin/python3"), None)
 
 
+class ManagedBlockTextTest(unittest.TestCase):
+    """D78 R4: heading plus at most 5 body lines; the rules come from role_defaults."""
+    def setUp(self):
+        from agents_inc.install.host_wiring import block_text
+        self.text = block_text(InstallPaths.for_home(Path("/home/u")))
+        lines = self.text.splitlines()
+        self.body = lines[lines.index(BEGIN) + 1:lines.index(END)]
+
+    def test_body_is_heading_plus_at_most_five_lines(self):
+        self.assertTrue(self.body[0].startswith("## agents-inc delegation"))
+        self.assertLessEqual(len(self.body[1:]), 5, self.body)
+        self.assertNotIn("", self.body)
+
+    def test_no_quickref_read_instruction_in_parenthesis_form(self):
+        self.assertNotIn("QUICKREF.md` (", self.text)
+        self.assertNotIn("Before the first dispatch in a session, read", self.text)
+
+    def test_block_carries_each_ruling_from_role_defaults(self):
+        from agents_inc import role_defaults
+        for line in (role_defaults.ROUTE_LINE, role_defaults.EXECUTIVE_LINE, role_defaults.ROLES_LINE, role_defaults.GATE_LINE):
+            self.assertIn(f"- {line}", self.body)
+        self.assertIn("session hook supplies health status and the quick reference", self.text)
+        self.assertNotIn("Launcher:", self.text)  # SessionStart prints launcher and health
+
+    def test_block_is_smaller_than_before(self):
+        from agents_inc.install.host_wiring import block_text
+        text = block_text(InstallPaths.for_home(Path("/Users/domattioli")))
+        self.assertLessEqual(len(text.encode()), 1200)  # 1466 bytes for this home before D78, 1153 after
+
+    def test_block_still_replaces_an_old_block(self):
+        old = f"# mine\n\n{BEGIN}\nold rule\n{END}\n"
+        self.assertEqual(upsert_block(old, self.text), "# mine\n\n" + self.text)
+
+
+class RoleDefaultsTest(unittest.TestCase):
+    def test_writing_defaults_to_workhorse_not_grunt(self):
+        from agents_inc import role_defaults
+        self.assertEqual(role_defaults.WRITE_RUNG, "workhorse")
+        self.assertEqual(role_defaults.NATIVE_EDIT_MODEL, "sonnet")
+        self.assertEqual(role_defaults.SMALL_TASK_CALLS, 3)
+        self.assertIn("read-only", role_defaults.RUNG_ROLES["grunt"])
+        self.assertIn("writes", role_defaults.RUNG_ROLES["workhorse"])
+        self.assertEqual(role_defaults.RUNG_ROLES["executive"], "judgment only")
+
+    def test_gate_line_has_three_outcomes(self):
+        from agents_inc import role_defaults
+        gate = role_defaults.GATE_LINE
+        self.assertIn("no writes: do it yourself", gate)
+        self.assertIn("with edits: native workhorse subagent", gate)
+        self.assertIn("one check yourself", gate)
+        self.assertIn("`agents-inc dispatch`", gate)
+
+
 class HostWiringTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.home = Path(self.tmp.name) / "home"
@@ -103,8 +156,8 @@ class HostWiringTest(unittest.TestCase):
         from agents_inc.install.host_wiring import HOSTS, add_hooks, strip_hooks
         claude = next(h for h in HOSTS if h.name == "claude")
         config = add_hooks({"sandbox": {"excludedCommands": ["docker *"]}}, self.paths, claude)
-        self.assertEqual(config["sandbox"]["excludedCommands"], ["docker *", "agents-inc *"])
-        self.assertEqual(add_hooks(config, self.paths, claude)["sandbox"]["excludedCommands"], ["docker *", "agents-inc *"])
+        self.assertEqual(config["sandbox"]["excludedCommands"], ["docker *", "agents-inc dispatch *", "agents-inc run *", "agents-inc repair *", "agents-inc install *"])
+        self.assertEqual(add_hooks(config, self.paths, claude)["sandbox"]["excludedCommands"], ["docker *", "agents-inc dispatch *", "agents-inc run *", "agents-inc repair *", "agents-inc install *"])
         self.assertEqual(strip_hooks(config, self.paths)["sandbox"], {"excludedCommands": ["docker *"]})
         codex = next(h for h in HOSTS if h.name == "codex")
         self.assertNotIn("sandbox", add_hooks({}, self.paths, codex))
@@ -114,8 +167,40 @@ class HostWiringTest(unittest.TestCase):
         self._hosts("claude")
         install_host_wiring(self.paths, _receipt())
         removed = unwire_hooks(self.paths, "claude")
-        self.assertIn('sandbox.excludedCommands: agents-inc *', removed)
+        self.assertIn('sandbox.excludedCommands: agents-inc dispatch *', removed)
         self.assertNotIn("sandbox", json.loads((self.home / ".claude/settings.json").read_text()))
+
+    # H (2026-11-11): narrow exclusion, migration of the legacy broad entry, unwire removes both forms.
+    def test_repair_migrates_legacy_broad_entry(self):
+        from agents_inc.install.host_wiring import HOSTS, add_hooks
+        claude = next(h for h in HOSTS if h.name == "claude")
+        config = add_hooks({"sandbox": {"excludedCommands": ["agents-inc *", "docker *"]}}, self.paths, claude)
+        self.assertNotIn("agents-inc *", config["sandbox"]["excludedCommands"])
+        self.assertIn("agents-inc dispatch *", config["sandbox"]["excludedCommands"])
+        self.assertIn("docker *", config["sandbox"]["excludedCommands"])
+
+    def test_unwire_removes_legacy_and_narrow_forms(self):
+        from agents_inc.install.host_wiring import unwire_hooks
+        self._hosts("claude")
+        install_host_wiring(self.paths, _receipt())
+        target = self.home / ".claude/settings.json"
+        config = json.loads(target.read_text()); config["sandbox"]["excludedCommands"].append("agents-inc *")
+        target.write_text(json.dumps(config))
+        removed = unwire_hooks(self.paths, "claude")
+        self.assertIn("sandbox.excludedCommands: agents-inc *", removed)
+        self.assertIn("sandbox.excludedCommands: agents-inc run *", removed)
+        self.assertNotIn("sandbox", json.loads(target.read_text()))
+
+    def test_no_sandbox_exclude_adds_no_entry(self):
+        self._hosts("claude")
+        install_host_wiring(self.paths, _receipt(), sandbox_exclude=False)
+        self.assertNotIn("sandbox", json.loads((self.home / ".claude/settings.json").read_text()))
+
+    def test_no_consent_writes_no_claude_settings(self):
+        self._hosts("claude")
+        install_host_wiring(self.paths, _receipt(), claude_settings=False)
+        self.assertFalse((self.home / ".claude/settings.json").exists())
+        self.assertIn(BEGIN, (self.home / ".claude/AGENTS.md").read_text())
 
     def test_bash_nudge_handlers_carry_if_filters(self):
         from agents_inc.install.host_wiring import HOSTS, add_hooks, hook_command

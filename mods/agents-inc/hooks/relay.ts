@@ -2,7 +2,20 @@ import type { Register } from 'claude-code'
 
 const TOOL = 'mcp__agents-inc__run'
 const MODELS = ['fable', 'opus', 'sonnet', 'haiku', 'astra', 'sol', 'terra', 'luna']
-const FREE = ['gemini', 'mistral', 'openrouter']
+// Free slugs that `agents-inc dispatch` runs since spec 037: exactly agents_inc/install/free_launch.py FREE_MODELS
+// (tests/test_relay_free_models.py pins the two equal). Family names (gemini, mistral, openrouter) are not slugs.
+const FREE_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-flash-lite-latest',
+  'ministral-3b-latest',
+  'codestral-latest',
+  'nvidia/nemotron-3.5-lightning:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'google/gemma-4-31b-it:free',
+  'dots-studio/dots-3-note-preview:free',
+]
 const MAX_NOTICES = 600 // notices per call before the throttle (FR-018)
 const MAX_DIRECT_NOTICES = 40 // main-session calls (no relay subagent): keep the transcript small
 const THROTTLE_MS = 60_000
@@ -26,8 +39,12 @@ export async function registerRelay(
     tool: { register: (t: Record<string, unknown>) => Promise<unknown> }
   },
   e: { cwd: string },
+  legacyRoutes = true,
 ): Promise<void> {
   sessionCwd = e.cwd
+  // Spec 038 FR-016: native agent types are the one route; the relay type and its tool stay only after
+  // `agents-inc install --legacy-routes` (status --all reports legacy_routes).
+  if (!legacyRoutes) return
   await $.agent.register({
     name: 'relay',
     description: 'Runs one agents-inc delegate and relays its live rows. Use only for agents-inc dispatch.',
@@ -63,11 +80,11 @@ export const register: Register = on => {
 
     // No agentId: the main session called the tool directly (no haiku relay). Rows go to the main transcript, capped lower.
     const cap = agentId ? MAX_NOTICES : MAX_DIRECT_NOTICES
-    if (FREE.includes(model)) return { deny: `${model} is a free model: dispatch it with agent.sh, not the relay` }
-    if (!MODELS.includes(model)) return { deny: `unknown model ${model}; use one of ${MODELS.join(' ')}` }
+    if (!MODELS.includes(model) && !FREE_MODELS.includes(model))
+      return { deny: `unknown model ${model}; use one of ${MODELS.join(' ')} or a free slug: ${FREE_MODELS.join(' ')}` }
     const slotsReal = (await $.fs.stat(slots, { resolve: true }).catch(() => undefined))?.realPath
     const rootReal = (await $.fs.stat(sessionCwd, { resolve: true }).catch(() => undefined))?.realPath
-    if (!isInside(slotsReal, rootReal)) return { deny: `slots must be a file inside ${sessionCwd}` }
+    if (!isInside(slotsReal, rootReal)) return { deny: `slots must be a file inside ${sessionCwd}: write it to ${sessionCwd}/.scratch/<task>/slots.json (not the scratchpad or /tmp), then call again` }
 
     const runCwd = e.cwd === undefined ? sessionCwd : String(e.cwd)
     if (runCwd !== sessionCwd) {
