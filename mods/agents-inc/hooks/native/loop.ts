@@ -161,7 +161,7 @@ export function admitsGap(reply: Reply | string | null, messages: readonly Msg[]
 }
 const GAP_PUSH = 'You said some results are missing. Run the missing tool calls now, then hand back. Reply with exactly one JSON object.\n'
 type Block = { type: string; [field: string]: unknown }
-type Msg = { role: 'user' | 'assistant'; content: Block[] }
+export type Msg = { role: 'user' | 'assistant'; content: Block[] }
 type Tool = { name: string; description: string; mcp?: boolean }
 type Thinking = { kind: 'thinking'; index: number; text: string }
 type Usage = { input_tokens: number; cached_input_tokens: number; output_tokens: number }
@@ -278,6 +278,42 @@ export function render(messages: readonly Msg[]): string {
     }
   }
   return out.join('\n')
+}
+
+// A stateless guest sends the whole conversation to a third-party provider on every step. Three host reminders are
+// pure noise there: the Bash sandbox allow and deny lists, the Skill tool listing (a guest has no Skill tool) and
+// empty reminders. Only a text block that is exactly one whole reminder is ever removed, matched by what its body starts
+// with; anything unrecognised, and every kept block, passes through untouched. Thread adapters never call this.
+const WHOLE_REMINDER = /^<system-reminder>([\s\S]*)<\/system-reminder>$/
+const NOISE_HEADS = ['## Bash command sandbox', 'The following skills are available for use with the Skill tool:']
+// The host's instruction-files reminder: fixed opening sentence, then "Contents of <path>" entries. Dropped whole, even
+// when it also carries user-context sections (memory index, email, git status): none of it goes to a free provider.
+const INSTRUCTIONS_HEAD = 'Codebase and user instructions are shown below.'
+const isInstructions = (body: string) => body.startsWith(INSTRUCTIONS_HEAD) && /^Contents of /m.test(body)
+export function isNoiseReminder(text: unknown): boolean {
+  if (typeof text !== 'string') return false
+  const m = WHOLE_REMINDER.exec(text.trim())
+  if (!m || /<\/?system-reminder>/.test(m[1])) return false
+  const body = m[1].trim()
+  return body === '' || NOISE_HEADS.some(h => body.startsWith(h)) || isInstructions(body)
+}
+export function dropNoiseReminders(messages: readonly Msg[]): Msg[] {
+  try {
+    return messages.map(m => ({ ...m, content: (m.content ?? []).filter(b => !(b.type === 'text' && isNoiseReminder(b.text))) }))
+      .filter((m, i) => m.content.length > 0 || (messages[i].content ?? []).length === 0)
+  } catch {
+    return Array.isArray(messages) ? [...messages] : [] // removal never fails a step
+  }
+}
+
+// The system prompt's "# Memory" section (how to write memory files, with the memory directory) is of no use to a guest
+// and holds a host path. Cut from its heading to the next top-level heading; no heading, no change.
+export function dropMemorySection(system: string): string {
+  try {
+    return system.replace(/^# Memory\n[\s\S]*?(?=^# |(?![\s\S]))/m, '')
+  } catch {
+    return system
+  }
 }
 
 // A chat-only model (failed tool probe, D76 condition 4) is never told to use tools.
@@ -744,9 +780,12 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     const names = [...offeredTools.filter(t => t.name !== HANDBACK).map(t => t.name), ...(hand ? [HANDBACK] : [])]
     const allowed = new Set(names)
     const composed = await $.prompt.compose({ tools: names }).catch(() => ({ sections: [] }))
-    const system = [...composed.sections.map(s => stripModelLines(s.text)), AGENT_PROMPT].join('\n\n')
+    const fullSystem = [...composed.sections.map(s => stripModelLines(s.text)), AGENT_PROMPT].join('\n\n')
+    const system = adapter.kind === 'stateless' ? dropMemorySection(fullSystem) : fullSystem
     const types = await readToolTypes($)
-    const full = () => buildPrompt(adapter, S.slug, system, catalog(offeredTools, types, hand), messages, hand, S.chatOnly)
+    // Stateless only: thread adapters (luna, sol, terra, astra) get the messages exactly as before.
+    const sentMessages = adapter.kind === 'stateless' ? dropNoiseReminders(messages) : messages
+    const full = () => buildPrompt(adapter, S.slug, system, catalog(offeredTools, types, hand), sentMessages, hand, S.chatOnly)
     // A stateless adapter keeps no thread: every run gets the whole conversation, and a correction or push rides after
     // it with the reply it answers (spec 038 R3). A thread adapter sends the follow-up text alone.
     const stateless = adapter.kind === 'stateless'
@@ -842,7 +881,7 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     const reply = run.reply
     if (typeof reply !== 'string' && reply !== null) st.sent = messages.length
     const ms = (await $.clock.now()) - t0
-    $.ui.log(`${S.log} step ${e.index} of ${id} took ${ms} ms, prompt ${chars} chars, ${resumed ? 'resumed' : 'fresh'} thread, system ${system.length} catalog ${catalog(offeredTools, types, hand).length} conversation ${render(messages).length} chars, ${names.length} tools, handback ${hand ? 'on' : 'off'}, messages ${messages.length} sent ${sentBefore}, codex_tools ${acc.tools.length ? acc.tools.join(' ') : 'none'}, usage ${acc.usage ? `in ${acc.usage.input_tokens} cached ${acc.usage.cached_input_tokens} out ${acc.usage.output_tokens}` : 'none'}`, { to: 'debug' })
+    $.ui.log(`${S.log} step ${e.index} of ${id} took ${ms} ms, prompt ${chars} chars, ${resumed ? 'resumed' : 'fresh'} thread, system ${system.length} catalog ${catalog(offeredTools, types, hand).length} conversation ${render(sentMessages).length} chars, ${names.length} tools, handback ${hand ? 'on' : 'off'}, messages ${messages.length} sent ${sentBefore}, codex_tools ${acc.tools.length ? acc.tools.join(' ') : 'none'}, usage ${acc.usage ? `in ${acc.usage.input_tokens} cached ${acc.usage.cached_input_tokens} out ${acc.usage.output_tokens}` : 'none'}`, { to: 'debug' })
     const tokens = acc.usage
     const failure = run.failed ? (run.fail ?? `${S.agent} failed: run failed`) : typeof reply === 'string' ? `${S.agent} failed: unparsable reply` : null
     const before = S.ran.get(id)?.usage ?? ZERO
