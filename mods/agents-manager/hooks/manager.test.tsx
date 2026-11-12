@@ -22,7 +22,7 @@ const DONE = '{"event":{"type":"run.end","outcome":"green","rc":0}}\n'
 const LIVE = '{"event":{"type":"assistant","message":{"content":[]}}}\n'
 
 // What the engine lists. Tests change it between polls: agents, run dirs, and file contents by path.
-type World = { agents: any[]; dirs: string[]; read: (path: string) => string; advance: (ms: number) => Promise<unknown> }
+type World = { agents: any[]; dirs: string[]; read: (path: string) => string; listFails?: boolean; advance: (ms: number) => Promise<unknown> }
 
 // Stands for the engine: one live subagent, one finished dispatch run. Row 1 = agent a1, row 2 = the run.
 async function start($: Dollar, on: On): Promise<World> {
@@ -37,7 +37,10 @@ async function start($: Dollar, on: On): Promise<World> {
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('agent.list', () => ({ value: world.agents as any }))
-  on('fs.list', () => ({ value: world.dirs.map(name => ({ name, kind: 'dir' })) as any }))
+  on('fs.list', (_$, e: any) => {
+    if (world.listFails && String(e.path).endsWith('/.scratch/agents-inc-runs')) throw new Error('ENOENT: no such directory')
+    return { value: world.dirs.map(name => ({ name, kind: 'dir' })) as any }
+  })
   on('fs.read', (_$, e: any) => ({ value: world.read(String(e.path)) as any }))
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
   await clock.advance(2100)
@@ -331,6 +334,17 @@ test('ask to stop sends the stop text and says "stop requested", never "stopped"
   expect(row?.text).toContain('stop requested')
   expect(row?.text).not.toContain('stopped')
   expect(await ui.find({ key: 'stop-a1' })).toBeUndefined()
+  await ui.unmount()
+})
+
+// 5a NO RUNS DIRECTORY IS NO RUNS
+test('a missing runs directory leaves no poll error and agent rows still render', async ($, on) => {
+  const world = await start($, on)
+  world.listFails = true
+  await world.advance(2100)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /poll error/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('scout')
   await ui.unmount()
 })
 

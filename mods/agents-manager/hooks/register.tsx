@@ -241,7 +241,7 @@ export const register: Register = on => {
         for (const a of agents.filter(x => !x.parentId || !known.has(x.parentId))) add(a, 1)
 
         // Every run dir is read: a running run stays listed however old it is; only finished ones are capped.
-        const listed = (await $.fs.list(RUNS)).filter(d => d.kind === 'dir' && /^\d{8}T\d{6}Z-/.test(d.name))
+        const listed = (await $.fs.list(RUNS).catch(() => [])).filter(d => d.kind === 'dir' && /^\d{8}T\d{6}Z-/.test(d.name))
         const dirAge = new Map(listed.map(d => [d.name, d.mtimeMs] as const))
         const dirs = listed
           .map(d => d.name)
