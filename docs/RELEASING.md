@@ -60,9 +60,9 @@ D55 in `docs/DECISIONS.md` records this.
 1. Pre-tag gate. Both commands must pass:
    - `grep -c TODO-operator CITATION.cff .zenodo.json` prints 0 for both files.
    - `python3 -m unittest discover -s tests -p 'test_*.py'` ends with `OK`.
-2. Check that `CHANGELOG.md` has a dated `[0.6.4]` section and that `agents_inc.__version__` is `0.6.3`. The mod's `mods/agents-inc/.claude-plugin/plugin.json` carries the same version (a test checks it); without a new version, `claude plugin update` keeps the old mod.
+2. Check that `CHANGELOG.md` has a dated `[0.6.4]` section and that `agents_inc.__version__` is `0.6.4`. The mod's `mods/agents-inc/.claude-plugin/plugin.json` carries the same version (a test checks it); without a new version, `claude plugin update` keeps the old mod.
 3. Merge `development` into `main` by pull request.
-4. On `main`, create the tag: `git tag -a v0.6.4 -m "agents-inc 0.6.3"`.
+4. On `main`, create the tag: `git tag -a v0.6.4 -m "agents-inc 0.6.4"`.
 5. Push the tag: `git push origin v0.6.4`.
 6. Watch the `release` workflow in the Actions tab. The `publish` job waits for the `pypi` environment approval if a reviewer was set.
 7. Confirm that https://pypi.org/project/agents-inc/0.6.4/ exists and that the GitHub release lists the wheel and the sdist.
