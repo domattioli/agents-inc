@@ -6,6 +6,11 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-11-09
+
+### Changed
+
+- License files only, no code change. LICENSE is now the official PolyForm Small Business 1.0.0 text, unmodified; the no-AI-training terms moved to LICENSE-AI.md and the required notices to NOTICE, and both still apply (#157).
 ### Fixed
 
 - Dispatch runs go to `.scratch/agents-inc-runs` under the session directory when git ignores `.scratch`, even before that directory exists, so the agents-manager pane lists Codex delegates (#154).

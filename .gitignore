@@ -246,3 +246,6 @@ __marimo__/
 docs/HANDOFF.md
 docs/governance/ORCHESTRATION-HANDOFF.md
 docs/teach-me/
+
+# Operator-only rules (spec 035)
+AGENTS.local.md
