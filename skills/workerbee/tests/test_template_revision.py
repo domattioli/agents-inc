@@ -264,6 +264,7 @@ class MissingLabelTest(unittest.TestCase):
         self.assertEqual(res.returncode, 1)
         self.assertIn("2 success-gate", res.stdout)
         self.assertIn("3 failure-gate", res.stdout)
+        self.assertIn("FAILURE GATE line needs a backticked command", res.stdout)
 
 class SharedRungSourceTest(unittest.TestCase):
     def test_renderer_and_checker_share_rung_source(self):
