@@ -46,6 +46,8 @@ Rows are capped at 600 notices per call. Later rows are held back, and one notic
 
 The mod also adds `agents-inc:luna`, a native subagent type. Start it with the Agent tool: `subagent_type: "agents-inc:luna"`. It works like a haiku subagent in the transcript, but each step is answered by luna through Codex. The Codex process is given no tools of its own, so the Claude Code permission rules are the only gate on what luna does.
 
+The step loop is shared code in `hooks/native/loop.ts`; everything about Codex (prompt lines, pushes, the `agents-inc run` command, exit codes) is in the Codex adapter, `hooks/native/codex.ts`. `hooks/luna.ts` only connects the two. Later providers get their own adapter on the same loop (spec 038).
+
 - The type is registered only when `agents-inc luna status --json` says `offered: true`. Codex must be installed and logged in, and Codex's `models_cache.json` must hold an entry for the luna model. `agents-inc doctor` prints `luna type: ready`, `off` or `unavailable (<code>)`.
 - `agents-inc luna off` hides the type from new sessions. `agents-inc luna on` brings it back.
 - Debug lines in the Claude Code debug log start with `agents-inc luna:`. The spike's `luna-brain:` prefix is gone. Set `AGENTS_INC_LUNA_DEBUG=1` to keep a copy of each first prompt beside its thread file under `.scratch/agents-inc-luna/<session>/`.

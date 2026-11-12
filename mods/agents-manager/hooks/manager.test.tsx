@@ -22,7 +22,7 @@ const DONE = '{"event":{"type":"run.end","outcome":"green","rc":0}}\n'
 const LIVE = '{"event":{"type":"assistant","message":{"content":[]}}}\n'
 
 // What the engine lists. Tests change it between polls: agents, run dirs, and file contents by path.
-type World = { agents: any[]; dirs: string[]; read: (path: string) => string; advance: (ms: number) => Promise<unknown> }
+type World = { agents: any[]; dirs: string[]; read: (path: string) => string; listFails?: boolean; advance: (ms: number) => Promise<unknown> }
 
 // Stands for the engine: one live subagent, one finished dispatch run. Row 1 = agent a1, row 2 = the run.
 async function start($: Dollar, on: On): Promise<World> {
@@ -37,7 +37,10 @@ async function start($: Dollar, on: On): Promise<World> {
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('agent.list', () => ({ value: world.agents as any }))
-  on('fs.list', () => ({ value: world.dirs.map(name => ({ name, kind: 'dir' })) as any }))
+  on('fs.list', (_$, e: any) => {
+    if (world.listFails && String(e.path).endsWith('/.scratch/agents-inc-runs')) throw new Error('ENOENT: no such directory')
+    return { value: world.dirs.map(name => ({ name, kind: 'dir' })) as any }
+  })
   on('fs.read', (_$, e: any) => ({ value: world.read(String(e.path)) as any }))
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
   await clock.advance(2100)
@@ -334,6 +337,17 @@ test('ask to stop sends the stop text and says "stop requested", never "stopped"
   await ui.unmount()
 })
 
+// 5a NO RUNS DIRECTORY IS NO RUNS
+test('a missing runs directory leaves no poll error and agent rows still render', async ($, on) => {
+  const world = await start($, on)
+  world.listFails = true
+  await world.advance(2100)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /poll error/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('scout')
+  await ui.unmount()
+})
+
 // 5b OLD FINISHED RUNS ARE HISTORY
 test('finished runs from before this session are not listed', async ($, on) => {
   const world = await start($, on)
@@ -360,4 +374,49 @@ test('every running run stays listed beyond the newest eight finished', async ($
     expect((await ui.find({ type: 'Text', text: /1 running · 12 finished \(showing 9\)/ }))?.text).toContain('showing 9')
     await ui.unmount()
   }
+})
+
+// 6 DISPLAY FIXES
+test('a guest agent row shows nickname and provider, other types keep the raw type', async ($, on) => {
+  const world = await start($, on)
+  world.agents = [
+    { id: 'a1', name: 'scout', type: 'agents-inc:luna', description: 'scout', status: 'running' },
+    { id: 'a2', name: 'g', type: 'agents-inc:codestral', description: 'guest', status: 'running' },
+    { id: 'a3', name: 'x', type: 'Explore', description: 'x', status: 'running' },
+  ]
+  await world.advance(2100)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('luna · OpenAI')
+  const g = (await ui.find({ type: 'Button', text: /guest/ }))?.text ?? ''
+  expect(g).toContain('codestral')
+  expect(g).not.toContain('agents-inc:codestral')
+  expect((await ui.find({ type: 'Button', text: /x ·/ }))?.text).toContain('Explore')
+  await ui.unmount()
+})
+
+test('the run count line is hidden with no run directories and shown with one', async ($, on) => {
+  const world = await start($, on)
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /finished \(showing/ })).toBeDefined()
+  await ui.unmount()
+  world.dirs = []
+  await world.advance(2100)
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /finished \(showing/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a poll error note clears after a later poll succeeds', async ($, on) => {
+  const world = await start($, on)
+  const real = world.agents
+  world.agents = null as any
+  await world.advance(2100)
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /poll error/ })).toBeDefined()
+  await ui.unmount()
+  world.agents = real
+  await world.advance(2100)
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /poll error/ })).toBeUndefined()
+  await ui.unmount()
 })

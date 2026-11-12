@@ -373,6 +373,12 @@ RUI_UNAVAILABLE = "request_user_input is unavailable"
 # root", asked request_user_input 20 times in one run (380k input tokens) and handed back "Blocked before reading any
 # files" (macOS, 2026-11-11, rollout 01a1cb0e). include_environment_context=false drops the block (`codex debug
 # prompt-input`, 2026-11-11); the host's system prompt already carries cwd and date.
+# The text never stopped the asks: luna asked "May I run these five requested wc commands?" and "Proceed?" after the
+# preamble said not to, and each refusal ("request_user_input is unavailable in Default mode") drew another ask until
+# BurnWatch stopped the run (macOS stress, 2026-11-11: tools 8/10, par 5/9, every failure an ask loop). Codex's
+# `[tools] experimental_request_user_input = { enabled = false }` drops the tool from the request, fresh and resumed
+# (Codex 0.159.2, request captured offline, 2026-11-11). AGENTS_INC_LUNA_KEEP_ASK_TOOL=1 keeps it (fallback switch).
+NO_ASK_TOOL_ARGS = ["-c", "tools.experimental_request_user_input={enabled=false}"]
 HOST_TOOLS_ARGS = ["-c", "include_permissions_instructions=false", "-c", "include_collaboration_mode_instructions=false",
                    "-c", "skills.include_instructions=false", "-c", "project_doc_max_bytes=0",
                    "-c", "include_environment_context=false"]
@@ -455,7 +461,8 @@ def no_tool_args(host_tools: bool = False, slug: str | None = None, catalog: Pat
         catalog = require_host_tools_catalog(slug)
     path = Path(tempfile.gettempdir()) / "agents-inc" / "no-tools-instructions.md"
     _write_if_changed(path, NO_TOOL_INSTRUCTIONS)
-    return NO_TOOL_ARGS + HOST_TOOLS_ARGS + ["-c", f"model_instructions_file={json.dumps(str(path))}",
+    no_ask = [] if os.environ.get("AGENTS_INC_LUNA_KEEP_ASK_TOOL") == "1" else NO_ASK_TOOL_ARGS
+    return NO_TOOL_ARGS + HOST_TOOLS_ARGS + no_ask + ["-c", f"model_instructions_file={json.dumps(str(path))}",
                            "-c", f"model_catalog_json={json.dumps(str(catalog))}"]
 
 
@@ -764,6 +771,13 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
 
     # Empty output: on success, or (#160) on a failure caused by request_user_input calls, say so with the cause
     refused_asks = (result.stderr or "").count(RUI_UNAVAILABLE)
+    if not stdout.strip() and result.returncode == 0 and host_tools and not refused_asks and _said_something(result.stdout):
+        # macOS stress, 2026-11-11 (3 of 40 runs lost two ways, 2 of them here): luna put its {say, tools} reply in
+        # commentary messages and left the final message empty. The step loop already has those messages from the
+        # progress lines and picks the first that requests tools, so this is not a failure.
+        sys.stderr.write(f"agents-inc run: codex {slug} left its final message empty; its earlier messages stand\n")
+        sys.stderr.flush()
+        return 1 if cleanup_failed else 0
     if not stdout.strip() and (result.returncode == 0 or refused_asks):
         asked = "unknown"
         rid = tid or resume_thread
@@ -802,6 +816,19 @@ def thread_progress_line(line: str) -> None:
     if out is not None:
         sys.stderr.write(out + "\n")
         sys.stderr.flush()
+
+
+def _said_something(jsonl: str | None) -> bool:
+    """True when the Codex --json stream holds at least one agent_message item with text."""
+    for line in (jsonl or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        item = event.get("item") if isinstance(event, dict) and event.get("type") == "item.completed" else None
+        if isinstance(item, dict) and item.get("type") == "agent_message" and str(item.get("text") or "").strip():
+            return True
+    return False
 
 
 NOT_TOOL_ITEMS = ("reasoning", "agent_message", "error")
@@ -868,6 +895,20 @@ LUNA_TOKEN_CAP = 150_000
 RUNAWAY_EXIT = 77
 
 
+def is_real_ask(arguments) -> bool:
+    """A request_user_input call that asks something: a non-empty "questions" list. Empty calls ({} or
+    {"questions": []}) and host tool requests ({"tools": [...]}, replayed by rui_replies) ask nothing. In the 2026-11-11
+    macOS rollouts, 62 of 62 steps that made only such calls and stayed under the cap ended in a reply; the 10 that
+    reached 4 were cut, so their recovery is unknown. They count toward the token cap only."""
+    try:
+        args = json.loads(arguments or "")
+    except (TypeError, ValueError):
+        return True
+    if not isinstance(args, dict): return True
+    if args.get("questions"): return True
+    return not (args == {} or "questions" in args or "tools" in args)
+
+
 def _env_cap(name: str, default: int) -> int:
     try:
         value = int(os.environ.get(name, ""))
@@ -918,7 +959,7 @@ class BurnWatch:
             except (ValueError, AttributeError):
                 continue
             if payload.get("type") == "function_call" and payload.get("name") == "request_user_input":
-                self.asks += 1
+                self.asks += is_real_ask(payload.get("arguments"))
             elif payload.get("type") == "token_count" and isinstance(payload.get("info"), dict):
                 last = payload["info"].get("last_token_usage") or {}
                 self.tokens += int(last.get("input_tokens") or 0)

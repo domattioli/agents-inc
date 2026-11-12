@@ -12,11 +12,13 @@ import json
 import sys
 from pathlib import Path
 
-from agents_inc import ledger
+from agents_inc import ledger, native_names
 
 _MODELS_PATH = Path(__file__).resolve().parent / "models.json"
 _TASK_CAP = 80
-NATIVE_LUNA_TYPES = frozenset({"agents-inc:luna"})  # same names as install.hook.NATIVE_TYPES; this module stays import-light
+# Every guest agent type, from the one nickname list install.hook.NATIVE_TYPES also reads (native_names is json and
+# pathlib only, so this module stays import-light). The relay type is not here: its call is an ordinary host-hook row.
+NATIVE_LUNA_TYPES = native_names.guest_types()
 _VERDICT_MSG = ("agents-inc ledger append: --verdict pass|fail is required; "
                 "a delegate self-report is not a verdict")
 
@@ -170,10 +172,10 @@ def dispatch_return_row(spec: dict) -> dict:
 
 
 def native_luna_dispatch_row(agent_id: str, session: str, slug: str, task: str | None, cwd: str | None,
-                             snapshot: str) -> dict:
-    """Spec 028 D6: the dispatch row of one agents-inc:luna agent. id is the agent id, run_id the session id; snapshot is
-    'captured' or 'no-repo'."""
-    row = dispatch_run_row({"kind": "codex", "model": slug, "run_id": agent_id, "cwd": cwd}, task)
+                             snapshot: str, provider: str = "codex") -> dict:
+    """Spec 028 D6: the dispatch row of one guest agent (agents-inc:luna first). id is the agent id, run_id the session
+    id; snapshot is 'captured' or 'no-repo'. provider is the model's provider (spec 038: gemini, mistral, ...)."""
+    row = dispatch_run_row({"kind": provider, "model": slug, "run_id": agent_id, "cwd": cwd}, task)
     return {**row, "run_id": session, "source": "native-luna", "snapshot": snapshot}
 
 
@@ -182,41 +184,6 @@ def native_luna_return_row(agent_id: str, session: str, outcome: str, usage: dic
     """The return row of one hand-back (return shape of ledger.record_return). verdict stays null: the parent verifies.
     snapshot is 'unchanged', 'changed:<n>', 'no-repo' or 'unverified'; files_created holds the first 20 changed paths."""
     count = _token_counter(usage)
-    return {
-        "id": agent_id, "run_id": session, "model": None, "tier": None, "task": None, "provider": None,
-        "parent_id": None, "edge_type": None, "status": outcome, "seconds": None, "subscription_calls": None,
-        "gate_reason": None, "effort": None, "input_tokens": count("input_tokens"),
-        "output_tokens": count("output_tokens"),
-        "cache_read": count("cache_read") if count("cache_read") is not None else count("cached_input_tokens"),
-        "cache_write": None, "files_created": changed[:20] or None, "verdict": None, "cwd": None,
-        "source": "native-luna", "snapshot": snapshot, "timestamp": ledger._now_iso(),
-    }
-
-
-def record_native_luna(state, row: dict) -> bool:
-    """Append one native-luna row. Never raises; JSONL only."""
-    try:
-        _append_row(state, row)
-        return True
-    except Exception:
-        return False
-
-
-def native_luna_dispatch_row(agent_id: str, session: str, slug: str, task: str | None, cwd: str | None,
-                             snapshot: str) -> dict:
-    """Spec 028 D6: the dispatch row of one agents-inc:luna agent. id is the agent id, run_id the session id; snapshot is
-    'captured' or 'no-repo'."""
-    row = dispatch_run_row({"kind": "codex", "model": slug, "run_id": agent_id, "cwd": cwd}, task)
-    return {**row, "run_id": session, "source": "native-luna", "snapshot": snapshot}
-
-
-def native_luna_return_row(agent_id: str, session: str, outcome: str, usage: dict, snapshot: str,
-                           changed: list[str]) -> dict:
-    """The return row of one hand-back (return shape of ledger.record_return). verdict stays null: the parent verifies.
-    snapshot is 'unchanged', 'changed:<n>', 'no-repo' or 'unverified'; files_created holds the first 20 changed paths."""
-    def count(key):
-        value = usage.get(key) if isinstance(usage, dict) else None
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
     return {
         "id": agent_id, "run_id": session, "model": None, "tier": None, "task": None, "provider": None,
         "parent_id": None, "edge_type": None, "status": outcome, "seconds": None, "subscription_calls": None,

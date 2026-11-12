@@ -1463,7 +1463,7 @@ def run(args) -> int:
     if not isinstance(slots, dict):
         print(f"dispatch: slots must be a JSON object, got {type(slots).__name__}: {slots_path}", file=sys.stderr)
         return EXIT_USAGE
-    hit = credential_hit(slots)  # 025 (#105): the broker's request text screen, before anything is written
+    hit = credential_hit(slots, args.cwd or os.getcwd())  # 025 (#105): the broker's request text screen, before anything is written
     if hit:
         print(f"dispatch: refused credential-seeking ({hit})", file=sys.stderr)
         return EXIT_REFUSED
@@ -2000,8 +2000,28 @@ _NEGATION_RE = re.compile(r"\A[\s\-*•>\d.)]*(?:do\s+not|don't|never|no|not|mus
 _TURN_RE = re.compile(r"\b(?:except|unless|but|instead|however|other\s+than)\b", re.IGNORECASE)
 
 
-def _screen_text(key: str, value: str):
+# D81: the tool's own settings directory (or its settings.json) may be named when the dispatch cwd is inside an
+# agents-inc source checkout. Nothing else under ~/.config/agents-inc is exempt: a following `..`, a sub-path or a
+# longer name fails the boundary, so those stay refused. The key stores (~/.config/workerbees, .env) never match.
+_SETTINGS_DIR_OK_RE = re.compile(
+    r"(?:~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.config/agents-inc(?:/settings\.json|/)?"
+    r"(?=$|[\s'\"`,;)]|\.(?:\s|$))")
+_CHECKOUT_MARKERS = ("agents_inc", "skills/workerbee", "skills/codex-bridge", "docs/governance/SCHEMA-3NF.md")  # bundle.py payload
+
+
+def in_source_checkout(cwd) -> bool:
+    """True when cwd is inside an agents-inc source checkout: an ancestor holds every bundle payload path."""
+    try:
+        here = Path(cwd).resolve()
+    except (OSError, ValueError, TypeError):
+        return False
+    return any(all((d / m).exists() for m in _CHECKOUT_MARKERS) for d in (here, *here.parents))
+
+
+def _screen_text(key: str, value: str, settings_dir_ok: bool = False):
     """First credential match in one slot value, skipping prohibition clauses of a deny-list slot (#87)."""
+    if settings_dir_ok:
+        value = _SETTINGS_DIR_OK_RE.sub(lambda m: " " * len(m.group(0)), value)
     clauses = _CLAUSE_SPLIT_RE.split(value) if key in DENY_LIST_SLOTS else [value]
     for clause in clauses:
         if key in DENY_LIST_SLOTS and not _TURN_RE.search(clause) and (key == "OUT_OF_SCOPE" or _NEGATION_RE.match(clause)):
@@ -2224,10 +2244,12 @@ def control_char_hit(slots) -> tuple[str, str, int] | None:
     return None
 
 
-def credential_hit(slots) -> str | None:
-    """#95: `slot <KEY> matched '<text>'` for the first slot value the D51 screen refuses, else None."""
+def credential_hit(slots, cwd=None) -> str | None:
+    """#95: `slot <KEY> matched '<text>'` for the first slot value the D51 screen refuses, else None.
+    D81: a cwd inside an agents-inc source checkout lets a slot name ~/.config/agents-inc or its settings.json."""
+    ok = cwd is not None and in_source_checkout(cwd)
     for key, value in (slots.items() if isinstance(slots, dict) else ()):
-        match = _screen_text(key, value) if isinstance(value, str) else None
+        match = _screen_text(key, value, ok) if isinstance(value, str) else None
         if match:
             return f"slot {key} matched {match.group(0)!r}"
     return None

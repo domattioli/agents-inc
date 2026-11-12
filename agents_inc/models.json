@@ -130,6 +130,7 @@
     "gemini-3.8-flash": {
       "vendor": "google",
       "provider": "gemini",
+      "nickname": "gemini-flash",
       "tier": "grunt",
       "tasks_good": ["extract", "classify", "summarize"],
       "tasks_bad": ["review-of-record", "orchestrate"],
@@ -140,6 +141,7 @@
     "codestral-latest": {
       "vendor": "mistral",
       "provider": "mistral",
+      "nickname": "codestral",
       "tier": "grunt",
       "tasks_good": ["extract", "classify", "summarize", "code-write"],
       "tasks_bad": ["review-of-record", "orchestrate"],
@@ -150,6 +152,7 @@
     "ministral-3b-latest": {
       "vendor": "mistral",
       "provider": "mistral",
+      "nickname": "ministral",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize", "classify"],
       "tasks_bad": ["review-of-record", "code-review", "orchestrate"],
@@ -170,6 +173,7 @@
     "dots-studio/dots-3-note-preview:free": {
       "vendor": "dots-studio",
       "provider": "openrouter",
+      "nickname": "dots-note",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize"],
       "tasks_bad": ["draft", "code-write", "code-review", "orchestrate"],
@@ -190,6 +194,7 @@
     "nvidia/nemotron-3.5-lightning:free": {
       "vendor": "nvidia",
       "provider": "openrouter",
+      "nickname": "nemotron-lightning",
       "tier": "grunt",
       "tasks_good": ["extract", "classify", "summarize"],
       "tasks_bad": ["review-of-record", "code-review", "orchestrate", "code-write"],
@@ -210,6 +215,7 @@
     "nvidia/nemotron-3-ultra-550b-a55b:free": {
       "vendor": "nvidia",
       "provider": "openrouter",
+      "nickname": "nemotron-ultra",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize", "draft", "code-write", "classify"],
       "tasks_bad": ["review-of-record"],
@@ -220,6 +226,7 @@
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
       "vendor": "nvidia",
       "provider": "openrouter",
+      "nickname": "nemotron-nano",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize", "classify"],
       "tasks_bad": ["review-of-record", "orchestrate"],
@@ -230,6 +237,7 @@
     "google/gemma-4-26b-a4b-it:free": {
       "vendor": "google",
       "provider": "openrouter",
+      "nickname": "gemma-26b",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize", "draft", "classify"],
       "tasks_bad": ["review-of-record", "orchestrate"],
@@ -240,6 +248,7 @@
     "google/gemma-4-31b-it:free": {
       "vendor": "google",
       "provider": "openrouter",
+      "nickname": "gemma-31b",
       "tier": "grunt",
       "tasks_good": ["extract", "summarize", "draft", "code-write", "classify"],
       "tasks_bad": ["review-of-record", "orchestrate"],

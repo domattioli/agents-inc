@@ -28,8 +28,8 @@ function fakeProcesses(on: On, seen: string[][]) {
   })
 }
 
-// The luna agent shares the plugin's one session.start (mod.ts), so it registers after the relay pair.
-test('session.start registers the relay agent and the run tool', async ($, on) => {
+// Spec 038 FR-016: the relay type and its tool register only when status --all says legacy_routes (install --legacy-routes).
+async function registeredAtStart($: Dollar, on: On, legacy?: boolean): Promise<string[]> {
   const registered: string[] = []
   on('agent.register', (_$, e) => {
     registered.push(`agent:${e.name}`)
@@ -42,12 +42,28 @@ test('session.start registers the relay agent and the run tool', async ($, on) =
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 's1' }))
   on('ui.log', () => ({ value: undefined }))
-  on('process.spawn', async function* () {
-    yield { stream: 'stdout' as const, text: JSON.stringify({ offered: true, slug: 'gpt-6-luna', reason: 'ready' }) }
+  on('process.spawn', async function* (_$, e) {
+    const all = e.argv.includes('--all')
+    const text = all
+      ? JSON.stringify(legacy === undefined ? { models: [] } : { models: [], legacy_routes: legacy })
+      : JSON.stringify({ offered: true, slug: 'gpt-6-luna', reason: 'ready' })
+    yield { stream: 'stdout' as const, text }
     return { value: { code: 0, signal: null } }
   })
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
-  expect(registered).toEqual(['agent:relay', 'tool:run', 'agent:luna'])
+  return registered
+}
+
+test('by default session.start registers no relay agent and no run tool (FR-016)', async ($, on) => {
+  expect(await registeredAtStart($, on)).toEqual(['agent:luna'])
+})
+
+test('legacy_routes false registers no relay route', async ($, on) => {
+  expect(await registeredAtStart($, on, false)).toEqual(['agent:luna'])
+})
+
+test('legacy_routes true keeps the relay agent and the run tool', async ($, on) => {
+  expect(await registeredAtStart($, on, true)).toEqual(['agent:luna', 'agent:relay', 'tool:run'])
 })
 
 test('a direct call from the main session is no longer refused for the missing relay', async ($, on) => {

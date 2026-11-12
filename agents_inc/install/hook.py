@@ -2,18 +2,36 @@
 from __future__ import annotations
 import hashlib, json, os, re, sys, tempfile, time
 from datetime import datetime
+from .. import role_defaults
+from .. import native_names
 from .doctor import check_install
 from .paths import InstallPaths
 
 # The rung is the model; the route is always `agents-inc dispatch` (D59, QUICKREF step 2). The earlier wording
 # ("keep this Agent call only if routing selects a Claude rung") approved every Agent call on a Claude-only
 # install, since sonnet and haiku are Claude rungs (token bench dry run, 2026-10-22).
-NUDGE = ("agents-inc reminder: this Agent call bypasses agents-inc routing, the ledger and verification. Use Agent "
-         "only for a read-only foreground scout (Explore, Plan). Any other delegation, including to a Claude rung "
-         "such as sonnet or haiku, goes through `agents-inc dispatch --slots <json> --model <rung>`: naming a model "
-         "picks the rung, not the route.")
-ROUTE_RULE = ("Naming a model (opus, sonnet, haiku) picks the rung, not the route: delegate through "
-              "`agents-inc dispatch`, and use the Agent tool only for read-only foreground scouts (Explore, Plan).")
+# D78 R3 (2026-11-11): a small edit (role_defaults.SMALL_TASK_CALLS tool calls or fewer) may go to a native workhorse
+# subagent; the supervisor then runs one check itself. Read-only scouts are unchanged. gate_deny is not changed:
+# enforce mode still denies that native edit route (D61).
+# D80: the edit clause renders from the `roles` settings on every call; NUDGE and ROUTE_RULE keep the default text.
+def nudge_text(roles: dict | None = None) -> str:
+    edit = role_defaults.native_edit(roles)
+    allowed = (f"a read-only foreground scout (Explore, Plan) or for {edit}; after that edit, run one check yourself, "
+               "because no harness ran gates." if edit else "a read-only foreground scout (Explore, Plan).")
+    return ("agents-inc reminder: this Agent call bypasses agents-inc routing, the ledger and verification. Use Agent "
+            f"only for {allowed} Any other delegation, including to a Claude rung "
+            "such as sonnet or haiku, goes through `agents-inc dispatch --slots <json> --model <rung>`: naming a model "
+            "picks the rung, not the route.")
+
+def route_rule(roles: dict | None = None) -> str:
+    edit = role_defaults.native_edit(roles)
+    allowed = (f"read-only foreground scouts (Explore, Plan) and for {edit}, then run one check yourself." if edit
+               else "read-only foreground scouts (Explore, Plan); every edit goes through `agents-inc dispatch`.")
+    return ("Naming a model (opus, sonnet, haiku) picks the rung, not the route: delegate through "
+            f"`agents-inc dispatch`. Use the Agent tool only for {allowed}")
+
+NUDGE = nudge_text()
+ROUTE_RULE = route_rule()
 # Spec 015 FR-002: a Codex persona name at the start of a Claude subagent description mislabels the model.
 PERSONA_RE = re.compile(r"(?i)\A(?:astra|sol|terra|luna)(?=\s|:|/|\Z)")
 PERSONA_DENY_REASON = ("FR-002: Agent/Task descriptions cannot begin with a Codex persona name. For Codex execution, "
@@ -29,7 +47,9 @@ GATE_ALLOW = frozenset({"Explore", "Plan", "claude-code-guide", "statusline-setu
 # only holds `mcp__agents-inc__run`, so a description such as "Astra analyze" names the model it really runs. Exact names,
 # not a prefix: a lookalike such as x-agents-inc:luna is still an outside spawn. The spike's luna-brain:* types are
 # no longer exempt; the spike mod stays installable but its types now meet the gate like any other.
-NATIVE_TYPES = frozenset({"agents-inc:luna", "agents-inc:relay"})
+# Spec 038 T043 (FR-017): every guest agent type (D76, D77) comes from the one nickname list the native registry
+# reads (agents_inc/native_names.py), plus the relay type; no hand-kept literal.
+NATIVE_TYPES = native_names.guest_types() | {native_names.RELAY_TYPE}
 GATE_DENY_REASON = ("agents-inc agent gate: this Agent/Task call is blocked (subagent_type: {subagent}; background: {background}). "
                     "Agent/Task spawns Claude subagents outside agents-inc routing, ledger, and verification. Allowed here: {allowed} "
                     "(foreground only). For every other delegation run: agents-inc dispatch --slots <json> --model <opus|sonnet|haiku|fable>. "
@@ -46,9 +66,14 @@ def session_start(paths: InstallPaths, host: str) -> str:
     report = check_install(paths)
     status = "READY" if report.ready else " ".join(report.codes)
     skill = paths.current / "skills/workerbee/QUICKREF.md"
+    # D78 R4: on Claude the PreToolUse hook injects QUICKREF on the first Agent, Task, DelegateAgent or Bash dispatch
+    # (D53), so the read instruction stays only for the route it does not cover (a direct mcp__agents-inc__run call).
+    # Codex has no PreToolUse hook, so its session keeps the read instruction.
+    read = (f"the first Agent, Task or Bash dispatch loads the quick reference; read {skill} yourself only before a "
+            "direct mcp__agents-inc__run call" if host == "claude" else f"read {skill} before the first dispatch")
     text = (f"agents-inc is installed (doctor: {status}). Every delegation in this session routes through agents-inc; "
-            f"read {skill} before the first dispatch (full SKILL.md only for a non-Claude rung, a prompt from scratch, "
-            f"or a disputed gate). {ROUTE_RULE} Launcher: {paths.launcher}.")
+            f"{read} (full SKILL.md only for a non-Claude rung, a prompt from scratch, "
+            f"or a disputed gate). {route_rule(role_defaults.load(paths.settings))} Launcher: {paths.launcher}.")
     if not report.ready: text += " Tell the operator doctor is not READY and suggest `agents-inc repair --source <agents-inc checkout>`."
     for warning in report.warnings:
         # An install made --without-codex reports WB_CLI_NOT_FOUND as a warning; say what it means so a session
@@ -84,7 +109,7 @@ def _nudge_text(paths: InstallPaths, payload: dict) -> str:
     marker = paths.state / "nudged" / _session(payload)
     if marker.exists(): return ""
     marker.parent.mkdir(parents=True, exist_ok=True); marker.touch()
-    return NUDGE
+    return nudge_text(role_defaults.load(paths.settings))
 
 def _is_dispatch(payload: dict) -> bool:
     tool = str(payload.get("tool_name") or "")
@@ -383,7 +408,37 @@ def write_agent_gate(paths: InstallPaths, mode: str) -> None:
     if mode not in AGENT_GATE_MODES: raise ValueError(f"agent gate mode must be one of {', '.join(AGENT_GATE_MODES)}: {mode!r}")
     write_setting(paths, "agent_gate", mode)
 
-def write_setting(paths: InstallPaths, key: str, value: str) -> None:
+LEGACY_ROUTES_KEY = "legacy_routes"  # spec 038 FR-016: relay type, mcp__agents-inc__run, @alias hook
+
+def legacy_routes(paths: InstallPaths) -> bool:
+    """True only when settings.json says legacy_routes is 'on' (set by install/repair --legacy-routes). Default off:
+    native agent types are the one user-facing route. Never raises; an unreadable file reads as off."""
+    try: data = json.loads(paths.settings.read_text(encoding="utf-8"))
+    except (OSError, ValueError): return False
+    return isinstance(data, dict) and data.get(LEGACY_ROUTES_KEY) == "on"
+
+def write_legacy_routes(paths: InstallPaths, on: bool) -> None:
+    write_setting(paths, LEGACY_ROUTES_KEY, "on" if on else "off")
+
+def write_role(paths: InstallPaths, assignment: str) -> str:
+    """D80: store one `KEY=VALUE` item in settings.json `roles`; VALUE `default` removes the item. Returns a one-line
+    receipt. A bad key or value raises ValueError; a malformed settings file raises RuntimeError (write_setting)."""
+    key, sep, raw = assignment.partition("=")
+    key = key.strip()
+    if not sep: raise ValueError(f"--role needs KEY=VALUE: {assignment!r}")
+    if key not in role_defaults.DEFAULTS: role_defaults.parse_value(key, raw)  # raises naming the known keys
+    try: data = json.loads(paths.settings.read_text(encoding="utf-8")) if paths.settings.exists() else {}
+    except (OSError, ValueError) as exc: raise RuntimeError(f"{paths.settings} is not readable JSON: {exc}") from exc
+    current = data.get(role_defaults.SETTINGS_KEY) if isinstance(data, dict) else None
+    roles = dict(current) if isinstance(current, dict) else {}
+    if raw.strip().lower() == "default":
+        roles.pop(key, None); shown = f"{json.dumps(role_defaults.DEFAULTS[key])} (default)"
+    else:
+        roles[key] = role_defaults.parse_value(key, raw); shown = json.dumps(roles[key])
+    write_setting(paths, role_defaults.SETTINGS_KEY, roles)
+    return f"role {key}={shown} stored in {paths.settings}"
+
+def write_setting(paths: InstallPaths, key: str, value: object) -> None:
     """Persist one key in settings.json atomically with mode 0600, keeping other keys; a malformed file raises."""
     data = {}
     if paths.settings.exists():
