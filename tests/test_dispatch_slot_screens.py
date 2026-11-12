@@ -33,6 +33,32 @@ class AllowPathsTest(unittest.TestCase):
                          ["agents_inc/install/cli.py", "tests/test_x.py", "README.md"])
 
 
+class OutsideCwdWarningTest(DispatchBase):
+    """#167: a Codex delegate reads only inside cwd; dispatch warns on stderr and still runs."""
+
+    def _run(self, model, task):
+        slots = self.slots(TASK=task)
+        return self.dispatch(lambda *a, **k: self.fail("not reached"), model=model, slots=slots)
+
+    def test_helper_flags_only_paths_outside_cwd(self):
+        cwd = self.repo
+        got = dispatch.outside_cwd_paths(f"read /etc/hosts, ~/notes.md ../x.txt {cwd}/a.py https://e.com/a //h/p", cwd)
+        self.assertEqual(got, ["/etc/hosts", "~/notes.md", "../x.txt"])
+        self.assertEqual(dispatch.outside_cwd_paths("none, src/a.py", cwd), [])
+
+    def test_codex_rung_warns_and_does_not_refuse(self):
+        rc, out, err = self._run("terra", "Summarize /opt/elsewhere/doc.md for me")
+        self.assertIn("/opt/elsewhere/doc.md", err)
+        self.assertIn("cannot read outside cwd", err)
+        self.assertNotIn("cannot read outside cwd", out)
+
+    def test_claude_rung_and_inside_paths_do_not_warn(self):
+        _, _, err = self._run("sonnet", "Summarize /opt/elsewhere/doc.md")
+        self.assertNotIn("cannot read outside cwd", err)
+        _, _, err = self._run("terra", f"Summarize {self.repo}/a.md and https://example.com/x")
+        self.assertNotIn("cannot read outside cwd", err)
+
+
 class ScopeGlobTest(DispatchBase):
     def test_scope_globs_lists_wildcard_tokens(self):
         self.assertEqual(dispatch.scope_globs("src/*.py, a/b.py tests/test_?.py x/[ab].py"),

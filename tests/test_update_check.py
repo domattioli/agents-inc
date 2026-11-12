@@ -81,7 +81,8 @@ class UpdateCheckTest(unittest.TestCase):
     def test_kind_pip_user_externally_managed_never_offers_bare_pip(self):
         text = self._notice(self._script("/usr/bin/python3"), record="packaged", managed=True)
         self.assertIn("PEP 668", text)
-        self.assertIn("pipx", text)
+        self.assertIn("pipx upgrade agents-inc", text)
+        self.assertIn("uv tool upgrade agents-inc", text)
         self.assertNotIn("pip install -U", text)
 
     def test_kind_checkout(self):
@@ -93,6 +94,7 @@ class UpdateCheckTest(unittest.TestCase):
         text = self._notice(self.state / "missing-launcher")
         self.assertIn("PEP 668", text)
         self.assertIn("pipx upgrade agents-inc", text)
+        self.assertIn("uv tool upgrade agents-inc", text)
         self.assertIn("git -C <checkout> pull", text)
         self.assertNotIn("pip install -U", text)
 

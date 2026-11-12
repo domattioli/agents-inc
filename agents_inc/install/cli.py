@@ -128,7 +128,9 @@ def _apply_mod(paths: InstallPaths, mod: Path, plugin: str, market: str, listed,
     for argv in _mod_argvs(paths.home, mod, plugin, market, plugin in (listed.stdout or "")):
         done = _claude(paths.home, *argv, timeout=300)
         if done is None or done.returncode != 0:
-            return failed.format(argv=" ".join(argv), rc="unavailable" if done is None else done.returncode)
+            lines = [l.strip() for l in ((done.stderr or "") if done else "").splitlines() if l.strip()]
+            why = f": {lines[-1][:200]}" if lines else ""
+            return failed.format(argv=" ".join(argv), rc=("unavailable" if done is None else done.returncode), why=why)
     return None
 
 def install_mod(paths: InstallPaths, notices: list) -> None:
@@ -137,8 +139,8 @@ def install_mod(paths: InstallPaths, notices: list) -> None:
     if not (mod / ".claude-plugin/plugin.json").is_file(): return
     listed = _claude(paths.home, "plugin", "list")
     if listed is None: return
-    failed = ("warning: `claude {argv}` failed ({rc}); the mod may be out of date" if MOD_PLUGIN in (listed.stdout or "")
-              else "warning: mod install failed ({rc}); the live view is off, delegation still works")
+    failed = ("warning: `claude {argv}` failed ({rc}{why}); the mod may be out of date" if MOD_PLUGIN in (listed.stdout or "")
+              else "warning: mod install failed ({rc}{why}); the live view is off, delegation still works")
     warn = _apply_mod(paths, mod, MOD_PLUGIN, MOD_MARKETPLACE, listed, failed)
     if warn: notices.append(warn)
 
@@ -152,7 +154,7 @@ def install_pane_mods(paths: InstallPaths, notices: list) -> None:
             listed = _claude(paths.home, "plugin", "list")
             if listed is None: return
         warn = _apply_mod(paths, mod, plugin, market, listed,
-                          f"warning: `claude {{argv}}` failed ({{rc}}); the {name} pane may be out of date, delegation still works")
+                          f"warning: `claude {{argv}}` failed ({{rc}}{{why}}); the {name} pane may be out of date, delegation still works")
         if warn: notices.append(warn)
 
 MOD_UNINSTALL_ARGVS = (("plugin", "uninstall", MOD_PLUGIN), ("plugin", "marketplace", "remove", MOD_MARKETPLACE),

@@ -478,6 +478,8 @@ def main() -> int:
         print("COMPLIANT")
     elif missing:
         print(f"NON-COMPLIANT missing elements: [{', '.join(str(m) for m in label_missing(missing))}]")
+        if 3 in missing:
+            print("Rule 3: the FAILURE GATE line needs a backticked command (the gate runs it); a gate line without one does not count.")
     lint_rc = run_handoff_lint(prompt_file, profile) if with_lint else 0
     return 1 if (missing or over or lint_rc) else 0
 
