@@ -44,14 +44,15 @@ def detected(home: Path) -> tuple[Host, ...]:
 
 def block_text(paths: InstallPaths) -> str:
     """Heading plus at most 5 body lines (D78 R4). Launcher, health and repair text come from the SessionStart hook;
-    the rules come from role_defaults, the one place a settings loader will replace."""
+    the rules come from role_defaults, rendered with the `roles` settings in paths.settings (D80)."""
+    roles = role_defaults.load(paths.settings)
     return "\n".join((
         BEGIN,
         "## agents-inc delegation (mandatory, every session, every provider)",
         f"- {role_defaults.ROUTE_LINE}",
-        f"- {role_defaults.EXECUTIVE_LINE}",
-        f"- {role_defaults.ROLES_LINE}",
-        f"- {role_defaults.GATE_LINE}",
+        f"- {role_defaults.executive_line(roles)}",
+        f"- {role_defaults.roles_line(roles)}",
+        f"- {role_defaults.gate_line(roles)}",
         "- The session hook supplies health status and the quick reference; with no hook (Gemini), run "
         f"`agents-inc doctor` and read `{paths.current / 'skills/workerbee/QUICKREF.md'}` first.",
         END,

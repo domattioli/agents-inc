@@ -774,7 +774,7 @@ These are the shipped defaults. They live in one place, `agents_inc/role_default
 
 What it amends. The old gate "three or fewer tool calls: do it yourself" (QUICKREF item 1, SKILL Step 0). The SKILL Step 1 rule that code writing goes to grunt. D46.5 still holds: every edit goes through a delegate, and a small edit's delegate is now the native workhorse subagent. D61 is unchanged: in `enforce` mode the agent gate denies the native edit route of rule 3, so an enforce session sends small edits through `agents-inc dispatch`.
 
-Not amended. D49.1 lets luna use tools and write with `--tools --write`, for code edits when the Claude quota is spent. Rule 1 makes luna read-only by default; the D49.1 capability stays until the operator rules on it. D76 lets free guest agents write inside their authorized directories; rule 1 covers the Claude and Codex columns only.
+Not amended. D49.1 lets luna use tools and write with `--tools --write`, for code edits when the Claude quota is spent. Rule 1 makes luna read-only by default; the operator ruled on grunt writes on 2026-11-11, and D80 records that ruling. D76 lets free guest agents write inside their authorized directories; rule 1 covers the Claude and Codex columns only.
 
 Evidence. Median cost per delegate run from local run records: haiku $0.01, sonnet $0.54, opus $1.07, fable $2.61. Published launch-page figures, not checked here, put Opus 5.5 at twice the Sonnet 5.5 price, with Sonnet ahead on Terminal-Bench 4.0 (70.6 against 66.4) and haiku 31 points behind Sonnet. Operator session retros record about 14 haiku code failures (false completion, wrong edits) and none for sonnet or opus. A dispatch carries about 5.4 KB of fixed prompt text plus a 1.7 KB slots file, which a three-call edit does not repay. The old managed block was about 1.45 KB, loaded in every session on three hosts, and three of its lines repeated the SessionStart text. The new block is about 1.15 KB.
 
@@ -783,6 +783,27 @@ Evidence. Median cost per delegate run from local run records: haiku $0.01, sonn
 In Claude Code with the agents-inc mod, a delegate runs as a native subagent type: the `Agent` tool with a Claude model, or `subagent_type: agents-inc:<nickname>` for a Codex or free-provider guest agent (D76, D77). The relay type `agents-inc:relay`, the `mcp__agents-inc__run` tool and the `@alias` routes (the UserPromptSubmit hook and the `@<alias>` links) are no longer registered by default. `agents-inc install --legacy-routes` or `repair --legacy-routes` keeps them for one release; the choice is stored as `legacy_routes` in `~/.config/agents-inc/settings.json`, next to `agent_gate`, so a plain `repair` keeps it, and `--no-legacy-routes` clears it. The mod reads the choice from the same `luna status --json --all` call that lists the native types. `agents-inc dispatch` stays as a command for scripts, CI, broker Workers and hosts without the mod; it is not a legacy route. The delegate pane lists only registered native types and this session's native agents (FR-020), never a dispatch run directory.
 
 What it amends. QUICKREF item 2 ("the route is always `agents-inc dispatch`") and item 4a (relay as the default route), D59 where it names dispatch as the only route inside Claude Code. Not amended yet: the SessionStart and PreToolUse hook texts (`ROUTE_RULE`, `NUDGE` in `agents_inc/install/hook.py`) still name dispatch as the route, and their tests guard that wording; changing them waits for acceptance of this entry.
+
+## D80 — Operator settings override the D78 role and gate defaults (2026-11-11, status: accepted 2026-11-11 by operator ruling, extends D78)
+
+The operator can change the D78 defaults without editing code. The settings live in the existing agents-inc user settings file, `~/.config/agents-inc/settings.json`, which already holds `agent_gate` and `legacy_routes`. One object, `roles`, holds these items:
+
+| item | values | default | what it changes |
+|---|---|---|---|
+| `write_rung` | `"workhorse"`, `"orchestrator"` | `"workhorse"` | the rung the block names for anything that writes |
+| `grunt_read_only` | `true`, `false` | `true` | `false`: the block says grunts may make small mechanical edits |
+| `executive_judgment_only` | `true`, `false` | `true` | `false`: the Executive may write when a brief costs more than the edit |
+| `native_small_edit` | `true`, `false` | `true` | `false`: every edit goes through `agents-inc dispatch`; no native edit route |
+| `native_edit_model` | `"sonnet"`, `"opus"`, `"fable"`, `"haiku"` | `"sonnet"` | the model, and its rung name, for the native small edit |
+| `small_task_calls` | an integer from 1 to 10 | `3` | the tool-call count of the dispatch gate |
+
+Resolution. `agents_inc/role_defaults.py` stays the one place for the defaults. Its `load()` returns the defaults overlaid with the valid `roles` items. An unknown key, a wrong type or an out-of-range value is ignored, and the default is used. `"haiku"` as `native_edit_model` is valid only when `grunt_read_only` is `false`. A missing file or a missing `roles` object gives all defaults with no warning. The loader never raises into a hook.
+
+What re-renders. The managed block (`install/host_wiring.py` `block_text`) renders from the resolved values on the next `agents-inc install` or `repair`. The SessionStart text and the PreToolUse nudge (`install/hook.py`) read the file on every call, so they change at once. Static docs (QUICKREF, SKILL.md) are not re-rendered; QUICKREF says its ladder table shows the shipped defaults.
+
+Operator surface. `agents-inc doctor` prints one line per item with its effective value and its source (`default` or `settings`), plus one `WARNING` line for each ignored item, naming the key. `agents-inc repair --role KEY=VALUE` (repeatable; also on `install`) stores one item and re-renders the block in the same run, the same way `--legacy-routes` is stored. `--role KEY=default` removes the item. A bad key or value stops the command with exit code 2 before it writes anything.
+
+Grunt writes. The operator ruled on 2026-11-11: "read by default but if the user wants they can write". The grunt rung is read-only by default. The operator opts in to grunt writes in three ways: `grunt_read_only: false`, `--tools --write` for luna (D49.1 stays), or an authorized directory for a free guest agent (D76 stays).
 
 ## D81 — A slot may name the tool's own settings directory from a source checkout (2026-11-11, status: accepted 2026-11-11 (the operator approved it in the building session on 2026-11-11; an earlier "Fix the guard first" ruling reached that session only as a relay from another session and was not treated as approval), narrows D51 and the 025 slot screen)
 
