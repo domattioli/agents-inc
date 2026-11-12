@@ -462,6 +462,7 @@ test('an admitted gap is pushed once; a second admitting reply stands; chat-only
 const rem = (body: string) => ({ role: 'user', content: [{ type: 'text', text: `<system-reminder>${body}</system-reminder>` }] })
 const SANDBOX = rem('\n## Bash command sandbox\nFilesystem: {"write":{"allowOnly":["/x/y"]}}\n')
 const SKILLS = rem('\nThe following skills are available for use with the Skill tool:\n\n- alpha: does a thing\n- beta\n')
+const DEFERRED = rem('\nThe following deferred tools are now available via ToolSearch. Their schemas are NOT loaded.\n\nWebFetch\nMonitor-DEFERRED-NAME\n')
 const EMPTY = rem('\n')
 const INSTR = rem('\nCodebase and user instructions are shown below. Follow them.\n\nContents of /x/AGENTS.md (project instructions):\n\nSECRET-RULES\n\nContents of /x/MEMORY.md (auto-memory):\n\nMEM-INDEX\n')
 const KEEP = [
@@ -475,13 +476,13 @@ const textOf = (m: { content: unknown[] }) => String((m.content[0] as { text: st
 
 test('stateless: sandbox, skills, empty and instruction reminders are removed; kept reminders and task text survive', async () => {
   const a = fakeAdapter({ kind: 'stateless' })
-  const messages = [SANDBOX, INSTR, EMPTY, SKILLS, ...KEEP, { role: 'user', content: [{ type: 'text', text: TASK_TEXT }] }]
+  const messages = [SANDBOX, INSTR, EMPTY, SKILLS, DEFERRED, ...KEEP, { role: 'user', content: [{ type: 'text', text: TASK_TEXT }] }]
   const h = harness(a, { replies: [{ out: BASH }], messages })
   await registerAgent(h.$ as never, a, { cwd: '/w' })
   await h.spawn('s1')
   await h.step('s1')
   const input = inputOf(h.runs[0])
-  for (const gone of ['Bash command sandbox', 'allowOnly', '- alpha: does a thing', 'SECRET-RULES', 'MEM-INDEX', 'Codebase and user instructions']) expect(input).not.toContain(gone)
+  for (const gone of ['Bash command sandbox', 'allowOnly', '- alpha: does a thing', 'SECRET-RULES', 'MEM-INDEX', 'Codebase and user instructions', 'Monitor-DEFERRED-NAME']) expect(input).not.toContain(gone)
   expect(input).not.toContain('<system-reminder>\n</system-reminder>')
   for (const k of KEEP) expect(input).toContain(textOf(k).slice(0, 60))
   expect(input).toContain(TASK_TEXT)
@@ -499,12 +500,12 @@ test('stateless: the prompt the cap check sees is the filtered one', async () =>
 
 test('thread adapter: conversation and system prompt are sent unchanged', async () => {
   const a = fakeAdapter({ kind: 'thread' })
-  const h = harness(a, { replies: [{ out: BASH }], messages: [SANDBOX, SKILLS, EMPTY, INSTR], system: 'Intro.\n# Memory\nWrite files to /m.\n# Other\nx' })
+  const h = harness(a, { replies: [{ out: BASH }], messages: [SANDBOX, SKILLS, DEFERRED, EMPTY, INSTR], system: 'Intro.\n# Memory\nWrite files to /m.\n# Other\nx' })
   await registerAgent(h.$ as never, a, { cwd: '/w' })
   await h.spawn('s1')
   await h.step('s1')
   const input = inputOf(h.runs[0])
-  for (const k of ['Bash command sandbox', 'allowOnly', 'SECRET-RULES', '# Memory', 'Write files to /m.']) expect(input).toContain(k)
+  for (const k of ['Bash command sandbox', 'allowOnly', 'SECRET-RULES', 'Monitor-DEFERRED-NAME', '# Memory', 'Write files to /m.']) expect(input).toContain(k)
 })
 
 test('stateless: the Memory section leaves the system prompt', async () => {
@@ -528,7 +529,8 @@ test('dropNoiseReminders: partial or mixed blocks and unknown shapes are kept; a
   const mixed = { role: 'user' as const, content: [{ type: 'text', text: '<system-reminder>\n## Bash command sandbox\nx</system-reminder> and more text' }] }
   const two = { role: 'user' as const, content: [{ type: 'text', text: '<system-reminder>\n## Bash command sandbox\n</system-reminder><system-reminder>keep</system-reminder>' }] }
   const quoted = { role: 'user' as const, content: [{ type: 'text', text: '<system-reminder>\nContents of x are here.\n</system-reminder>' }] }
+  const quotedDeferred = { role: 'user' as const, content: [{ type: 'text', text: 'Note: The following deferred tools are now available via ToolSearch. is a host sentence.' }] }
   const odd = { role: 'user' as const, content: [{ type: 'text', text: 42 }, { type: 'image' }] }
-  expect(dropNoiseReminders([mixed, two, quoted, odd] as never)).toEqual([mixed, two, quoted, odd])
+  expect(dropNoiseReminders([mixed, two, quoted, quotedDeferred, odd] as never)).toEqual([mixed, two, quoted, quotedDeferred, odd])
   expect(dropNoiseReminders(null as never)).toEqual([])
 })

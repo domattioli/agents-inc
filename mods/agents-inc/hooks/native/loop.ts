@@ -280,12 +280,16 @@ export function render(messages: readonly Msg[]): string {
   return out.join('\n')
 }
 
-// A stateless guest sends the whole conversation to a third-party provider on every step. Three host reminders are
-// pure noise there: the Bash sandbox allow and deny lists, the Skill tool listing (a guest has no Skill tool) and
-// empty reminders. Only a text block that is exactly one whole reminder is ever removed, matched by what its body starts
+// A stateless guest sends the whole conversation to a third-party provider on every step. Four host reminders are
+// pure noise there: the Bash sandbox allow and deny lists, the Skill tool listing (a guest has no Skill tool), the
+// deferred-tools listing (a guest has no ToolSearch tool) and empty reminders. Only a text block that is exactly one whole reminder is ever removed, matched by what its body starts
 // with; anything unrecognised, and every kept block, passes through untouched. Thread adapters never call this.
 const WHOLE_REMINDER = /^<system-reminder>([\s\S]*)<\/system-reminder>$/
-const NOISE_HEADS = ['## Bash command sandbox', 'The following skills are available for use with the Skill tool:']
+const NOISE_HEADS = [
+  '## Bash command sandbox',
+  'The following skills are available for use with the Skill tool:',
+  'The following deferred tools are now available via ToolSearch.',
+]
 // The host's instruction-files reminder: fixed opening sentence, then "Contents of <path>" entries. Dropped whole, even
 // when it also carries user-context sections (memory index, email, git status): none of it goes to a free provider.
 const INSTRUCTIONS_HEAD = 'Codebase and user instructions are shown below.'
