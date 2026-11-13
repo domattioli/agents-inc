@@ -475,6 +475,38 @@ class ArgvTest(unittest.TestCase):
                 dispatch.launch("codex", model, None, self.tmp, "hi", self.tmp, read_only=read_only)
             return fake.call_args.kwargs
 
+    def _settings_values(self, argv):
+        return [argv[i + 1] for i, a in enumerate(argv) if a == "--settings"]
+
+    def test_read_only_launch_one_settings_with_secret_denies(self):
+        for resume in (None, "sid"):
+            for broker in (False, True):
+                with self.subTest(resume=resume, broker=broker):
+                    seen = {}
+                    where = "SANDBOX_RUNTIME x" if broker else None
+                    with mock.patch.object(dispatch, "caller_sandbox", return_value=where), \
+                            mock.patch.object(dispatch, "api_reachable", return_value=True), \
+                            mock.patch.object(dispatch.subprocess, "Popen", side_effect=lambda argv, **k: seen.setdefault("argv", argv)), \
+                            mock.patch.object(dispatch, "_stream_run", return_value=(0, "", "")):
+                        dispatch.launch("claude", "haiku", None, self.tmp, "hi", self.tmp, "plan", resume=resume,
+                                        read_only=True, allowed_tools=["Read"], disallowed_tools=["Bash"])
+                    values = self._settings_values(seen["argv"])
+                    self.assertEqual(len(values), 1)
+                    parsed = json.loads(values[0])
+                    deny = parsed["permissions"]["deny"]
+                    for g in dispatch.SECRET_READ_GLOBS:
+                        self.assertIn(f"Read({g})", deny)
+                    for g in ("**/.env", "**/.env.*", "**/*.env", "**/*.pem", "**/*.key", "**/id_rsa*", "**/id_ed25519*",
+                              "**/.netrc", "**/.npmrc", "**/.pypirc", "**/credentials*", "**/*.p12", "**/*.pfx",
+                              "**/.aws/**", "**/.ssh/**", "**/.gnupg/**"):
+                        self.assertIn(g, dispatch.SECRET_READ_GLOBS)
+                    if broker:  # the pre-existing WORKER_SETTINGS keys survive the merge
+                        self.assertEqual(parsed["sandbox"], json.loads(dispatch.WORKER_SETTINGS)["sandbox"])
+
+    def test_git_path_launch_has_no_secret_settings(self):
+        argv = self._launch("claude", "haiku", False)
+        self.assertEqual(self._settings_values(argv), [])
+
     def test_claude_launch_read_only_flags(self):  # F2
         argv = self._launch("claude", "haiku", True)
         for flag in ("--tools", "--setting-sources", "--strict-mcp-config"):
@@ -654,6 +686,42 @@ class ReviewFixesTest(NonGitBase):
                 self.assertIn("refused-non-git", str(cm.exception))
                 popen.assert_not_called()
                 run_codex.assert_not_called()
+
+    def test_launch_rechecks_broad_cwd_on_resume(self):
+        self._skipped_run()
+        # the resume gate's own broad_cwd call passes; the one inside launch then fires
+        with mock.patch.object(dispatch, "broad_cwd", side_effect=[None, "inside .ssh"]), \
+                mock.patch.object(dispatch, "caller_sandbox", return_value=None), \
+                mock.patch.object(dispatch, "_stream_run") as stream:
+            try:
+                rc, out, err = self.main("--resume", self.run_dir().name, "--message", "go", "--run-dir", str(self.runs))
+            except RuntimeError as exc:
+                self.assertIn("refused-non-git", str(exc))
+            else:
+                self.assertNotEqual(rc, dispatch.EXIT_OK, out + err)
+        stream.assert_not_called()  # no delegate process started
+
+    def test_skipped_resume_with_unclear_git_answer_refused(self):
+        self._skipped_run()
+        rec = Recorder()
+        with mock.patch.object(dispatch, "launch", side_effect=rec), \
+                mock.patch.object(dispatch, "in_git_work_tree", return_value=None):
+            rc, _, err = self.main("--resume", self.run_dir().name, "--message", "go", "--run-dir", str(self.runs))
+        self.assertEqual(rc, dispatch.EXIT_REFUSED)
+        self.assertEqual(rec.calls, [])
+        self.assertIn("refused-non-git", err)
+
+    def test_resume_trusts_record_skip_when_run_json_edited(self):
+        self._skipped_run()
+        path = self.run_dir() / "run.json"
+        spec = json.loads(path.read_text())
+        spec["snapshot"] = "deadbeef"
+        path.write_text(json.dumps(spec))
+        rec = Recorder()
+        with mock.patch.object(dispatch, "launch", side_effect=rec):
+            self.main("--resume", self.run_dir().name, "--message", "go", "--run-dir", str(self.runs))
+        self.assertEqual(len(rec.calls), 1, rec.calls)
+        self.assertIs(rec.calls[0]["kw"].get("read_only"), True)
 
     def test_mount_point_refused_ordinary_and_volume_subfolders_allowed(self):
         vol = self.root / "disk"
