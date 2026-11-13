@@ -16,6 +16,9 @@ from tests.test_dispatch_cli import EXAMPLE, GOOD_REPORT
 from tests.test_dispatch_snapshot_trust import DispatchBase
 
 
+NEVER = "a non-git dispatch never runs there"  # the refusal text of every protected cwd class
+
+
 class Recorder:
     """A launch() stand-in that records each call's kind, prompt and keyword arguments."""
 
@@ -287,13 +290,13 @@ class CwdScopeTest(NonGitBase):
             with self.subTest(name=name):
                 d = self.root / name / "sub"
                 d.mkdir(parents=True)
-                self._refused(d, "holds credentials or agent config")
+                self._refused(d, "a non-git dispatch never runs there")
 
     def test_symlink_into_credential_dir_refused(self):
         (self.root / ".codex").mkdir()
         link = self.plain / "codexlink"
         link.symlink_to(self.root / ".codex")
-        self._refused(link, "holds credentials or agent config")
+        self._refused(link, "a non-git dispatch never runs there")
 
     def test_symlink_to_home_refused(self):
         link = self.plain / "homelink"
@@ -303,6 +306,84 @@ class CwdScopeTest(NonGitBase):
     def test_parent_of_home_refused(self):
         with mock.patch.object(dispatch, "in_git_work_tree", return_value=False):
             self._refused(self.root.parent, "home directory or a parent")
+
+    def _case_insensitive(self) -> bool:
+        probe = self.root / "CaseProbe"
+        probe.mkdir()
+        try:
+            return (self.root / "caseprobe").exists()
+        finally:
+            probe.rmdir()
+
+    def _resume_refused(self, cwd, word):
+        """A first turn skipped in plain, then run.json's cwd moved to cwd: the resume must refuse before launch."""
+        rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
+        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        path = self.run_dir() / "run.json"
+        spec = json.loads(path.read_text())
+        spec["cwd"] = str(cwd)
+        path.write_text(json.dumps(spec))
+        rec = Recorder()
+        with mock.patch.object(dispatch, "launch", side_effect=rec):
+            rc, out, err = self.main("--resume", self.run_dir().name, "--message", "go on", "--run-dir", str(self.runs))
+        self.assertEqual(rc, dispatch.EXIT_REFUSED, out + err)
+        self.assertEqual(rec.calls, [])
+        self.assertIn(word, err)
+
+    def test_case_variant_cwd_refused(self):  # identity compare
+        if not self._case_insensitive():
+            self.skipTest(f"{self.root} is on a case-sensitive volume; a case variant is a different folder there")
+        (self.root / ".ssh" / "keys").mkdir(parents=True)
+        variant = self.root / ".SSH" / "KEYS"
+        self._refused(variant, NEVER)
+        home_variant = self.root.parent / self.root.name.upper()
+        with mock.patch.object(dispatch, "in_git_work_tree", return_value=False):
+            self._refused(home_variant, "home directory")
+
+    def test_case_variant_cwd_refused_on_resume(self):
+        if not self._case_insensitive():
+            self.skipTest(f"{self.root} is on a case-sensitive volume")
+        (self.root / ".codex").mkdir()
+        self._resume_refused(self.root / ".CODEX", NEVER)
+
+    def test_symlinked_secret_target_parent_refused(self):  # cwd holds the real target of ~/.config
+        target = self.root / "dots" / "config"
+        target.mkdir(parents=True)
+        (self.root / ".config").symlink_to(target)
+        self._refused(self.root / "dots", "contains")
+        (target / "sub").mkdir()
+        self._refused(target / "sub", NEVER)  # inside the real target of ~/.config
+
+    def test_symlinked_secret_target_parent_refused_on_resume(self):
+        target = self.root / "dots" / "aws"
+        target.mkdir(parents=True)
+        (self.root / ".aws").symlink_to(target)
+        self._resume_refused(self.root / "dots", "contains")
+
+    def test_generic_dot_dir_and_library_refused(self):  # not in any list
+        for name in (".kube", ".password-store", "Library"):
+            with self.subTest(name=name):
+                d = self.root / name / "x"
+                d.mkdir(parents=True)
+                self._refused(d, NEVER)
+
+    def test_generic_dot_dir_refused_on_resume(self):
+        d = self.root / ".kube" / "x"
+        d.mkdir(parents=True)
+        self._resume_refused(d, NEVER)
+
+    def test_normal_folders_accepted(self):
+        work = self.root / "work" / "x"
+        work.mkdir(parents=True)
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        for cwd in (work, Path(outside.name)):
+            with self.subTest(cwd=cwd):
+                self.assertIs(dispatch.in_git_work_tree(cwd), False)
+                self.assertIsNone(dispatch.broad_cwd(cwd))
+                rc, out, _, rec = self.go("terra", self.ro_slots(CODEX_WRITE="no"), cwd=cwd)
+                self.assertEqual(rc, dispatch.EXIT_OK, out)
+                self.assertEqual(len(rec.calls), 1)
 
     def test_broad_cwd_on_resume_refused(self):
         rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
@@ -318,7 +399,7 @@ class CwdScopeTest(NonGitBase):
             rc, out, err = self.main("--resume", self.run_dir().name, "--message", "go on", "--run-dir", str(self.runs))
         self.assertEqual(rc, dispatch.EXIT_REFUSED, out + err)
         self.assertEqual(rec.calls, [])
-        self.assertIn("holds credentials", err)
+        self.assertIn("a non-git dispatch never runs there", err)
 
     def _resume_read_only(self, model, slots):
         rc, out, _, _ = self.go(model, self.ro_slots(**slots), cwd=self.plain)
@@ -477,6 +558,14 @@ class UnitTest(unittest.TestCase):
             dubious = mock.Mock(returncode=128, stdout="", stderr="fatal: detected dubious ownership in repository")
             with mock.patch.object(dispatch.subprocess, "run", return_value=dubious):
                 self.assertIsNone(dispatch.in_git_work_tree(plain))
+
+    def test_broken_gitfile_is_not_non_git(self):  # 7: base path, capture fails as before
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp).resolve() / "w"
+            (work / "sub").mkdir(parents=True)
+            (work / ".git").write_text("gitdir: /nonexistent/agents-inc-test/gitdir\n")
+            self.assertIsNone(dispatch.in_git_work_tree(work))
+            self.assertIsNone(dispatch.in_git_work_tree(work / "sub"))
 
     def test_codex_auth_hint_only_on_skip_path(self):  # L7
         err = FileNotFoundError("WB_CODEX_AUTH_MISSING: x not found; log in to Codex first")

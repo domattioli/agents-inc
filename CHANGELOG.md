@@ -6,7 +6,7 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
-- `agents-inc dispatch` from a folder outside git no longer stops with a raw git error. A read-only delegate runs with the snapshot skipped and the result reads `unverified` with reason `snapshot-skipped`; a delegate that can write is refused before launch with the fix (dispatch from a git repository, files in a git-ignored `.scratch/<task>/`).
+- `agents-inc dispatch` from a folder outside git no longer stops with a raw git error. A read-only delegate runs with the snapshot skipped and the result reads `unverified` with reason `snapshot-skipped`; a delegate that can write is refused before launch with the fix (dispatch from a git repository, files in a git-ignored `.scratch/<task>/`). On this path the filesystem root, home and its parents, and folders inside a hidden folder at the top of home or `~/Library` are refused as cwd.
 
 ## [0.6.4] — 2026-11-12
 

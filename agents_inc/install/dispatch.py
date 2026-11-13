@@ -297,29 +297,76 @@ def in_git_work_tree(cwd) -> bool | None:
         return None
     if res.returncode == 0:
         return True if res.stdout.strip() == "true" else None  # inside .git itself: not a work tree, let capture decide
-    return False if "not a git repository" in res.stderr.lower() else None
+    if "not a git repository" not in res.stderr.lower():
+        return None
+    # A .git entry git cannot use (say a gitfile pointing to a missing gitdir) is a broken repository, not a plain
+    # folder: keep the base path, whose capture fails as before. Only no .git entry on the way up counts as non-git.
+    start = Path(os.path.abspath(cwd))
+    if any(os.path.lexists(p / ".git") for p in (start, *start.parents)):
+        return None
+    return False
+
+
+def _ident(path) -> tuple | None:
+    """(st_dev, st_ino) of path after symlinks, or None: the same folder has one identity whatever its spelling."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _chain(path) -> list[Path]:
+    """path (symlinks resolved) and each of its ancestors, nearest first."""
+    real = Path(os.path.realpath(path))
+    return [real, *real.parents]
 
 
 def broad_cwd(cwd) -> str | None:
-    """A skip-path cwd the read-only delegate must not read: the filesystem root, the home directory or a parent of
-    it, or a directory at or under ~/.codex, ~/.claude or any runtime.HARD_DENY entry. Symlinks are resolved first.
-    The HARD_DENY entries are direct children of home, so only home or a parent of it can contain one."""
+    """Non-git skip path only: the refusal text when cwd must not be the delegate's working folder, else None.
+    Folders are compared by identity (st_dev, st_ino), never by spelling, so case variants and symlinks match.
+    Refused: the filesystem root; home and every ancestor of home; anything inside home whose first folder below home
+    is hidden (a dot-directory) or is Library, or is a runtime.HARD_DENY entry; and a cwd that holds the real target of
+    a protected folder (HARD_DENY, .codex, .claude) that is a symlink. Known limit: a copy of home on another volume."""
     from .runtime import HARD_DENY
-    path, home = Path(cwd).resolve(), Path.home().resolve()
-    if path == Path(path.anchor):
-        return f"cwd {path} is the filesystem root"
-    if path == home or path in home.parents:
-        return f"cwd {path} is the home directory or a parent of it"
+    home = Path.home()
+    chain = _chain(cwd)
+    ids = [_ident(p) for p in chain]
+    here = ids[0]
+    if here is None:
+        return None  # a missing cwd fails later with its own error
+    if here == _ident(chain[-1]):
+        return f"cwd {chain[0]} is the filesystem root; a non-git dispatch never runs there"
+    if here in {_ident(p) for p in _chain(home)}:
+        return (f"cwd {chain[0]} is the home directory or a parent of it, where credentials and agent config live; "
+                "a non-git dispatch never runs there; pick a project folder")
+    home_id = _ident(home)
+    protected_names = dict.fromkeys((".codex", ".claude", "Library") + tuple(HARD_DENY))
+    protected = {_ident(home / n) for n in protected_names} - {None}
+    if home_id in ids[1:]:
+        top = chain[ids.index(home_id) - 1]  # the first folder below home on cwd's real path
+        if top.name.startswith(".") or _ident(top) in protected:
+            return (f"cwd {chain[0]} is inside {top}, a hidden or system folder at the top of home that can hold "
+                    "credentials; a non-git dispatch never runs there")
+    try:
+        dot_entries = [home / n for n in os.listdir(home) if n.startswith(".")]
+    except OSError:
+        dot_entries = []
+    for entry in dict.fromkeys([home / n for n in protected_names] + dot_entries):
+        target = _ident(entry)
+        if target is not None and target in ids:  # cwd is at or under the real target of a hidden or protected folder
+            return (f"cwd {chain[0]} is inside {os.path.realpath(entry)}, the real location of {entry}; a non-git "
+                    "dispatch never runs there")
     for name in dict.fromkeys((".codex", ".claude") + tuple(HARD_DENY)):
-        for secret in {home / name, (home / name).resolve()}:
-            if path == secret or path.is_relative_to(secret):
-                return f"cwd {path} is at or under {secret}, which holds credentials or agent config"
+        entry = home / name
+        if entry.is_symlink() and here in {_ident(p) for p in _chain(entry)}:
+            return (f"cwd {chain[0]} contains {os.path.realpath(entry)}, the real location of {entry}; a non-git "
+                    "dispatch never runs in a folder that holds it; pick a folder that does not")
     return None
 
 
 def broad_cwd_refusal(why: str) -> str:
-    return (f"{why}; a non-git dispatch lets the delegate read everything under cwd, so this cwd is refused even for a "
-            f"read-only delegate; use a narrower folder, or {NON_GIT_FIX}")
+    return why
 
 
 def write_capability(kind: str | None, spec: dict, bash_allow=(), check_grants: bool = False) -> str | None:
@@ -408,7 +455,9 @@ def claude_argv(model: str, permission_mode: str, resume: str | None = None, eff
         argv += ["--allowedTools", *allowed]
     if disallowed:
         argv += ["--disallowedTools", *disallowed]
-    if read_only:  # non-git skip path: only these built-in tools exist; project and local settings (and hooks) never load
+    # non-git skip path: only these built-in tools exist. --setting-sources user drops project and local settings and
+    # their hooks; user hooks and plugins still load. Read, Glob and Grep are not confined to cwd.
+    if read_only:
         argv += ["--tools", ",".join(READ_ONLY_TOOLS), "--setting-sources", "user"]
     return argv
 
