@@ -6,6 +6,10 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- After an install from a clean git checkout, uncommitted edits there no longer make the install stale and stop every dispatch; only `HEAD` moving to a commit whose bundle files differ does (commit, checkout, reset, branch switch). `install` and `repair` warn when they install uncommitted changes, note a `HEAD` that is not on a tag, and START-HERE describes the release-worktree setup (#174).
+
 ## [0.6.4] — 2026-11-12
 
 ### Changed
