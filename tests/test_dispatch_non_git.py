@@ -438,6 +438,26 @@ class ArgvTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "user")
         self.assertNotIn("--tools", dispatch.claude_argv("haiku", "plan"))
 
+    def test_claude_read_only_argv_restricted(self):  # cwd read limit: CLI-enforced, not a prompt rule
+        self.assertIn("--restricted", dispatch.claude_argv("haiku", "plan", read_only=True))
+        self.assertIn("--restricted", dispatch.claude_argv("haiku", "plan", resume="sid", read_only=True))
+        self.assertNotIn("--restricted", dispatch.claude_argv("haiku", "plan"))  # git path unchanged
+        self.assertNotIn("--restricted", dispatch.claude_argv("haiku", "plan", resume="sid"))
+
+    def test_claude_launch_read_only_restricted_new_and_resume(self):
+        for resume in (None, "sid"):
+            with self.subTest(resume=resume):
+                seen = {}
+                with mock.patch.object(dispatch, "caller_sandbox", return_value=None), \
+                        mock.patch.object(dispatch.subprocess, "Popen", side_effect=lambda argv, **k: seen.setdefault("argv", argv)), \
+                        mock.patch.object(dispatch, "_stream_run", return_value=(0, "", "")):
+                    dispatch.launch("claude", "haiku", None, self.tmp, "hi", self.tmp, "plan", resume=resume,
+                                    read_only=True, allowed_tools=["Read"], disallowed_tools=["Bash"])
+                self.assertIn("--restricted", seen["argv"])
+                if resume:
+                    self.assertEqual(seen["argv"][seen["argv"].index("--resume") + 1], "sid")
+        self.assertNotIn("--restricted", self._launch("claude", "haiku", False))
+
     def _launch(self, kind, model, read_only):
         """The real launch(); only the process start (Claude) or run_codex (Codex) and install lookups are faked."""
         with mock.patch.object(dispatch, "caller_sandbox", return_value=None):

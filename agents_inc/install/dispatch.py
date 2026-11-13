@@ -473,10 +473,10 @@ def claude_argv(model: str, permission_mode: str, resume: str | None = None, eff
         argv += ["--allowedTools", *allowed]
     if disallowed:
         argv += ["--disallowedTools", *disallowed]
-    # non-git skip path: only these built-in tools exist. --setting-sources user drops project and local settings and
-    # their hooks; user hooks and plugins still load. Read, Glob and Grep are not confined to cwd.
+    # non-git skip path: only these built-in tools exist. --restricted (CLI-enforced) confines Read, Glob and Grep to
+    # cwd after symlink resolution and ignores user, project and local settings files (so their hooks too).
     if read_only:
-        argv += ["--tools", ",".join(READ_ONLY_TOOLS), "--setting-sources", "user"]
+        argv += ["--tools", ",".join(READ_ONLY_TOOLS), "--setting-sources", "user", "--restricted"]
     return argv
 
 
