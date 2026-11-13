@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import pwd
 import re
 import secrets
 import shlex
@@ -329,7 +330,6 @@ def broad_cwd(cwd) -> str | None:
     is hidden (a dot-directory) or is Library, or is a runtime.HARD_DENY entry; and a cwd that holds the real target of
     a protected folder (HARD_DENY, .codex, .claude) that is a symlink. Known limit: a copy of home on another volume."""
     from .runtime import HARD_DENY
-    home = Path.home()
     chain = _chain(cwd)
     ids = [_ident(p) for p in chain]
     here = ids[0]
@@ -337,11 +337,29 @@ def broad_cwd(cwd) -> str | None:
         return None  # a missing cwd fails later with its own error
     if here == _ident(chain[-1]):
         return f"cwd {chain[0]} is the filesystem root; a non-git dispatch never runs there"
+    # macOS reports the Data volume (a firmlink target) as no mount point, so name the system volume folders too
+    if os.path.ismount(chain[0]) or here in {_ident("/System/Volumes"), _ident("/System/Volumes/Data")}:
+        return (f"cwd {chain[0]} is a mount point (a whole volume, such as /System/Volumes/Data or an external disk "
+                "root); a non-git dispatch never runs there; pick a folder inside it")
+    homes: list[Path] = []
+    try:
+        homes.append(Path(pwd.getpwuid(os.getuid()).pw_dir))
+    except (KeyError, OSError):
+        pass
+    homes.append(Path.home())  # $HOME, which can differ from the account's home
+    for home in dict.fromkeys(homes):
+        why = _broad_for_home(home, chain, ids, here, HARD_DENY)
+        if why:
+            return why
+    return None
+
+
+def _broad_for_home(home: Path, chain, ids, here, hard_deny) -> str | None:
     if here in {_ident(p) for p in _chain(home)}:
         return (f"cwd {chain[0]} is the home directory or a parent of it, where credentials and agent config live; "
                 "a non-git dispatch never runs there; pick a project folder")
     home_id = _ident(home)
-    protected_names = dict.fromkeys((".codex", ".claude", "Library") + tuple(HARD_DENY))
+    protected_names = dict.fromkeys((".codex", ".claude", "Library") + tuple(hard_deny))
     protected = {_ident(home / n) for n in protected_names} - {None}
     if home_id in ids[1:]:
         top = chain[ids.index(home_id) - 1]  # the first folder below home on cwd's real path
@@ -357,7 +375,7 @@ def broad_cwd(cwd) -> str | None:
         if target is not None and target in ids:  # cwd is at or under the real target of a hidden or protected folder
             return (f"cwd {chain[0]} is inside {os.path.realpath(entry)}, the real location of {entry}; a non-git "
                     "dispatch never runs there")
-    for name in dict.fromkeys((".codex", ".claude") + tuple(HARD_DENY)):
+    for name in dict.fromkeys((".codex", ".claude") + tuple(hard_deny)):
         entry = home / name
         if entry.is_symlink() and here in {_ident(p) for p in _chain(entry)}:
             return (f"cwd {chain[0]} contains {os.path.realpath(entry)}, the real location of {entry}; a non-git "
@@ -919,6 +937,8 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
             if kind != "claude":
                 raise CallerSandboxed(where, CODEX_NESTED_FIX, "caller-sandboxed-codex")
             _SANDBOX_NOTE.update({"caller_sandbox": "claude-code", "api": "reachable"})
+    if read_only and (why := broad_cwd(cwd)):  # the non-git path has no snapshot: re-check right before the start
+        raise RuntimeError(f"refused-non-git: {why}")
     channel = _ask_channel(run_dir, _WORKER_ASK) if (_BROKER_SAFE_WRITES and _WORKER_ASK) else None
     if kind == "claude":
         if lead_dir is not None and channel is not None:
@@ -2148,20 +2168,22 @@ def resume(args) -> int:
     else:
         spec["snapshot_trust"] = "run-dir"  # legacy run: run.json has no snapshot_trust key
     read_only = False
-    if spec.get("snapshot") == SNAPSHOT_SKIPPED and in_git_work_tree(Path(spec["cwd"])) is not False:
+    skipped = spec.get("snapshot") == SNAPSHOT_SKIPPED
+    git_state = in_git_work_tree(Path(spec["cwd"]))  # asked once: a second answer could differ (race)
+    if skipped and git_state is not False:
         print(f"dispatch: refused-non-git: the first turn skipped its snapshot and cwd {spec['cwd']} is now (or may be) "
               "a git work tree, so no write check can run; start a new dispatch", file=sys.stderr)
         return EXIT_REFUSED
-    if in_git_work_tree(Path(spec["cwd"])) is False:  # same rule as a first turn; a git cwd keeps the verify unchanged
+    if git_state is False:  # same rule as a first turn; a git cwd keeps the verify unchanged
         broad = broad_cwd(spec["cwd"])
         writes = write_capability(kind, spec, check_grants=True)
-        if not writes and spec.get("snapshot") != SNAPSHOT_SKIPPED:
+        if not writes and not skipped:
             writes = "the first turn captured a snapshot this cwd can no longer verify"
         if broad or writes:
             msg = broad_cwd_refusal(broad) if broad else non_git_refusal(spec["cwd"], writes)
             print(f"dispatch: refused-non-git: {msg}", file=sys.stderr)
             return EXIT_REFUSED
-        read_only = True
+        read_only = True  # a recorded skip never reaches launch without this: any other git answer refused above
     lead_dir = Path(spec["lead_dir"]) if kind == "claude" and spec.get("lead_dir") else None
     if lead_dir is not None:  # D60: re-attach the Lead's broker; its counters reload from lead_dir/run.json
         cfg = lead_dir / "lead_mcp.json"

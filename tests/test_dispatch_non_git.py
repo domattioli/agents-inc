@@ -602,5 +602,140 @@ class UnitTest(unittest.TestCase):
         self.assertIn("`grep a b`", text)
 
 
+class ReviewFixesTest(NonGitBase):
+    def _skipped_run(self):
+        rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
+        self.assertEqual(rc, dispatch.EXIT_OK, out)
+
+    def test_resume_asks_git_once(self):  # a cwd that turns into a git tree between two asks must not drop the flags
+        self._skipped_run()
+        answers = []
+
+        def flaky(cwd):
+            answers.append(1)
+            return False if len(answers) == 1 else True
+
+        rec = Recorder()
+        with mock.patch.object(dispatch, "launch", side_effect=rec), \
+                mock.patch.object(dispatch, "in_git_work_tree", side_effect=flaky):
+            self.main("--resume", self.run_dir().name, "--message", "go", "--run-dir", str(self.runs))
+        self.assertEqual(len(rec.calls), 1)
+        self.assertIs(rec.calls[0]["kw"].get("read_only"), True)
+
+    def test_launch_rechecks_broad_cwd(self):
+        home_sub = self.root / ".ssh" / "x"
+        home_sub.mkdir(parents=True)
+        for kind in ("claude", "codex"):
+            with self.subTest(kind=kind), mock.patch.object(dispatch, "caller_sandbox", return_value=None), \
+                    mock.patch.object(dispatch.subprocess, "Popen") as popen, \
+                    mock.patch("agents_inc.install.runtime.run_codex") as run_codex:
+                with self.assertRaises(RuntimeError) as cm:
+                    dispatch.launch(kind, "haiku", None, home_sub, "hi", self.root, "plan", read_only=True)
+                self.assertIn("refused-non-git", str(cm.exception))
+                popen.assert_not_called()
+                run_codex.assert_not_called()
+
+    def test_mount_point_refused_ordinary_and_volume_subfolders_allowed(self):
+        vol = self.root / "disk"
+        (vol / "sub").mkdir(parents=True)
+        real = os.path.ismount
+        with mock.patch.object(os.path, "ismount", side_effect=lambda p: os.path.realpath(p) == str(vol) or real(p)):
+            self.assertIn("mount point", dispatch.broad_cwd(vol))
+            self.assertIsNone(dispatch.broad_cwd(vol / "sub"))
+        for rel in ("Documents/x", "Downloads/x", "work/x"):
+            d = self.root / rel
+            d.mkdir(parents=True)
+            self.assertIsNone(dispatch.broad_cwd(d), rel)
+        with tempfile.TemporaryDirectory() as t:
+            self.assertIsNone(dispatch.broad_cwd(t))
+        self.assertIsNone(dispatch.broad_cwd(Path(os.environ.get("TMPDIR", "/tmp")) / "nonexistent-x"))
+
+    @unittest.skipUnless(os.path.isdir("/System/Volumes/Data"), "macOS only")
+    def test_system_volumes_refused(self):
+        self.assertIsNotNone(dispatch.broad_cwd("/System/Volumes/Data"))
+        self.assertIsNotNone(dispatch.broad_cwd("/System/Volumes"))
+
+    def test_account_home_and_env_home_both_protected(self):
+        other = self.root / "acct"
+        (other / ".kube" / "x").mkdir(parents=True)
+        (self.root / ".kube" / "x").mkdir(parents=True)
+        fake = mock.Mock(pw_dir=str(other))
+        with mock.patch.object(dispatch.pwd, "getpwuid", return_value=fake):
+            self.assertIn(NEVER, dispatch.broad_cwd(other / ".kube" / "x"))  # account home, $HOME elsewhere
+            self.assertIn(NEVER, dispatch.broad_cwd(self.root / ".kube" / "x"))  # $HOME differs from account home
+            self.assertIn("home directory", dispatch.broad_cwd(other))
+
+    def test_symlinked_generic_dot_folder_target_refused(self):  # only the dot_entries scan catches this
+        target = self.root / "dots" / "kube"
+        (target / "sub").mkdir(parents=True)
+        (self.root / ".kube").symlink_to(target)
+        why = dispatch.broad_cwd(target / "sub")
+        self.assertIn("real location of", why)
+
+    def test_skip_verify_needs_trusted_record(self):
+        self._skipped_run()
+        spec = self.spec()
+        run_dir = self.run_dir()
+        ok = ({"snapshot": "skipped"}, run_dir)
+        for record, expect in ((ok[0], "skipped"), ({"snapshot": "clean"}, "ERROR:skip-unconfirmed"),
+                               (None, "ERROR:skip-unconfirmed")):
+            with self.subTest(record=record), mock.patch.object(dispatch, "_trust_record", return_value=(record, run_dir)):
+                rc, _, snap = dispatch._snapshot_verify(spec, run_dir)
+                self.assertEqual(snap, expect)
+                self.assertEqual(rc, 0 if expect == "skipped" else 1)
+
+    def test_check_grants_allowed_and_denied_subsets(self):
+        deny = list(dispatch.READ_ONLY_DENY)
+        base = {"permission_mode": "plan", "allowed_tools": list(dispatch.READ_ONLY_TOOLS), "disallowed_tools": deny}
+        wc = lambda **ch: dispatch.write_capability("claude", {**base, **ch}, check_grants=True)
+        self.assertIsNone(wc())
+        self.assertIsNone(wc(allowed_tools=["Read"]))  # a subset of the read-only set is fine
+        self.assertIsNotNone(wc(allowed_tools=["Read", "Bash"]))  # allowed outside the read-only set
+        self.assertIsNotNone(wc(allowed_tools=["Edit"]))
+        self.assertIsNotNone(wc(disallowed_tools=[t for t in deny if t != "Edit"]))  # a write tool no longer denied
+        self.assertIsNotNone(wc(disallowed_tools=None))
+
+    def test_resume_refuses_forged_allowed_and_denied_grants(self):
+        for field, value in (("allowed_tools", ["Read", "Bash"]), ("disallowed_tools", [])):
+            with self.subTest(field=field):
+                self.setUp()  # fresh run dir per case
+                self._skipped_run()
+                path = self.run_dir() / "run.json"
+                spec = json.loads(path.read_text())
+                spec[field] = value
+                path.write_text(json.dumps(spec))
+                rec = Recorder()
+                with mock.patch.object(dispatch, "launch", side_effect=rec):
+                    rc, _, err = self.main("--resume", self.run_dir().name, "--message", "go", "--run-dir", str(self.runs))
+                self.assertEqual(rc, dispatch.EXIT_REFUSED, err)
+                self.assertEqual(rec.calls, [])
+
+    def test_broker_profile_drops_snapshot_read_paths_when_read_only(self):
+        for read_only in (True, False):
+            with self.subTest(read_only=read_only):
+                run_dir = self.root / f"broker{int(read_only)}"
+                run_dir.mkdir()
+                seen = {}
+
+                def profile(cwd, home, tmpdir, deny, write_ok=(), read_ok=()):
+                    seen["read_ok"] = [str(p) for p in read_ok]
+                    return "(version 1)\n"
+
+                with mock.patch.object(dispatch, "caller_sandbox", return_value=None), \
+                        mock.patch.object(dispatch, "_BROKER_SAFE_WRITES", True), \
+                        mock.patch.object(dispatch, "_WORKER_ASK", None), \
+                        mock.patch.object(dispatch, "sandbox_available", return_value=True), \
+                        mock.patch.object(dispatch, "claude_sandbox_profile", side_effect=profile), \
+                        mock.patch.object(dispatch.subprocess, "Popen"), \
+                        mock.patch.object(dispatch, "_stream_run", return_value=(0, "", "")):
+                    dispatch.launch("claude", "haiku", None, self.plain, "hi", run_dir, "plan", read_only=read_only,
+                                    allowed_tools=["Read"], disallowed_tools=["Bash"])
+                names = [Path(p).name for p in seen["read_ok"]]
+                if read_only:
+                    self.assertEqual(names, [])
+                else:
+                    self.assertEqual(names, ["pre_dispatch_snapshot.py", "snapshot.json"])
+
+
 if __name__ == "__main__":
     unittest.main()
