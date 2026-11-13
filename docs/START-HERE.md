@@ -27,6 +27,26 @@ makes it read-only.
 Workers without seeing any credentials (D51). The installer does not manage the
 HTTP bridge or any daemon.
 
+### Develop on a machine that runs the install
+
+Install from a release worktree, not from the checkout you edit:
+
+```bash
+git worktree add ../agents-inc-release v0.6.4   # any release tag
+agents-inc repair --source ../agents-inc-release
+```
+
+- After an install from a clean git checkout, `INSTALL_STALE` appears only when
+  `HEAD` moves to a commit whose installed files differ: a commit, checkout,
+  reset or branch switch. Uncommitted edits never stop dispatch. When git cannot
+  run, the check reports not stale.
+- An install from a checkout with uncommitted changes installs them and prints a
+  `WARNING:`. Any further edit in that checkout then makes the install stale,
+  and dispatch stops until `repair`.
+- A `NOTE:` says when `HEAD` is not on a release tag. Neither message stops the install.
+- To upgrade, move the worktree to the new tag
+  (`git -C ../agents-inc-release checkout <tag>`), then run the `repair` line again.
+
 ### Requirements
 
 - Python 3.11 or later. The test suite also runs on Python 3.14.

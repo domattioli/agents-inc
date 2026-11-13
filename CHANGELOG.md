@@ -6,9 +6,12 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
 - `agents-inc dispatch` from a folder outside git no longer stops with a raw git error. A read-only delegate runs with the snapshot skipped and the result reads `unverified` with reason `snapshot-skipped`; a delegate that can write is refused before launch with the fix (dispatch from a git repository, files in a git-ignored `.scratch/<task>/`). On this path the filesystem root, home and its parents, and folders inside a hidden folder at the top of home or `~/Library` are refused as cwd.
 - On that non-git path a read-only Claude delegate now starts with `claude --restricted`. The Claude CLI then refuses any Read, Glob or Grep outside the cwd, including absolute paths, `~` paths, `..` paths and symlinks inside cwd that point outside it. The flag also skips user, project and local settings files, so user hooks and user deny rules do not apply to that delegate. The Claude CLI itself still reads its own files (login, session history). A read-only Claude delegate in a git repository is unchanged.
 - The non-git path also refuses a cwd that is a mount point (a volume root such as `/Volumes/<disk>` or `/System/Volumes/Data`; subfolders stay allowed) and protects both the account-database home and `$HOME`. Because `--restricted` ignores the user's deny rules, dispatch now passes its own secret-file deny list (`.env` files, keys, `.netrc`, `.npmrc`, `.pypirc`, `credentials*`, `.aws`, `.ssh`, `.gnupg`) in a single `--settings` value for new runs and resumes. A resume takes the skip marker from the trusted record as well as run.json, and an unclear git answer refuses the resume.
+- After an install from a clean git checkout, uncommitted edits there no longer make the install stale and stop every dispatch; only `HEAD` moving to a commit whose bundle files differ does (commit, checkout, reset, branch switch). `install` and `repair` warn when they install uncommitted changes, note a `HEAD` that is not on a tag, and START-HERE describes the release-worktree setup (#174).
 
 ## [0.6.4] — 2026-11-12
 
