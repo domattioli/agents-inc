@@ -559,6 +559,22 @@ CLAUDE_WORKER_DENY = (".ssh", ".config", ".codex-bridge", ".codex", ".local", ".
 # #94: a broker Claude Worker already runs under our seatbelt. Its own Claude Code Bash sandbox would nest sandbox-exec
 # (rc 71, sandbox_apply: Operation not permitted), so the Worker turns that sandbox off for itself.
 WORKER_SETTINGS = '{"sandbox": {"enabled": false}}'
+# --restricted ignores the user's settings files, so their secret-file deny rules vanish; dispatch passes its own
+# (a --settings value still applies under --restricted). Mirrors the secret-path shapes of the other guards here.
+SECRET_READ_GLOBS = (
+    "**/.env", "**/.env.*", "**/*.env", "**/*.pem", "**/*.key", "**/id_rsa*", "**/id_ed25519*", "**/.netrc",
+    "**/.npmrc", "**/.pypirc", "**/credentials*", "**/*.p12", "**/*.pfx", "**/.aws/**", "**/.ssh/**", "**/.gnupg/**")
+
+
+def worker_settings_arg(base: bool, read_only: bool) -> str | None:
+    """The single --settings JSON value: WORKER_SETTINGS when base, plus Read denies for secret files when read_only."""
+    if not (base or read_only):
+        return None
+    settings = json.loads(WORKER_SETTINGS) if base else {}
+    if read_only:
+        deny = settings.setdefault("permissions", {}).setdefault("deny", [])
+        deny += [f"Read({g})" for g in SECRET_READ_GLOBS]
+    return json.dumps(settings)
 # #94: AGENTS_INC_ALLOW_SANDBOXED=1 lets dispatch start inside another sandbox (tests, a caller that knows better).
 ALLOW_SANDBOXED_ENV = "AGENTS_INC_ALLOW_SANDBOXED"
 SANDBOX_FIX = ('do not retry unchanged; two routes: (a) rerun as one plain command with no cd, &&, ;, pipe, redirect, heredoc or $(...) '
@@ -969,10 +985,10 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
                 (channel["ask"],) if channel else (),
                 (() if read_only else (Path(run_dir) / "pre_dispatch_snapshot.py", Path(run_dir) / "snapshot.json"))  # FR-011
                 + ((channel["script"], channel["config"]) if channel else ())))
-            argv += ["--settings", WORKER_SETTINGS]
+        if (value := worker_settings_arg(_BROKER_SAFE_WRITES or bool(_SANDBOX_NOTE), read_only)) is not None:
+            argv += ["--settings", value]
+        if _BROKER_SAFE_WRITES:
             argv = [SANDBOX_EXEC, "-f", str(profile)] + argv
-        elif _SANDBOX_NOTE:
-            argv += ["--settings", WORKER_SETTINGS]
         limit = _turn_timeout()
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 cwd=str(cwd), text=True, start_new_session=True, **extra)
@@ -2169,6 +2185,9 @@ def resume(args) -> int:
         spec["snapshot_trust"] = "run-dir"  # legacy run: run.json has no snapshot_trust key
     read_only = False
     skipped = spec.get("snapshot") == SNAPSHOT_SKIPPED
+    if not skipped:  # run.json is delegate-writable: the trusted record can also say the first turn skipped
+        record, _ = _trust_record(spec, run_dir)
+        skipped = isinstance(record, dict) and record.get("snapshot") == SNAPSHOT_SKIPPED
     git_state = in_git_work_tree(Path(spec["cwd"]))  # asked once: a second answer could differ (race)
     if skipped and git_state is not False:
         print(f"dispatch: refused-non-git: the first turn skipped its snapshot and cwd {spec['cwd']} is now (or may be) "
