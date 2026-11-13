@@ -1,0 +1,5 @@
+{
+ "MODEL": "sonnet",
+ "ROLE": "Workhorse (sonnet), dispatched by Orchestrator (opus).",
+ "TASK": "Implement the widget parser in widget.py. Then run its tests."
+}
