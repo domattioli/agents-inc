@@ -37,6 +37,9 @@ type World = {
   // the plugin's $.store, in memory; seeded by a test to stand for an earlier process of the same session
   store?: Record<string, unknown>
   sessionId?: string
+  // ui.open calls seen, and whether ui.open throws
+  opens?: any[]
+  openFails?: boolean
 }
 
 // 2099-11-12T12:00:00Z: the session of the fixture runs under mods/delegate-pane/hooks/fixtures/runs starts here.
@@ -53,7 +56,11 @@ async function start($: Dollar, on: On, world: World, now = T0, opts: { begin?: 
     return { value: path in (world.files ?? {}) || (world.badFiles ?? []).includes(path) } as any
   })
   on('command.register', () => ({ value: { command: 'delegate-pane' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_$, e: any) => {
+    world.opens?.push(e)
+    if (world.openFails) throw new Error('no panes here')
+    return { value: { isPlaced: true } }
+  })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('agent.list', () => ({ value: world.agents as any }))
   on('fs.list', (_$, e: any) => {
@@ -873,4 +880,17 @@ test('role column is dim on running, failed and finished rows; blank for an unkn
   const explore = rows.find(r => r.text.includes('Explore'))
   expect(explore.text.slice(17, 30)).toBe(' '.repeat(13)) // unknown rung: empty column, same width
   await ui.unmount()
+})
+
+test('session.start opens the pane once', async ($, on) => {
+  const world: World = { agents: [], dirs: [], files: {}, opens: [] }
+  await start($, on, world)
+  expect(world.opens!.length).toBe(1)
+  expect(world.opens![0].id).toBe('agents-inc-delegates')
+})
+
+test('a ui.open that throws does not fail session.start', async ($, on) => {
+  const world: World = { agents: [], dirs: [], files: {}, opens: [], openFails: true }
+  await start($, on, world)
+  expect(world.opens!.length).toBe(1)
 })

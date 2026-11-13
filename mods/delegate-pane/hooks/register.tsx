@@ -341,6 +341,13 @@ export const register: Register = on => {
         await update($, view, v => ({ ...normalizeView(v), note: `pane error: ${String((err as Error)?.message ?? err)}` }))
       }
     })
+    // Open at session start; /delegate-pane reopens it. Non-blocking: a refused open must not break the start.
+    motion.off = false
+    try {
+      void Promise.resolve($.ui.open({ id: PANE, title: 'agents-inc native agents' })).catch(() => {})
+    } catch {
+      // open refused: the command still opens the pane
+    }
     return next(e)
   })
 

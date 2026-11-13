@@ -2,6 +2,8 @@
 
 One pane for the agents-inc delegates of the current session.
 
+The pane opens at session start; `/delegate-pane` reopens it.
+
 ## Lists
 
 - Native agent types registered by agents-inc (`agents-inc:<nickname>`).
