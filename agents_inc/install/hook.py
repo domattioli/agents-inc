@@ -81,7 +81,8 @@ def session_start(paths: InstallPaths, host: str) -> str:
         text += (" Codex is not installed (WB_CLI_NOT_FOUND): Codex rungs are unavailable; Claude rungs dispatch normally."
                  if warning == "WB_CLI_NOT_FOUND" else f" WARNING: {warning}.")
     if "INSTALL_STALE" in report.warnings:
-        text += (" INSTALL_STALE means the installed bundle differs from the source checkout, so launcher and docs may"
+        text += (" INSTALL_STALE means the installed bundle differs from the source checkout (after a clean git install:"
+                 " HEAD moved to a commit with different bundle files; uncommitted edits do not count), so launcher and docs may"
                  " disagree. Run `agents-inc repair --source <agents-inc checkout>`.")
     if "WB_SANDBOX_EXCLUDE_MISSING" in report.warnings:
         text += (' WB_SANDBOX_EXCLUDE_MISSING: a sandboxed Bash cannot start a dispatch. Ask the operator once, before the'

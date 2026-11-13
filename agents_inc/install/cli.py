@@ -4,6 +4,7 @@ import argparse, datetime, json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 from .. import datafiles
 from .bundle import activate, stage_bundle
+from . import source_git
 from .discovery import install_skill_links, restore_skill_links
 from .doctor import check_install, luna_line
 from .host_wiring import install_alias_links, install_host_wiring, remove_host_wiring, unwire_hooks, HOSTS
@@ -250,7 +251,10 @@ def _install(args, source: Path):
         TransactionJournal.recover(paths.journal)
         journal = TransactionJournal(paths.journal).begin("install")
         try:
+            # #174: git state before staging; None for a packaged or non-git source, or on any git failure
+            git_state = source_git.source_state(source) if getattr(args, "source", None) else None
             staged = stage_bundle(source, paths)
+            if git_state is not None: notices.extend(source_git.source_warnings(Path(args.source).resolve(), git_state))
             codex = None
             if not getattr(args, "without_codex", False):
                 try: codex = resolve_executable("codex", os.environ.get("PATH"))
@@ -273,6 +277,7 @@ def _install(args, source: Path):
             # Unowned cache for doctor's hook-drift check; not journaled, kept by uninstall.
             paths.state.mkdir(parents=True, exist_ok=True)
             (paths.state / "source-checkout").write_text((str(Path(args.source).resolve()) if getattr(args, "source", None) else PACKAGED_SOURCE) + "\n")
+            source_git.save_record(paths.state, git_state, staged.digest)  # #174: release, HEAD, bundle cleanliness
             # Receipt last: journal recovery of a "receipt" op unlinks the file, so any
             # failure before this point must leave the previous receipt in place.
             had_prior = _save_prior_receipt(paths)
