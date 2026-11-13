@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import pwd
 import re
 import secrets
 import shlex
@@ -263,6 +264,169 @@ def snapshot(*args: str, cwd: Path, scripts: Path = SCRIPTS) -> tuple[int, str]:
     return res.returncode, res.stdout + res.stderr
 
 
+SNAPSHOT_SKIPPED = "skipped"  # run.json `snapshot` value when no capture ran
+SNAPSHOT_SKIP_REASON = "non-git cwd, read-only delegate"
+READ_ONLY_MODES = ("default", "plan")
+READ_ONLY_TOOLS = ("Read", "Glob", "Grep")
+# Deny rules win over any allow rule (user settings included), so a read-only Claude delegate cannot write or run shell.
+READ_ONLY_DENY = ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task")
+NON_GIT_FIX = ("dispatch from a git repository and put the files to read in a git-ignored .scratch/<task>/ inside it")
+
+
+_GIT_LOCATORS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES")
+
+
+def _git_rev_parse(cwd, strip: bool):
+    env = {k: v for k, v in os.environ.items() if k != "LANGUAGE" and not (strip and k in _GIT_LOCATORS)}
+    env["LC_ALL"] = "C"  # the "not a git repository" match below needs git's English message
+    return subprocess.run(["git", "-C", str(cwd), "rev-parse", "--is-inside-work-tree"],
+                          capture_output=True, text=True, env=env)
+
+
+def in_git_work_tree(cwd) -> bool | None:
+    """True inside a git work tree (any subdirectory too); False only on a clear "not a git repository" answer; None
+    for any other failure (git missing, dubious ownership, ...): the caller then keeps the base behaviour and captures.
+    An exported GIT_DIR or GIT_WORK_TREE that makes git report a work tree counts as git (the capture inherits it too);
+    otherwise the answer comes from git without GIT_DIR, GIT_WORK_TREE and GIT_CEILING_DIRECTORIES."""
+    try:
+        if any(k in os.environ for k in ("GIT_DIR", "GIT_WORK_TREE")):
+            res = _git_rev_parse(cwd, strip=False)
+            if res.returncode == 0 and res.stdout.strip() == "true":
+                return True
+        res = _git_rev_parse(cwd, strip=True)
+    except OSError:
+        return None
+    if res.returncode == 0:
+        return True if res.stdout.strip() == "true" else None  # inside .git itself: not a work tree, let capture decide
+    if "not a git repository" not in res.stderr.lower():
+        return None
+    # A .git entry git cannot use (say a gitfile pointing to a missing gitdir) is a broken repository, not a plain
+    # folder: keep the base path, whose capture fails as before. Only no .git entry on the way up counts as non-git.
+    start = Path(os.path.abspath(cwd))
+    if any(os.path.lexists(p / ".git") for p in (start, *start.parents)):
+        return None
+    return False
+
+
+def _ident(path) -> tuple | None:
+    """(st_dev, st_ino) of path after symlinks, or None: the same folder has one identity whatever its spelling."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _chain(path) -> list[Path]:
+    """path (symlinks resolved) and each of its ancestors, nearest first."""
+    real = Path(os.path.realpath(path))
+    return [real, *real.parents]
+
+
+def broad_cwd(cwd) -> str | None:
+    """Non-git skip path only: the refusal text when cwd must not be the delegate's working folder, else None.
+    Folders are compared by identity (st_dev, st_ino), never by spelling, so case variants and symlinks match.
+    Refused: the filesystem root; home and every ancestor of home; anything inside home whose first folder below home
+    is hidden (a dot-directory) or is Library, or is a runtime.HARD_DENY entry; and a cwd that holds the real target of
+    a protected folder (HARD_DENY, .codex, .claude) that is a symlink. Known limit: a copy of home on another volume."""
+    from .runtime import HARD_DENY
+    chain = _chain(cwd)
+    ids = [_ident(p) for p in chain]
+    here = ids[0]
+    if here is None:
+        return None  # a missing cwd fails later with its own error
+    if here == _ident(chain[-1]):
+        return f"cwd {chain[0]} is the filesystem root; a non-git dispatch never runs there"
+    # macOS reports the Data volume (a firmlink target) as no mount point, so name the system volume folders too
+    if os.path.ismount(chain[0]) or here in {_ident("/System/Volumes"), _ident("/System/Volumes/Data")}:
+        return (f"cwd {chain[0]} is a mount point (a whole volume, such as /System/Volumes/Data or an external disk "
+                "root); a non-git dispatch never runs there; pick a folder inside it")
+    homes: list[Path] = []
+    try:
+        homes.append(Path(pwd.getpwuid(os.getuid()).pw_dir))
+    except (KeyError, OSError):
+        pass
+    homes.append(Path.home())  # $HOME, which can differ from the account's home
+    for home in dict.fromkeys(homes):
+        why = _broad_for_home(home, chain, ids, here, HARD_DENY)
+        if why:
+            return why
+    return None
+
+
+def _broad_for_home(home: Path, chain, ids, here, hard_deny) -> str | None:
+    if here in {_ident(p) for p in _chain(home)}:
+        return (f"cwd {chain[0]} is the home directory or a parent of it, where credentials and agent config live; "
+                "a non-git dispatch never runs there; pick a project folder")
+    home_id = _ident(home)
+    protected_names = dict.fromkeys((".codex", ".claude", "Library") + tuple(hard_deny))
+    protected = {_ident(home / n) for n in protected_names} - {None}
+    if home_id in ids[1:]:
+        top = chain[ids.index(home_id) - 1]  # the first folder below home on cwd's real path
+        if top.name.startswith(".") or _ident(top) in protected:
+            return (f"cwd {chain[0]} is inside {top}, a hidden or system folder at the top of home that can hold "
+                    "credentials; a non-git dispatch never runs there")
+    try:
+        dot_entries = [home / n for n in os.listdir(home) if n.startswith(".")]
+    except OSError:
+        dot_entries = []
+    for entry in dict.fromkeys([home / n for n in protected_names] + dot_entries):
+        target = _ident(entry)
+        if target is not None and target in ids:  # cwd is at or under the real target of a hidden or protected folder
+            return (f"cwd {chain[0]} is inside {os.path.realpath(entry)}, the real location of {entry}; a non-git "
+                    "dispatch never runs there")
+    for name in dict.fromkeys((".codex", ".claude") + tuple(hard_deny)):
+        entry = home / name
+        if entry.is_symlink() and here in {_ident(p) for p in _chain(entry)}:
+            return (f"cwd {chain[0]} contains {os.path.realpath(entry)}, the real location of {entry}; a non-git "
+                    "dispatch never runs in a folder that holds it; pick a folder that does not")
+    return None
+
+
+def broad_cwd_refusal(why: str) -> str:
+    return why
+
+
+def write_capability(kind: str | None, spec: dict, bash_allow=(), check_grants: bool = False) -> str | None:
+    """None when the delegate provably cannot write (enforced by its sandbox or tool set), else why it can or why
+    read-only cannot be established. check_grants (resume): also require the recorded Claude grants to be read-only."""
+    if spec.get("gate_commands"):
+        return "GATES run commands after the turn"
+    if spec.get("lead_dir") or spec.get("lead_workers"):
+        return "a Lead runs Workers"
+    if kind == "free":
+        return None  # the wrapper sends text to the provider; the provider has no file or shell access
+    if kind == "codex":  # write False: the Codex permission profile grants cwd read only (runtime.permission_profile)
+        return None if spec.get("codex_write") is False else "Codex write access is on (CODEX_WRITE, or PERMISSION_MODE acceptEdits/bypassPermissions)"
+    if kind == "claude":
+        mode = spec.get("permission_mode")
+        if mode not in READ_ONLY_MODES:
+            return f"PERMISSION_MODE {mode} lets it edit; use default or plan"
+        if bash_allow:
+            return "BASH_ALLOW grants shell commands"
+        if check_grants:
+            allowed, denied = spec.get("allowed_tools"), spec.get("disallowed_tools") or []
+            if allowed is None or any(t not in READ_ONLY_TOOLS for t in allowed) or any(t not in denied for t in READ_ONLY_DENY):
+                return "recorded tool grants are not the read-only set"
+        return None
+    return f"unknown delegate kind {kind!r}"
+
+
+def non_git_refusal(cwd, why: str) -> str:
+    return f"cwd {cwd} is not inside a git work tree and the delegate is not read-only ({why}); {NON_GIT_FIX}"
+
+
+_VERIFY_CMD_RE = re.compile(r"`[^`]*pre_dispatch_snapshot\.py verify [^`]*`")
+
+
+def strip_snapshot_skipped(prompt: str) -> str:
+    """No snapshot exists: drop the placeholder text and verify command, and say plainly that no write check runs."""
+    prompt = free_launch._SNAPSHOT_SPAN_RE.sub("none (cwd is not a git repository; no snapshot write check runs)", prompt)
+    prompt = _VERIFY_CMD_RE.sub("the snapshot write check (skipped: no snapshot in a non-git cwd)", prompt)
+    prompt = prompt.replace(SNAPSHOT_PLACEHOLDER, "none")
+    return prompt.rstrip("\n") + f"\nSNAPSHOT: skipped ({SNAPSHOT_SKIP_REASON}); you have read-only tools and must not write.\n"
+
+
 def allow_paths(files_in_scope: str) -> list[str]:
     """Paths named in the FILES_IN_SCOPE slot; prose such as "none (read-only)" yields nothing."""
     out = []
@@ -297,7 +461,7 @@ def scope_globs(files_in_scope: str) -> list[str]:
 
 
 def claude_argv(model: str, permission_mode: str, resume: str | None = None, effort: str | None = None,
-                allowed: list | None = None, disallowed: list | None = None) -> list[str]:
+                allowed: list | None = None, disallowed: list | None = None, read_only: bool = False) -> list[str]:
     exe = shutil.which("claude") or "claude"
     argv = [exe, "-p", "--model", CLAUDE_MODELS[model], "--permission-mode", permission_mode,
             "--output-format", "stream-json", "--verbose"]
@@ -309,6 +473,10 @@ def claude_argv(model: str, permission_mode: str, resume: str | None = None, eff
         argv += ["--allowedTools", *allowed]
     if disallowed:
         argv += ["--disallowedTools", *disallowed]
+    # non-git skip path: only these built-in tools exist. --restricted (CLI-enforced) confines Read, Glob and Grep to
+    # cwd after symlink resolution and ignores user, project and local settings files (so their hooks too).
+    if read_only:
+        argv += ["--tools", ",".join(READ_ONLY_TOOLS), "--setting-sources", "user", "--restricted"]
     return argv
 
 
@@ -328,12 +496,14 @@ def _verifier_rules(spec: dict, run_dir) -> list[str]:
             + _bash(f"python3 skills/workerbee/scripts/pre_dispatch_snapshot.py verify {snap}"))
 
 
-def tool_grants(spec: dict, gates: list | None, bash_allow: list, run_dir) -> tuple[list, list]:
+def tool_grants(spec: dict, gates: list | None, bash_allow: list, run_dir, read_only: bool = False) -> tuple[list, list]:
     """Per-run Claude tool grants (D58): (allowed, disallowed), order-preserving and deduplicated. Test runners only
     when FILES_IN_SCOPE names paths. Never grants `agents-inc` Bash. Under a Lead's broker (D60, _GRANT_CEILING) a
     runner is kept only when the Lead has it, GATES argv is not granted (broker children skip gates), and the
-    disallowed list gains the Lead's."""
+    disallowed list gains the Lead's. read_only (non-git cwd, snapshot skipped): Read, Glob, Grep; writes and shell denied."""
     ceiling = _GRANT_CEILING
+    if read_only:
+        return list(READ_ONLY_TOOLS), list(dict.fromkeys(READ_ONLY_DENY + (tuple(ceiling[1]) if ceiling else ())))
     allowed = ["Read", "Glob", "Grep"]
     for prefix in ("git status", "git diff", "git log", "git show", "git ls-files", "git check-ignore"):
         allowed += _bash(prefix)
@@ -351,7 +521,8 @@ def tool_grants(spec: dict, gates: list | None, bash_allow: list, run_dir) -> tu
     return list(dict.fromkeys(allowed)), list(dict.fromkeys(disallowed))
 
 
-def grants_section(allowed: list, disallowed: list, bash_allow: list, permission_mode: str | None = None) -> str:
+def grants_section(allowed: list, disallowed: list, bash_allow: list, permission_mode: str | None = None,
+                   read_only: bool = False, ask: bool = False) -> str:
     """The GRANTS block rendered into every Claude delegate prompt so a missing grant reads as one (#54)."""
     prefixes = ", ".join(f"`{p}`" for p in bash_allow) or "none"
     text = ("\nGRANTS (fixed by dispatch for this run; the harness allows exactly these tools):\n"
@@ -360,8 +531,10 @@ def grants_section(allowed: list, disallowed: list, bash_allow: list, permission
             f"DENIED: {', '.join(disallowed) or 'none'}\n"
             "A call outside ALLOWED stops with a harness message such as \"This command requires approval\": that is a "
             "missing grant, not a policy refusal. Stop, record the exact command, and hand back; never route around it. "
-            "One plain command per Bash call: no cd, &&, ;, pipes, loops, or shell variables; a compound command "
-            "matches no grant.\n")
+            + ((f"No shell: this run has Read, Glob and Grep{' and the ask_lead tool (' + ASK_TOOL + ')' if ask else ''} "
+                "only.\n") if read_only else
+               "One plain command per Bash call: no cd, &&, ;, pipes, loops, or shell variables; a compound command "
+               "matches no grant.\n"))
     if permission_mode == "acceptEdits":
         text += "Edit and Write on files under --cwd come from PERMISSION_MODE acceptEdits: they work though ALLOWED does not list them.\n"
     return text
@@ -751,7 +924,7 @@ def check_parent(spec: dict, env, lead_dir) -> str | None:
 def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, run_dir: Path,
            permission_mode: str = DEFAULT_PERMISSION_MODE, resume: str | None = None,
            codex_write: bool = False, codex_network: bool = False, lead_dir: Path | None = None,
-           allowed_tools: list | None = None, disallowed_tools: list | None = None) -> dict:
+           allowed_tools: list | None = None, disallowed_tools: list | None = None, read_only: bool = False) -> dict:
     """Run the delegate. Return {"rc", "stdout", "stderr", "argv", "session_id"}. resume: the Claude session id
     or the Codex thread id to continue. Under the broker, every Worker also gets the ask_lead server (D54).
     lead_dir (#68, D60): run a Codex or Claude delegate as a Lead with the broker MCP tools over that run directory."""
@@ -764,18 +937,22 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
             if kind != "claude":
                 raise CallerSandboxed(where, CODEX_NESTED_FIX, "caller-sandboxed-codex")
             _SANDBOX_NOTE.update({"caller_sandbox": "claude-code", "api": "reachable"})
+    if read_only and (why := broad_cwd(cwd)):  # the non-git path has no snapshot: re-check right before the start
+        raise RuntimeError(f"refused-non-git: {why}")
     channel = _ask_channel(run_dir, _WORKER_ASK) if (_BROKER_SAFE_WRITES and _WORKER_ASK) else None
     if kind == "claude":
         if lead_dir is not None and channel is not None:
             raise RuntimeError("a Worker with an ask channel never leads")
         # allowed_tools None is a legacy run.json: keep the old argv. Else one --allowedTools flag carries ASK_TOOL too.
         granted = None if allowed_tools is None else list(allowed_tools) + ([ASK_TOOL] if channel is not None else [])
-        argv = claude_argv(model, permission_mode, resume, effort, granted, disallowed_tools)
+        argv = claude_argv(model, permission_mode, resume, effort, granted, disallowed_tools, read_only)
         extra = {}
         if channel is not None:
             argv += ["--mcp-config", str(channel["config"]), "--strict-mcp-config"]
             if allowed_tools is None:
                 argv += ["--allowedTools", ASK_TOOL]
+        elif read_only and lead_dir is None:  # snapshot skipped: load no MCP server that could write
+            argv += ["--strict-mcp-config"]
         if lead_dir is not None:  # D60: the Lead's broker; a long Worker run needs a long MCP tool timeout
             from .runtime import MCP_TOOL_TIMEOUT_SEC
             argv += ["--mcp-config", str(Path(lead_dir) / "lead_mcp.json"), "--strict-mcp-config"]
@@ -790,7 +967,7 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
             _wtext(profile, claude_sandbox_profile(
                 Path(cwd), Path(env.get("HOME") or Path.home()), env["TMPDIR"], _BROKER_DENY,
                 (channel["ask"],) if channel else (),
-                (Path(run_dir) / "pre_dispatch_snapshot.py", Path(run_dir) / "snapshot.json")  # FR-011
+                (() if read_only else (Path(run_dir) / "pre_dispatch_snapshot.py", Path(run_dir) / "snapshot.json"))  # FR-011
                 + ((channel["script"], channel["config"]) if channel else ())))
             argv += ["--settings", WORKER_SETTINGS]
             argv = [SANDBOX_EXEC, "-f", str(profile)] + argv
@@ -818,9 +995,10 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
     out, err = io.StringIO(), io.StringIO()
     thread: dict = {}
     worker = (channel["ask"], channel["rid"], channel["script"]) if channel else None
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), _auth_hint(read_only):
         rc = run_codex(model, effort, cwd, io.StringIO(prompt), receipt, _efforts(paths.current.resolve()), env=env,
-                       extra_deny=_BROKER_DENY if _BROKER_SAFE_WRITES else (), isolate_home=_BROKER_SAFE_WRITES,
+                       extra_deny=_BROKER_DENY if _BROKER_SAFE_WRITES else (), isolate_home=_BROKER_SAFE_WRITES or read_only,
+                       no_extensions=read_only,
                        thread_out=None if lead_dir else thread, resume_thread=resume, worker=worker,
                        tools=codex_write or lead_dir is not None, write=codex_write, lead_dir=lead_dir,
                        network=codex_write and codex_network and lead_dir is None, timeout_s=_turn_timeout(),
@@ -828,11 +1006,23 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
                        on_line=(lambda ln: _LIVE_SINK.line("codex", ln)) if _LIVE_SINK is not None else None,
                        # the prompt names snapshot.json; a run dir outside cwd (TMPDIR) is otherwise unreadable
                        # the verifier copy too, so the delegate can run its own FAILURE GATE check (#66)
-                       extra_read=(Path(run_dir) / "pre_dispatch_snapshot.py",) + (
+                       extra_read=() if read_only else (Path(run_dir) / "pre_dispatch_snapshot.py",) + (
                            () if _BROKER_SAFE_WRITES else (Path(run_dir) / "snapshot.json",)))
     return {"rc": rc, "stdout": out.getvalue(), "stderr": err.getvalue(),
             "argv": ["run_codex", model, effort, str(cwd)] + (["resume", resume] if resume else []),
             "session_id": thread.get("thread_id") or resume, "is_error": False}
+
+
+@contextlib.contextmanager
+def _auth_hint(read_only: bool):
+    """Non-git skip path only: a missing ~/.codex/auth.json (keyring login) keeps failing, with the reason added."""
+    try:
+        yield
+    except FileNotFoundError as exc:
+        if read_only and "WB_CODEX_AUTH_MISSING" in str(exc):
+            raise FileNotFoundError(f"{exc}; a non-git dispatch runs Codex in an isolated home that needs a file-based "
+                                    "Codex login (~/.codex/auth.json); a keyring login cannot be used there") from exc
+        raise
 
 
 def parse_claude_output(stdout: str) -> tuple:
@@ -953,8 +1143,10 @@ def _record_trust(spec: dict, run_dir: Path, prompt: str) -> bool:
     cannot write. A broker child already runs in a broker-owned run directory outside cwd, so it keeps trust.json there.
     Fails closed: on an OSError spec["trust_error"] says why and False is returned; the caller must not launch."""
     try:
-        data = (run_dir / "snapshot.json").read_bytes()
-        record = json.dumps({"schema_version": 1, "snapshot_sha256": _sha256_bytes(data),
+        skipped = spec.get("snapshot") == SNAPSHOT_SKIPPED  # no capture ran; the record says so where the delegate cannot write
+        data = None if skipped else (run_dir / "snapshot.json").read_bytes()
+        record = json.dumps({"schema_version": 1, **({"snapshot": SNAPSHOT_SKIPPED} if skipped else
+                                                      {"snapshot_sha256": _sha256_bytes(data)}),
                              "prompt_sha256": _sha256_bytes(prompt.encode("utf-8"))}, indent=1) + "\n"
         if _BROKER_SAFE_WRITES:
             spec["snapshot_trust"] = "broker"
@@ -964,7 +1156,8 @@ def _record_trust(spec: dict, run_dir: Path, prompt: str) -> bool:
         trust = _trust_path(run_dir.name)
         trust.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(trust, 0o700)
-        (trust / "snapshot.json").write_bytes(data)
+        if data is not None:
+            (trust / "snapshot.json").write_bytes(data)
         with contextlib.suppress(OSError, ValueError, AttributeError):  # keep the 025 scripts_sha256 written at pin time
             pinned = json.loads((trust / "trust.json").read_text(encoding="utf-8")).get("scripts_sha256")
             if pinned:
@@ -1009,8 +1202,13 @@ def _verify(spec: dict, run_dir: Path, out_path: Path, name: str = "verify.txt")
 def _snapshot_verify(spec: dict, run_dir: Path) -> tuple[int, str, str]:
     """(rc, log, snap) of one scope-gate verify against the trusted snapshot: snap is clean, CHANGED:<paths>,
     TAMPERED or ERROR:<why>. Shared by the verify after the turn and the one after the gates (025 #107)."""
-    allow = list(spec["gates"]["allow"])
     cwd = Path(spec["cwd"])
+    if spec.get("snapshot") == SNAPSHOT_SKIPPED:  # run.json is delegate-writable: the trusted record and cwd must agree
+        record, _ = _trust_record(spec, run_dir)
+        if isinstance(record, dict) and record.get("snapshot") == SNAPSHOT_SKIPPED and in_git_work_tree(cwd) is False:
+            return 0, f"snapshot skipped: {SNAPSHOT_SKIP_REASON}; no write check ran\n", SNAPSHOT_SKIPPED
+        return 1, "snapshot skip not confirmed (no trusted skip record, or cwd is a git work tree)\n", "ERROR:skip-unconfirmed"
+    allow = list(spec["gates"]["allow"])
     try:
         allow.append(str(run_dir.resolve().relative_to(cwd.resolve())))
     except ValueError:
@@ -1313,6 +1511,9 @@ def _finish(spec: dict, run_dir: Path, out_path: Path, result: dict, home_repo: 
     detail = _stderr_detail(stderr) if outcome == "red" and (reason in DETAIL_REASONS or not stdout.strip()) else ""
     if free and outcome == "red" and reason == "blocked" and cls.reason == "blocked":  # the host is named (R6)
         detail = re.sub(r"\s+", "_", screen_text(cls.detail, 200).strip())
+    if snap == SNAPSHOT_SKIPPED and outcome == "unverified":  # never a pass: no write check ran
+        reason, detail = "snapshot-skipped", re.sub(r"\s+", "_", SNAPSHOT_SKIP_REASON)
+        spec["reason"] = reason
     if detail:
         spec["reason_detail"] = detail
     else:
@@ -1336,6 +1537,16 @@ def _red_before_run(spec: dict, run_dir: Path, reason: str, detail: str, home_re
     print(_status(spec, "none", snap, out_path))
     _mirror_and_note(spec, run_dir, home_repo, None)
     return code
+
+
+def _refuse_non_git(spec: dict, run_dir: Path, lint: Path, cwd: Path, why: str, msg: str | None = None) -> int:
+    """Non-git cwd and a delegate that can write (or read-only is not established): refuse before any launch."""
+    msg = msg or non_git_refusal(cwd, why)
+    _wtext(lint, msg + "\n")
+    spec["outcome"], spec["reason_detail"] = "refused-non-git", msg
+    _write_json(run_dir / "run.json", spec)
+    print(f"dispatch {spec['run_id']} {spec['model']} refused refused-non-git: {msg} lint={lint}")
+    return EXIT_REFUSED
 
 
 def _launch_failed(spec: dict, run_dir: Path, exc: Exception, home_repo: str | None, out_name: str = "stdout.md") -> int:
@@ -1697,7 +1908,17 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         print(f"dispatch {run_id} {model} refused refused-capability: {detail} lint={lint}")
         return EXIT_REFUSED
     spec["gate_commands"] = gates or []
-    spec["allowed_tools"], spec["disallowed_tools"] = tool_grants(spec, gates, bash_allow, run_dir) if kind == "claude" else (None, None)
+    skip = in_git_work_tree(cwd) is False  # git cwd, subdirectory, or unclear answer: capture and verify unchanged
+    if skip:
+        broad = broad_cwd(cwd)
+        if broad:
+            return _refuse_non_git(spec, run_dir, lint, cwd, broad, broad_cwd_refusal(broad))
+        writes = write_capability(kind, spec, bash_allow)
+        if writes:
+            return _refuse_non_git(spec, run_dir, lint, cwd, writes)
+        spec["snapshot"], spec["snapshot_skip_reason"] = SNAPSHOT_SKIPPED, SNAPSHOT_SKIP_REASON
+    spec["allowed_tools"], spec["disallowed_tools"] = (tool_grants(spec, gates, bash_allow, run_dir, read_only=skip)
+                                                       if kind == "claude" else (None, None))
     if kind == "claude" and _BROKER_SAFE_WRITES:
         if any(r in LEAD_TOOLS for r in spec["allowed_tools"]):
             raise RuntimeError("a broker Worker is never granted a dispatch tool")  # D60
@@ -1723,6 +1944,8 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         prompt = free_launch.strip_snapshot(prompt)
         if input_section:
             prompt = prompt.rstrip("\n") + "\n\n" + input_section
+    elif skip:  # no snapshot exists: no path, no verifier line, a plain statement instead
+        prompt = strip_snapshot_skipped(prompt)
     else:
         # Capture first so the real snapshot path reaches the prompt; lint after injection.
         src, slog = snapshot("capture", spec["snapshot"], cwd=cwd, scripts=sdir)
@@ -1736,7 +1959,8 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         _wtext(verifier, (sdir / "pre_dispatch_snapshot.py").read_text(encoding="utf-8"))
         prompt = prompt.rstrip("\n") + f"\nSNAPSHOT VERIFIER: `python3 {verifier} verify {spec['snapshot']}` (use this copy)\n"
     if kind == "claude":
-        prompt += grants_section(spec["allowed_tools"], spec["disallowed_tools"], bash_allow, spec["permission_mode"])
+        prompt += grants_section(spec["allowed_tools"], spec["disallowed_tools"], bash_allow, spec["permission_mode"], skip,
+                                 bool(_BROKER_SAFE_WRITES and _WORKER_ASK))  # launch() grants ASK_TOOL on this same test
     if _BROKER_SAFE_WRITES and _WORKER_ASK:
         prompt += ASK_LEAD_NOTE
     spec["fan_out"] = parse_fan_out(prompt, sdir)
@@ -1755,6 +1979,8 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         skipped = lead_skip_reason(spec, roster)
         if skipped:
             spec["lead_skipped"], roster = skipped, []
+    if roster and skip:
+        return _refuse_non_git(spec, run_dir, lint, cwd, "a Lead runs Workers")
     if roster:
         spec["lead_workers"] = roster
         if spec["codex_network"]:
@@ -1792,7 +2018,8 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
                         **({"codex_network": True} if spec["codex_network"] else {}),
                         **({"lead_dir": lead_dir} if lead_dir is not None else {}),
                         **({"allowed_tools": spec["allowed_tools"], "disallowed_tools": spec["disallowed_tools"]}
-                           if kind == "claude" else {}))
+                           if kind == "claude" else {}),
+                        **({"read_only": True} if skip else {}))
     except Exception as exc:
         return _launch_failed(spec, run_dir, exc, getattr(args, "home_repo", None))
     spec.update(_SANDBOX_NOTE)
@@ -1835,7 +2062,7 @@ def _run_free_phase(args, spec, slots, cwd, run_dir, prompt, sdir) -> int:
     spec.update(rc=result["rc"], session_id=None, argv=result["argv"], wrapper=result["wrapper"],
                 wrapper_sha256=result["wrapper_sha256"],
                 usage=free_launch.parse_usage(result["stdout"], result["stderr"]))
-    src, slog = snapshot("capture", spec["snapshot"], cwd=cwd, scripts=sdir)
+    src, slog = (0, "") if spec["snapshot"] == SNAPSHOT_SKIPPED else snapshot("capture", spec["snapshot"], cwd=cwd, scripts=sdir)
     if src != 0:
         spec["outcome"] = "snapshot-failed"; _write_json(run_dir / "run.json", spec)
         print(f"dispatch {spec['run_id']} {spec['model']} snapshot failed rc={src}: {slog.strip()}")
@@ -1940,6 +2167,23 @@ def resume(args) -> int:
         spec["snapshot_trust"] = "broker"
     else:
         spec["snapshot_trust"] = "run-dir"  # legacy run: run.json has no snapshot_trust key
+    read_only = False
+    skipped = spec.get("snapshot") == SNAPSHOT_SKIPPED
+    git_state = in_git_work_tree(Path(spec["cwd"]))  # asked once: a second answer could differ (race)
+    if skipped and git_state is not False:
+        print(f"dispatch: refused-non-git: the first turn skipped its snapshot and cwd {spec['cwd']} is now (or may be) "
+              "a git work tree, so no write check can run; start a new dispatch", file=sys.stderr)
+        return EXIT_REFUSED
+    if git_state is False:  # same rule as a first turn; a git cwd keeps the verify unchanged
+        broad = broad_cwd(spec["cwd"])
+        writes = write_capability(kind, spec, check_grants=True)
+        if not writes and not skipped:
+            writes = "the first turn captured a snapshot this cwd can no longer verify"
+        if broad or writes:
+            msg = broad_cwd_refusal(broad) if broad else non_git_refusal(spec["cwd"], writes)
+            print(f"dispatch: refused-non-git: {msg}", file=sys.stderr)
+            return EXIT_REFUSED
+        read_only = True  # a recorded skip never reaches launch without this: any other git answer refused above
     lead_dir = Path(spec["lead_dir"]) if kind == "claude" and spec.get("lead_dir") else None
     if lead_dir is not None:  # D60: re-attach the Lead's broker; its counters reload from lead_dir/run.json
         cfg = lead_dir / "lead_mcp.json"
@@ -1954,7 +2198,8 @@ def resume(args) -> int:
                         **({"codex_write": True} if spec.get("codex_write") is True else {}),
                         **({"codex_network": True} if spec.get("codex_network") is True else {}),
                         **({"allowed_tools": spec.get("allowed_tools"), "disallowed_tools": spec.get("disallowed_tools")}
-                           if kind == "claude" else {}))
+                           if kind == "claude" else {}),
+                        **({"read_only": True} if read_only else {}))
     except Exception as exc:
         # the failed attempt is a turn: the broker reads it back as outcome red / reason launch-failed
         spec.setdefault("resumes", []).append({"rc": -1, "out": str(run_dir / f"stdout.{n}.md")})
