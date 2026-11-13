@@ -11,6 +11,7 @@ from pathlib import Path
 from . import catalog
 from .. import datafiles
 from .bundle import stage_bundle, verify_bundle
+from . import source_git
 from .host_wiring import AT_ROUTE, wiring_problems
 from .paths import InstallPaths
 from .receipt import InstallReceipt
@@ -51,11 +52,18 @@ def _install_stale(paths: InstallPaths, release_hash: str) -> list[str]:
 
 def _stale_checkout(paths: InstallPaths, release_hash: str) -> Path | None:
     """The recorded source checkout when it would now stage to a different release hash, else None. Staging goes to
-    a temp dir so nothing is written under ~/.local; any failure (no record, packaged install, unreadable) is None."""
+    a temp dir so nothing is written under ~/.local; any failure (no record, packaged install, unreadable) is None.
+    #174: while the active release is a clean git install, stale means HEAD's bundle paths differ from the installed
+    commit; work in progress is not stale. A record for another release, or a missing commit, uses the digest compare."""
     record = paths.state / "source-checkout"
     try:
         if not record.is_file(): return None
         source = Path(record.read_text().strip())
+        git = source_git.load_record(paths.state)
+        if git is not None and git["clean"] and git["release"] == release_hash and source_git.is_git_checkout(source):
+            try: changed = source_git.bundle_changed_since(source, git["head"])
+            except RuntimeError: return None  # git cannot run or read HEAD
+            if changed is not None: return source if changed else None
         tmp = Path(tempfile.mkdtemp(prefix="agents-inc-stale-"))
         try:
             digest = stage_bundle(source, replace(paths, releases=tmp / "releases")).digest

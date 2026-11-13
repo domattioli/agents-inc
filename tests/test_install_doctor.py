@@ -197,5 +197,265 @@ class SandboxExclusionTest(DoctorWarningsTest):
         self.assertNotIn("WB_SANDBOX_API_DOMAIN_MISSING", check_install(self.paths, models=self.models, **HOST).warnings)
 
 
+class GitSourceStaleTest(unittest.TestCase):
+    """#174: after a clean git install only a commit that changes a bundle path is stale; work in progress is not."""
+    def git(self, *argv, cwd=None):
+        import subprocess
+        return subprocess.run(["git", "--no-optional-locks", "-C", str(cwd or self.source), *argv], env=self.git_env,
+                              check=True, capture_output=True, text=True).stdout
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.raw = Path(os.path.realpath(self.tmp.name))
+        # No real HOME, global or system git config reaches git, in the test helper or in the code under test:
+        # source_git._run passes GIT_CONFIG_NOSYSTEM and GIT_CONFIG_GLOBAL through, so both point at nothing real.
+        self.env = mock.patch.dict(os.environ, {"HOME": str(self.raw), "XDG_CONFIG_HOME": str(self.raw / "xdg"),
+                                                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(self.raw / "no-gitconfig")})
+        self.env.start()
+        self.git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        self.git_env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(self.raw / "no-gitconfig"))
+        self.source = self.raw / "source"
+        (self.source / "agents_inc").mkdir(parents=True)
+        (self.source / "agents_inc" / "models.json").write_text("{}")
+        for name in ("workerbee", "codex-bridge"):
+            (self.source / "skills" / name).mkdir(parents=True)
+            (self.source / "skills" / name / "SKILL.md").write_text("x")
+        (self.source / "README.md").write_text("readme\n")
+        self.git("init", "-q")
+        for key, value in (("user.name", "t"), ("user.email", "t@example.invalid"), ("commit.gpgsign", "false"), ("tag.gpgsign", "false")):
+            self.git("config", key, value)
+        self.git("add", "-A"); self.git("commit", "-qm", "init"); self.git("tag", "v1")
+        self.home = self.raw / "home"; (self.home / ".claude").mkdir(parents=True)
+        self.paths = InstallPaths.for_home(self.home)
+
+    def tearDown(self):
+        self.env.stop(); self.tmp.cleanup()
+
+    def install(self, command="install", source=None):
+        out = io.StringIO()
+        argv = [command, "--source", str(source or self.source), "--yes", "--without-codex", "--no-host-wiring", "--no-mod"]
+        with mock.patch.object(cli, "_paths", return_value=self.paths), contextlib.redirect_stdout(out):
+            self.assertEqual(cli.main(argv), 0)
+        return out.getvalue()
+
+    def stale(self):
+        from agents_inc.install.doctor import _stale_checkout
+        return _stale_checkout(self.paths, InstallReceipt.load(self.paths.receipt).release_hash)
+
+    def release(self):
+        return InstallReceipt.load(self.paths.receipt).release_hash
+
+    def record(self):
+        from agents_inc.install import source_git
+        return source_git.load_record(self.paths.state)
+
+    def commit_bundle_change(self, cwd=None):
+        cwd = cwd or self.source
+        (cwd / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.git("add", "-A", cwd=cwd); self.git("commit", "-qm", "more", cwd=cwd)
+
+    def test_clean_install_then_tracked_edit_is_not_stale(self):
+        self.install()
+        self.assertEqual(self.record(), {"head": self.git("rev-parse", "HEAD").strip(), "clean": True, "release": self.release()})
+        (self.source / "agents_inc" / "models.json").write_text('{"edited": 1}')
+        self.assertIsNone(self.stale())
+
+    def test_clean_install_then_untracked_file_is_not_stale(self):
+        self.install()
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.assertIsNone(self.stale())
+
+    def test_clean_install_then_bundle_commit_is_stale_and_refuses(self):
+        from agents_inc.install.doctor import stale_refusal
+        self.install()
+        self.commit_bundle_change()
+        self.assertEqual(self.stale(), self.source)
+        self.assertIn(f"agents-inc repair --source {self.source}", stale_refusal(self.paths))
+
+    def test_clean_install_then_commit_outside_bundle_is_not_stale(self):
+        self.install()
+        (self.source / "README.md").write_text("changed\n")
+        self.git("commit", "-qam", "docs")
+        self.assertIsNone(self.stale())
+
+    def test_dirty_install_installs_work_in_progress_and_later_edit_is_stale(self):
+        (self.source / "agents_inc" / "models.json").write_text('{"wip": 1}')
+        out = self.install()
+        self.assertEqual((self.paths.current / "agents_inc/models.json").read_text(), '{"wip": 1}')
+        self.assertFalse(self.record()["clean"])
+        self.assertIn("uncommitted or untracked changes in the bundle; they were installed", out)
+        self.assertIsNone(self.stale())
+        (self.source / "agents_inc" / "models.json").write_text('{"wip": 2}')
+        self.assertEqual(self.stale(), self.source)
+
+    def test_no_record_keeps_base_behaviour(self):
+        from agents_inc.install import source_git
+        self.install()
+        (self.paths.state / source_git.RECORD).unlink()
+        self.assertIsNone(self.stale())
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.assertEqual(self.stale(), self.source)
+
+    def test_non_git_source_keeps_base_behaviour(self):
+        import shutil
+        shutil.rmtree(self.source / ".git")
+        out = self.install()
+        self.assertIsNone(self.record()); self.assertNotIn("--source", out)
+        self.assertIsNone(self.stale())
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.assertEqual(self.stale(), self.source)
+
+    def test_git_missing_or_failing_at_check_is_not_stale(self):
+        from agents_inc.install import source_git
+        self.install()
+        self.commit_bundle_change()
+        with mock.patch.object(source_git, "_run", side_effect=RuntimeError("git: not found")):
+            self.assertIsNone(self.stale())
+        with mock.patch.object(source_git, "_run", return_value=mock.Mock(returncode=128, stdout="", stderr="fatal")):
+            self.assertIsNone(self.stale())
+
+    def test_git_failing_at_install_writes_no_record_and_keeps_base_behaviour(self):
+        from agents_inc.install import source_git
+        self.install()  # leaves a record that the failed install must remove
+        with mock.patch.object(source_git, "_run", side_effect=RuntimeError("git: not found")):
+            self.install()
+        self.assertIsNone(self.record())
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.assertEqual(self.stale(), self.source)
+
+    def test_clean_install_not_stale_under_other_umasks(self):
+        self.install()
+        for mask in (0o077, 0o002, 0o022):
+            old = os.umask(mask)
+            try: self.assertIsNone(self.stale(), oct(mask))
+            finally: os.umask(old)
+
+    def test_linked_worktree_source(self):
+        wt = self.raw / "release"
+        self.git("worktree", "add", "-q", str(wt), "v1")
+        self.assertTrue((wt / ".git").is_file())
+        out = self.install(source=wt)
+        self.assertTrue(self.record()["clean"]); self.assertNotIn("WARNING", out)
+        (wt / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.assertIsNone(self.stale())
+        self.git("add", "-A", cwd=wt); self.git("commit", "-qm", "more", cwd=wt)
+        self.assertEqual(self.stale(), wt)
+
+    def test_repair_writes_the_record(self):
+        self.install()
+        self.commit_bundle_change()
+        self.install("repair")
+        self.assertEqual(self.record(), {"head": self.git("rev-parse", "HEAD").strip(), "clean": True, "release": self.release()})
+        self.assertIsNone(self.stale())
+
+    def test_source_repo_index_and_status_unchanged(self):
+        import time
+        (self.source / "agents_inc" / "models.json").write_text('{"wip": 1}')
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        future = time.time() + 5
+        os.utime(self.source / "skills/workerbee/SKILL.md", (future, future))  # stat change git would refresh
+        index = self.source / ".git" / "index"
+        before = (index.read_bytes(), index.stat().st_mtime_ns)
+        status = self.git("status", "--porcelain", "--untracked-files=all")
+        self.install(); self.stale()
+        self.assertEqual((index.read_bytes(), index.stat().st_mtime_ns), before)
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), status)
+
+    def test_record_ties_to_release(self):
+        from agents_inc.install import source_git
+        self.install()
+        self.assertEqual(self.record()["release"], self.release())
+        data = json.loads((self.paths.state / source_git.RECORD).read_text()); del data["release"]
+        (self.paths.state / source_git.RECORD).write_text(json.dumps(data))  # a record from before `release`
+        self.assertIsNone(self.record())
+
+    def test_rollback_to_older_release_with_newer_head_is_stale(self):
+        self.install()
+        self.commit_bundle_change()
+        self.install("repair")
+        with mock.patch.object(cli, "_paths", return_value=self.paths): self.assertEqual(cli.main(["rollback"]), 0)
+        self.assertEqual(self.stale(), self.source)  # record names the newer release: digest compare
+
+    def test_rollback_with_head_back_at_installed_commit_is_not_stale(self):
+        self.install()
+        self.commit_bundle_change()
+        self.install("repair")
+        self.git("checkout", "-q", "v1")
+        with mock.patch.object(cli, "_paths", return_value=self.paths): self.assertEqual(cli.main(["rollback"]), 0)
+        self.assertIsNone(self.stale())
+
+    def test_install_failing_after_record_is_stale_against_kept_release(self):
+        from agents_inc.install import cli as cli_mod
+        self.install()
+        self.commit_bundle_change()
+        argv = ["install", "--source", str(self.source), "--yes", "--without-codex", "--no-host-wiring", "--no-mod"]
+        with mock.patch.object(cli, "_paths", return_value=self.paths), \
+             mock.patch.object(cli_mod, "verify_installed", side_effect=RuntimeError("boom")), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(argv), 1)
+        self.assertEqual(self.stale(), self.source)
+
+    def test_recorded_commit_missing_uses_digest_compare(self):
+        self.install()
+        self.git("tag", "-d", "v1")
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.git("add", "-A"); self.git("commit", "-q", "--amend", "-m", "init")
+        self.git("reflog", "expire", "--expire=now", "--all"); self.git("gc", "-q", "--prune=now")
+        self.assertEqual(self.stale(), self.source)
+
+    def test_git_removed_inside_parent_repo_uses_digest_compare(self):
+        import shutil
+        self.install()
+        shutil.rmtree(self.source / ".git")
+        self.git("init", "-q", cwd=self.raw)
+        for key, value in (("user.name", "t"), ("user.email", "t@example.invalid"), ("commit.gpgsign", "false")):
+            self.git("config", key, value, cwd=self.raw)
+        self.git("add", "source", cwd=self.raw); self.git("commit", "-qm", "parent", cwd=self.raw)
+        self.assertIsNone(self.stale())
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.assertEqual(self.stale(), self.source)
+
+    def test_symlinked_source(self):
+        link = self.raw / "link"; link.symlink_to(self.source)
+        self.install(source=link)
+        self.assertTrue(self.record()["clean"])
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.assertIsNone(self.stale())
+        self.git("add", "-A"); self.git("commit", "-qm", "more")
+        self.assertEqual(self.stale(), self.source)
+
+    def test_optional_bundle_paths(self):
+        mod = self.source / "mods" / "agents-inc"; mod.mkdir(parents=True); (mod / "a.txt").write_text("a\n")
+        (self.source / "workerbees").mkdir(); (self.source / "workerbees" / "__init__.py").write_text("")
+        self.git("add", "-A"); self.git("commit", "-qm", "optional"); self.git("tag", "v2")
+        self.install()
+        self.assertTrue((self.paths.current / "mods/agents-inc/a.txt").is_file())
+        (mod / "b.txt").write_text("b\n")
+        self.assertIsNone(self.stale())
+        self.git("add", "-A"); self.git("commit", "-qm", "mod")
+        self.assertEqual(self.stale(), self.source)
+
+    def test_warning_for_dirty_source(self):
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        out = self.install()
+        self.assertIn("they were installed", out)
+        self.assertIn("git worktree add <path> <tag>", out)
+
+    def test_dirty_warning_ignores_show_untracked_config(self):
+        self.git("config", "status.showUntrackedFiles", "no")
+        (self.source / "agents_inc" / "extra.py").write_text("x = 1\n")
+        self.assertIn("they were installed", self.install())
+
+    def test_note_for_untagged_head(self):
+        self.commit_bundle_change()
+        out = self.install()
+        self.assertIn("HEAD is not on a release tag", out)
+        self.assertNotIn("they were installed", out)
+
+    def test_no_message_for_clean_tagged_source(self):
+        out = self.install()
+        self.assertNotIn("--source", out)
+
+
 if __name__ == "__main__":
     unittest.main()

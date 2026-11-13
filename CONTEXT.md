@@ -80,4 +80,4 @@ Canonical terms for agents_for_dummies. Glossary only; no implementation detail.
 | **Model pin** | The exact provider slug an alias resolves to, for example sol to gpt-5.6-sol. Explicit, versioned, committed; never floats. Codex aliases only; Claude aliases resolve in the Claude CLI and free providers use floating slugs by design. |
 | **Model drift** | A listed, API-supported catalog slug of the same family with a higher version than the pin. Doctor warns MODEL_DRIFT and stays READY. |
 | **Bump** | Moving a pin to a newer slug. Operator decides, the CoS runs agents-inc models bump, and a commit records the new pin. Default target is the newest slug; an explicit slug may be named. |
-| **Stale install** | The installed release differs from the checkout. Doctor warns INSTALL_STALE and stays READY; the operator runs repair. |
+| **Stale install** | An install whose source has committed changes to shipped files since the install was made. Doctor warns INSTALL_STALE and stays READY; the operator runs repair. Uncommitted edits in the source only draw a warning. |
