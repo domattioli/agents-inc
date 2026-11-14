@@ -95,6 +95,14 @@ class SnapshotPathTests(unittest.TestCase):
         r = _run(self.repo, "verify", self.snap, "--allow", "a.md", "--allow", "b.md")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_unreadable_snapshot_exits_nonzero_with_path(self):
+        self._two_new_files()
+        missing = self.snap + ".missing"
+        r = _run(self.repo, "verify", missing)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(f"snapshot unreadable: {missing}", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_allow_without_path_is_usage_error(self):
         self._two_new_files()
         self.assertEqual(_run(self.repo, "verify", self.snap, "--allow").returncode, 2)

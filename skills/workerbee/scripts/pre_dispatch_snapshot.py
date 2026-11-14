@@ -109,8 +109,12 @@ def _allowed(path: str, allow: list[str]) -> bool:
 
 
 def verify(snap_path: str, allow: list[str]) -> int:
-    with open(snap_path, encoding="utf-8") as fh:
-        snap = json.load(fh)
+    try:
+        with open(snap_path, encoding="utf-8") as fh:
+            snap = json.load(fh)
+    except OSError:
+        print(f"snapshot unreadable: {snap_path}", file=sys.stderr)
+        return 2
     changed: set[str] = set()
     hashes = snap.get("sha256", {})
     unreadable: list[str] = []

@@ -383,6 +383,23 @@ class DispatchCliTest(CliBase):
         self.assertEqual(seen, [(False, False, False), (True, True, False), (True, True, True), (False, False, False),
                                 (True, True, False, self.root / "lead"), (True, False, False, self.root / "lead")])
 
+    def test_launch_codex_broker_worker_reads_snapshot(self):
+        seen = []
+
+        def fake_run_codex(*a, **kw):
+            seen.append(kw.get("extra_read"))
+            return 0
+        receipt = mock.Mock(codex_path="/bin/true")
+        with mock.patch("agents_inc.install.runtime.run_codex", side_effect=fake_run_codex), \
+                mock.patch("agents_inc.install.cli._paths") as paths, \
+                mock.patch("agents_inc.install.cli._efforts", return_value={}), \
+                mock.patch.object(dispatch, "worker_env", return_value={}), \
+                mock.patch.object(dispatch, "_child_tmp", return_value=self.root / "tmp"), \
+                mock.patch.object(dispatch, "_BROKER_SAFE_WRITES", True), \
+                mock.patch("agents_inc.install.receipt.InstallReceipt.load", return_value=receipt):
+            dispatch.launch("codex", "terra", "medium", self.repo, "p", self.runs, codex_write=True)
+        self.assertEqual(seen, [(self.runs / "pre_dispatch_snapshot.py", self.runs / "snapshot.json")])
+
     def test_lead_roster_follows_rungs(self):
         fan = {"width": 1, "total": 2, "depth": 1}
         allow = {"ALLOWLIST": "sol, luna, haiku, sonnet"}
@@ -607,6 +624,19 @@ class DispatchCliTest(CliBase):
         launch.assert_not_called()
         spec = json.loads((self._run_dir() / "run.json").read_text())
         self.assertEqual(spec["outcome"], "refused-capability")
+
+    def test_render_refusal_prints_renderer_error(self):
+        err = "slot ALLOWLIST is empty\n\nFAN_OUT width must be >= 1\n" + "x" * 900
+        with mock.patch.object(dispatch, "render", return_value=(2, "", err)):
+            rc, out, launch = self._preflight_run()
+        self.assertEqual(rc, 3, out)
+        self.assertIn("refused render rc=2", out)
+        self.assertIn("slot ALLOWLIST is empty", out)
+        self.assertIn("FAN_OUT width must be >= 1", out)
+        self.assertLess(len(out), 700)
+        launch.assert_not_called()
+        spec = json.loads((self._run_dir() / "run.json").read_text())
+        self.assertIn("slot ALLOWLIST is empty", spec["reason_detail"])
 
     def test_preflight_present_gate_passes(self):
         self.assertEqual(dispatch.capability_preflight([{"argv": ["sh"], "cwd": "."}], [], self.repo), [])

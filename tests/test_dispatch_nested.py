@@ -378,6 +378,31 @@ class WorkerRulesTest(NestedBase):
         self.assertTrue(set(lead["parent_disallowed_tools"]) <= set(child["disallowed_tools"]))
         self.assertFalse(any(r in dispatch.LEAD_TOOLS for r in allowed))
 
+    def test_render_refusal_reaches_lead_result(self):
+        with mock.patch.object(dispatch, "render", return_value=(2, "", "slot CONSTRAINTS missing\n")):
+            self._request("rr1")
+            self.assertEqual(self._serve(), 0)
+        res = self._result("rr1")
+        self.assertEqual(res["outcome"], "refused-render")
+        self.assertIn("slot CONSTRAINTS missing", res["status_line"])
+        self.assertIn("slot CONSTRAINTS missing", res["reason_detail"])
+
+    def test_worker_pre_existing_changes_is_broker_owned(self):
+        lead_cmd = (f"snapshot {self.lead}/snapshot.json; verify with `python3 {self.lead}/pre_dispatch_snapshot.py "
+                    f"verify {self.lead}/snapshot.json`")
+        self._request("pe1", PRE_EXISTING_CHANGES=lead_cmd)
+        self.assertEqual(self._serve(), 0)
+        res = self._result("pe1")
+        self.assertNotEqual(res.get("outcome"), "refused-render", res)
+        self.assertEqual(len(self.calls), 1)
+        prompt = self.calls[0]["prompt"]
+        lines = [ln for ln in prompt.splitlines() if "verify with `" in ln]
+        self.assertEqual(len(lines), 1, prompt)
+        self.assertIn("python3 skills/workerbee/scripts/pre_dispatch_snapshot.py verify", lines[0])
+        self.assertNotIn(f"{self.lead}/snapshot.json", lines[0])
+        self.assertNotIn(f"{self.lead}/pre_dispatch_snapshot.py", lines[0])
+        self.assertIn("/workers/pe1/runs/", lines[0])
+
     def test_child_grant_exceeding_parent_refused(self):
         run = self.lead / "run.json"
         spec = json.loads(run.read_text())

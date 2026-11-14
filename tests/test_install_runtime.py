@@ -25,6 +25,18 @@ class RuntimeTest(unittest.TestCase):
         self.assertIn("features.shell_tool=false", argv)
         self.assertEqual(argv[-1], "-")
 
+    def test_profile_file_inside_denied_dir_is_readable(self):
+        from agents_inc.install.runtime import permission_profile
+        with tempfile.TemporaryDirectory() as raw:
+            cwd, denied = Path(raw) / "cwd", Path(raw) / "run"
+            cwd.mkdir()
+            denied.mkdir()
+            snap = denied / "snapshot.json"
+            snap.write_text("{}")
+            prof = permission_profile(cwd, False, home=Path(raw) / "h", extra_deny=(denied,), extra_read=(snap,))
+        self.assertEqual(prof[f'"{os.path.realpath(denied)}"'], "none")
+        self.assertEqual(prof[f'"{os.path.realpath(snap)}"'], "read")
+
     def test_resolution_needs_absolute_executable(self):
         with tempfile.TemporaryDirectory() as raw:
             exe = Path(raw) / "bin" / "codex"
