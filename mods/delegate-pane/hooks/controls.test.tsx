@@ -2,11 +2,11 @@ import { expect, mock, test } from 'claude-code/testing'
 
 const RUN = '20991107T000000Z-luna-aaaaaa'
 const PANE = {
-  plugin: 'agents-manager',
+  plugin: 'delegate-pane',
   component: 'Pane',
-  requestId: 'agents-manager',
+  requestId: 'agents-inc-delegates',
   props: {
-    title: 'agents-inc manager',
+    title: 'agents-inc',
     isFocused: true,
     bodyColumns: 80,
     placement: 'dock',
@@ -26,14 +26,14 @@ type World = { agents: any[]; dirs: string[]; read: (path: string) => string; li
 
 // Stands for the engine: one live subagent, one finished dispatch run. Row 1 = agent a1, row 2 = the run.
 async function start($: Dollar, on: On): Promise<World> {
-  const clock = mock.clock(on)
+  const clock = mock.clock(on, { now: Date.now() })
   const world: World = {
     agents: [{ id: 'a1', name: 'scout', type: 'Explore', description: 'scout', status: 'running' }],
     dirs: [RUN],
     read: () => DONE,
     advance: ms => clock.advance(ms),
   }
-  on('command.register', () => ({ value: { command: 'agents-manager' } }))
+  on('command.register', () => ({ value: { command: 'delegate-pane' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('agent.list', () => ({ value: world.agents as any }))
@@ -43,7 +43,7 @@ async function start($: Dollar, on: On): Promise<World> {
   })
   on('fs.read', (_$, e: any) => ({ value: world.read(String(e.path)) as any }))
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
-  await clock.advance(2100)
+  await clock.advance(1100)
   return world
 }
 
@@ -178,11 +178,11 @@ test('a vanished target is refused, not retargeted to another row', async ($, on
   for (const surface of ['terminal', 'desktop'] as const) {
     sent.length = 0
     world.agents = [{ id: 'a1', name: 'scout', type: 'Explore', description: 'scout', status: 'running' }]
-    await world.advance(2100)
+    await world.advance(1100)
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.select({ key: 'target', value: 'agent:a1' })
     world.agents = []
-    await world.advance(2100)
+    await world.advance(1100)
     await ui.input({ key: 'msg', text: 'hello' })
     expect(sent.length).toBe(0)
     expect((await ui.find({ type: 'Text', text: /target gone: .*scout/ }))?.text).toContain('target gone')
@@ -202,7 +202,7 @@ test('a native start shows one job row until the agent appears', async ($, on) =
   await ui.input({ key: 'task', text: 'say hi' })
   expect((await ui.findAll({ type: 'Button', text: /say hi/ })).length).toBe(1)
   world.agents.push({ id: 'a2', name: 'luna', type: 'agents-inc:luna', description: 'new one', status: 'running' })
-  await world.advance(2100)
+  await world.advance(1100)
   expect(await ui.find({ type: 'Button', text: /say hi/ })).toBeUndefined()
   expect((await ui.find({ type: 'Button', text: /new one/ }))?.text).toContain('luna')
   expect(spawned.length).toBe(1)
@@ -228,7 +228,7 @@ test('a dispatch job row ends once its run dir appears', async ($, on) => {
   const NEW = '20991107T000100Z-terra-bbbbbb'
   world.dirs = [NEW, RUN]
   world.read = p => (p.endsWith('run.json') && p.includes(NEW) ? JSON.stringify({ model: 'terra', slots }) : DONE)
-  await world.advance(2100)
+  await world.advance(1100)
   expect(await ui.find({ type: 'Button', text: /count lines/ })).toBeUndefined()
   expect((await ui.find({ type: 'Button', text: /bbbbbb|000100 terra/ }))?.text).toContain('dispatch')
   await ui.unmount()
@@ -302,7 +302,7 @@ test('a running run row has cancel, which calls dispatch --cancel', async ($, on
   })
   const world = await start($, on)
   world.read = () => LIVE
-  await world.advance(2100)
+  await world.advance(1100)
   for (const surface of ['terminal', 'desktop'] as const) {
     seen.length = 0
     const ui = await $.ui.mount({ ...PANE, surface })
@@ -341,7 +341,7 @@ test('ask to stop sends the stop text and says "stop requested", never "stopped"
 test('a missing runs directory leaves no poll error and agent rows still render', async ($, on) => {
   const world = await start($, on)
   world.listFails = true
-  await world.advance(2100)
+  await world.advance(1100)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /poll error/ })).toBeUndefined()
   expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('scout')
@@ -353,7 +353,7 @@ test('finished runs from before this session are not listed', async ($, on) => {
   const world = await start($, on)
   world.dirs = Array.from({ length: 12 }, (_, i) => `20200101T${String(i).padStart(2, '0')}0000Z-luna-old${String(i).padStart(3, '0')}`)
   world.read = () => DONE
-  await world.advance(2100)
+  await world.advance(1100)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Button', text: /0000 luna/ })).toBeUndefined()
   expect((await ui.find({ type: 'Text', text: /0 running · 0 finished/ }))?.text).toContain('showing 0')
@@ -367,7 +367,7 @@ test('every running run stays listed beyond the newest eight finished', async ($
   const fin = Array.from({ length: 12 }, (_, i) => `20991107T${String(i).padStart(2, '0')}0000Z-luna-fin${String(i).padStart(3, '0')}`)
   world.dirs = [...fin, OLD]
   world.read = p => (p.includes(OLD) && p.endsWith('events.jsonl') ? LIVE : DONE)
-  await world.advance(2100)
+  await world.advance(1100)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect((await ui.find({ type: 'Button', text: /oldrun|0000 luna/ }))?.text).toBeDefined()
@@ -384,7 +384,7 @@ test('a guest agent row shows nickname and provider, other types keep the raw ty
     { id: 'a2', name: 'g', type: 'agents-inc:codestral', description: 'guest', status: 'running' },
     { id: 'a3', name: 'x', type: 'Explore', description: 'x', status: 'running' },
   ]
-  await world.advance(2100)
+  await world.advance(1100)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('luna · OpenAI')
   const g = (await ui.find({ type: 'Button', text: /guest/ }))?.text ?? ''
@@ -400,7 +400,7 @@ test('the run count line is hidden with no run directories and shown with one', 
   expect(await ui.find({ type: 'Text', text: /finished \(showing/ })).toBeDefined()
   await ui.unmount()
   world.dirs = []
-  await world.advance(2100)
+  await world.advance(1100)
   ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /finished \(showing/ })).toBeUndefined()
   await ui.unmount()
@@ -410,13 +410,64 @@ test('a poll error note clears after a later poll succeeds', async ($, on) => {
   const world = await start($, on)
   const real = world.agents
   world.agents = null as any
-  await world.advance(2100)
+  await world.advance(1100)
   let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /poll error/ })).toBeDefined()
   await ui.unmount()
   world.agents = real
-  await world.advance(2100)
+  await world.advance(1100)
   ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /poll error/ })).toBeUndefined()
   await ui.unmount()
+})
+
+// --- spec 040 additions ---
+
+test('a message to a free run is refused with a note, and no process starts', async ($, on) => {
+  const spawned: string[][] = []
+  on('process.spawn', async function* (_$, e) {
+    spawned.push([...e.argv])
+    return { value: { code: 0, signal: null } }
+  })
+  const world = await start($, on)
+  world.read = p => (p.endsWith('/run.json') ? '{"model":"gemini","kind":"free","via":"agent.sh","outcome":"green"}' : DONE)
+  await world.advance(1100)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.select({ key: 'target', value: `run:${RUN}` })
+  await ui.input({ key: 'msg', text: 'more please' })
+  expect(await ui.find({ type: 'Text', text: /this run takes no messages/ })).toBeTruthy()
+  expect(spawned.length).toBe(0)
+  await ui.unmount()
+})
+
+test('narrow: below 34 columns the form and message box fold behind one toggle line, kept in controlsOpen', async ($, on) => {
+  await start($, on)
+  const narrow = { ...PANE, props: { ...PANE.props, bodyColumns: 30 } }
+  const ui = await $.ui.mount({ ...narrow, surface: 'terminal' })
+  expect(await ui.find({ type: 'Button', text: /▸ new agent \/ message/ })).toBeTruthy()
+  expect(await ui.find({ key: 'msg' })).toBeUndefined()
+  expect(await ui.find({ key: 'row-agenta1' })).toBeTruthy() // the tree stays
+  await ui.press({ key: 'controls' })
+  expect(await ui.find({ type: 'Button', text: /▾ new agent \/ message/ })).toBeTruthy()
+  expect(await ui.find({ key: 'msg' })).toBeTruthy()
+  await ui.unmount()
+  const wide = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await wide.find({ key: 'controls' })).toBeUndefined()
+  expect(await wide.find({ key: 'msg' })).toBeTruthy()
+  await wide.unmount()
+})
+
+test('session.start resets the pane state: a new session starts with no job row and no stop ask', async ($, on) => {
+  on('process.spawn', async function* () {
+    return { value: { code: 0, signal: null } }
+  })
+  await start($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.input({ key: 'task', text: 'count lines' })
+  expect(await ui.find({ type: 'Button', text: /count lines/ })).toBeTruthy()
+  await ui.unmount()
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await again.find({ type: 'Button', text: /count lines/ })).toBeFalsy()
+  await again.unmount()
 })

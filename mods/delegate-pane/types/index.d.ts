@@ -13,10 +13,16 @@ export type PaneDelegate = {
   endedAt?: number
   parentId?: string
 }
+export type TreeRow = { n: number; depth: number; kind: 'agent' | 'run' | 'job'; id: string; label: string; state: string; meta?: string; note?: string }
+// run dir name -> session-style lines of its open run pane, and a note
+export type RunLines = Record<string, { lines: string[]; note: string }>
+export type Form = { model: string; effort: string; note: string; target: string; targetLabel: string }
 export type PaneView = {
-  types: string[]
-  agents: PaneAgent[]
   note: string
+  // Spec 040 delegation tree.
+  treeRows: TreeRow[]
+  summary: string
+  controlsOpen: boolean
   // Spec 039 mission map.
   delegates: PaneDelegate[]
   // station -> ack keys `<id>@<alertAt>`: one key per acknowledged failure or lost event
@@ -36,6 +42,6 @@ export type PaneView = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'delegate-pane': { view: Shaped<PaneView> }
+    'delegate-pane': { view: Shaped<PaneView>; runs: Shaped<RunLines>; form: Shaped<Form> }
   }
 }

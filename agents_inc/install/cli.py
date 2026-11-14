@@ -92,8 +92,10 @@ def _packaged_source(tmp: Path) -> Path:
 
 MOD_PLUGIN, MOD_MARKETPLACE = "agents-inc@agents-inc-local", "agents-inc-local"
 # Pane mods (name, plugin, marketplace): a live pane per delegate model, and the agent tree. On by default with the install; each is skipped when the release does not ship it.
-PANE_MODS = (("delegate-pane", "delegate-pane@delegate-pane-local", "delegate-pane-local"),
-             ("agents-manager", "agents-manager@agents-manager-local", "agents-manager-local"))
+PANE_MODS = (("delegate-pane", "delegate-pane@delegate-pane-local", "delegate-pane-local"),)
+# Spec 040: agents-manager and luna-pane folded into delegate-pane. Old machines still carry them; install migrates them away.
+RETIRED_PANE_MODS = (("agents-manager@agents-manager-local", "agents-manager-local"),
+                     ("luna-pane@luna-pane-local", "luna-pane-local"))
 
 def _claude(home: Path, *argv, timeout=60):
     """Run the Claude CLI quietly against the install's own HOME; returns the CompletedProcess, or None when it cannot run.
@@ -157,9 +159,27 @@ def install_pane_mods(paths: InstallPaths, notices: list) -> None:
         warn = _apply_mod(paths, mod, plugin, market, listed,
                           f"warning: `claude {{argv}}` failed ({{rc}}{{why}}); the {name} pane may be out of date, delegation still works")
         if warn: notices.append(warn)
+    _retire_pane_mods(paths, notices, listed)
+
+def _retire_pane_mods(paths: InstallPaths, notices: list, listed) -> None:
+    """Uninstall retired plugins only when listed; remove retired marketplaces only when registered. A failure is a notice."""
+    try: known = json.loads((paths.home / ".claude/plugins/known_marketplaces.json").read_text())
+    except (OSError, ValueError): known = {}
+    known = known if isinstance(known, dict) else {}
+    if listed is None:
+        listed = _claude(paths.home, "plugin", "list")
+        if listed is None: return
+    for plugin, market in RETIRED_PANE_MODS:
+        in_list = plugin in (listed.stdout or "")
+        if not in_list and market not in known: continue
+        argvs = ((("plugin", "uninstall", plugin),) if in_list else ()) + ((("plugin", "marketplace", "remove", market),) if market in known else ())
+        for argv in argvs:
+            done = _claude(paths.home, *argv)
+            if done is None or done.returncode != 0:
+                notices.append(f"notice: retired pane mod cleanup `claude {' '.join(argv)}` failed ({'unavailable' if done is None else done.returncode}); remove it by hand")
 
 MOD_UNINSTALL_ARGVS = (("plugin", "uninstall", MOD_PLUGIN), ("plugin", "marketplace", "remove", MOD_MARKETPLACE),
-                       *[a for _, p, m in PANE_MODS for a in (("plugin", "uninstall", p), ("plugin", "marketplace", "remove", m))])
+                       *[a for p, m in (*((p, m) for _, p, m in PANE_MODS), *RETIRED_PANE_MODS) for a in (("plugin", "uninstall", p), ("plugin", "marketplace", "remove", m))])
 
 def uninstall_mod(paths: InstallPaths) -> list:
     notices = []
