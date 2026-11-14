@@ -44,7 +44,7 @@
 - [x] T016 [US3] DOCKER Update tests/test_mod_install.py (lines ~176-241) first: PANE_MODS is delegate-pane only; migration uninstalls listed retired plugins and removes retired marketplaces present in known_marketplaces.json; clean machine installs only delegate-pane; second run makes no CLI write calls; non-zero uninstall is a notice (R-c); test a stale luna-pane-local marketplace entry with no listed plugin is removed
 - [x] T017 [US3] DOCKER Edit agents_inc/install/cli.py: `PANE_MODS` delegate-pane only, add `RETIRED_PANE_MODS` (agents-manager@agents-manager-local, luna-pane@luna-pane-local), conditional uninstall in install_pane_mods, keep retired entries in MOD_UNINSTALL_ARGVS, drop the agents-manager loop entry near line 87
 - [x] T018 [P] [US3] DOCKER Edit agents_inc/install/bundle.py: remove `mods/agents-manager` from OPTIONAL_ALLOWLIST; extend its test
-- [ ] T019 [US3] MAC Operator runs the agents-inc installer; confirm `claude plugin list` shows delegate-pane 0.6.0 only; run again: no changes, no warnings (Mac has 0.2.0 today, R-f); confirm known_marketplaces.json has no luna-pane-local or agents-manager-local entry
+- [x] T019 [US3] MAC Operator runs the agents-inc installer; confirm `claude plugin list` shows delegate-pane 0.6.0 only; run again: no changes, no warnings (Mac has 0.2.0 today, R-f); confirm known_marketplaces.json has no luna-pane-local or agents-manager-local entry (Done by operator 2026-11-14: install ran twice; only delegate-pane listed; known_marketplaces has 0 retired entries.)
 
 ## Phase 6: User Story 4 - Repository leftovers cleaned (P3)
 
@@ -59,8 +59,8 @@
 - [x] T025 [P] DOCKER Add D62 status note (office floor view and `agents-inc watch` not built; shipped as specs 039 and 040) to docs/DECISIONS.md and merge entry to CHANGELOG.md (FR-015)
 - [x] T026 DOCKER SC-005: `git grep -n agents-manager` excluding CHANGELOG.md, docs/DECISIONS.md and specs shows only the installer retired list and its test
 - [x] T027 DOCKER Run all mod tests: count >= the T001 baseline sum (measured 2026-11-14: 113), all pass; run `python3 -m unittest discover -s tests -p 'test_*.py'`; confirm no extra reads versus 0.5.0 plus 0.1.0 (SC-003); grep hooks for fetch, network or model calls (FR-014)
-- [ ] T028 MAC Live check per quickstart.md steps 4-6: five fresh sessions open one pane; native, Codex, free starts; narrow toggle
-- [ ] T029 OPERATOR Commit the work first (needed before the move), then Move specs to DomI: run `bash ~/Projects/DomI/skills/speckit-pipeline/scripts/move_specs_to_domi.sh --apply`. Operator-gated. Depends on every other task; nothing runs after it.
+- [x] T028 MAC Live check per quickstart.md steps 4-6: five fresh sessions open one pane; native, Codex, free starts; narrow toggle (Done by operator 2026-11-14: install ran twice; only delegate-pane listed; known_marketplaces has 0 retired entries.)
+- [x] T029 OPERATOR Commit the work first (needed before the move), then Move specs to DomI: run `bash ~/Projects/DomI/skills/speckit-pipeline/scripts/move_specs_to_domi.sh --apply`. Operator-gated. Depends on every other task; nothing runs after it.
 
 ## Dependencies
 
