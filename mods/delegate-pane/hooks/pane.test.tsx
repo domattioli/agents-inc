@@ -1,22 +1,16 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { isNative, mergeAgents, normalizeView, offeredTypes, PANE } from './register'
+import { normalizeView, PANE } from './register'
+import { mergeAgents } from './poll'
 
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Dollar = Parameters<Parameters<typeof test>[1]>[0]
 
-const STATUS = JSON.stringify({
-  models: [
-    { nickname: 'luna', offered: true, slug: 'gpt-6-luna' },
-    { nickname: 'gemini-flash', offered: false, slug: 'gemini-3.8-flash' },
-  ],
-  legacy_routes: false,
-})
 const MOUNT = {
   plugin: 'delegate-pane',
   component: 'Pane',
   requestId: PANE,
-  props: { title: 'agents-inc native agents', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  props: { title: 'agents-inc', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 
 type World = {
@@ -86,10 +80,6 @@ async function start($: Dollar, on: On, world: World, now = T0, opts: { begin?: 
     if (world.readFails || (world.badFiles ?? []).includes(path) || !(path in (world.files ?? {}))) throw new Error('ENOENT: ' + path)
     return { value: world.files![path] as any }
   })
-  on('process.spawn', async function* () {
-    yield { stream: 'stdout' as const, text: STATUS }
-    return { value: { code: 0, signal: null } }
-  })
   if (opts.begin === false) return clock
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
   await clock.advance(1100)
@@ -137,12 +127,11 @@ const DEF_FILES = {
 const OLD = '20991101T000000Z-sonnet-old000'
 const OLD_FILES = { [`${ROOT}/${OLD}/run.json`]: '{"run_id": "20991101T000000Z-sonnet-old000", "model": "sonnet", "kind": "claude", "cwd": "/work", "outcome": "red", "reason": "rc-nonzero"}' }
 
-test('the top lists stay native-only (FR-020 for the lists); the map shows Explore and the run dir (FR-003)', async ($, on) => {
+test('the tree lists every agent type and no run before the session; the map shows Explore and the run dir (FR-003)', async ($, on) => {
   const world: World = {
     agents: [
       { id: 'a1', type: 'agents-inc:luna', description: 'read the repo', status: 'running' },
       { id: 'a2', type: 'Explore', description: 'scout', status: 'running' },
-      { id: 'a3', type: 'agents-inc:relay', description: 'old route', status: 'running' },
     ],
     dirs: [ABC, OLD],
     files: { ...ABC_FILES, ...OLD_FILES },
@@ -150,47 +139,43 @@ test('the top lists stay native-only (FR-020 for the lists); the map shows Explo
   await start($, on, world)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...MOUNT, surface })
-    expect((await ui.find({ type: 'Text', text: /agents-inc:luna · read the repo/ }))?.text).toContain('running')
-    expect(await ui.find({ type: 'Text', text: /^ {2}agents-inc:luna$/ })).toBeTruthy()
-    expect(await ui.find({ type: 'Text', text: /gemini-flash/ })).toBeFalsy()
-    // the top list: no Explore line, no relay line, no dispatch run
-    expect(await ui.find({ type: 'Text', text: /Explore · scout/ })).toBeFalsy()
-    expect(await ui.find({ type: 'Text', text: /old route · running/ })).toBeFalsy() // the feed below the map may name it
-    expect(await ui.find({ type: 'Text', text: /agents-inc:relay/ })).toBeFalsy()
+    expect((await ui.find({ type: 'Button', text: /read the repo/ }))?.text).toContain('luna · OpenAI')
+    expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('Explore')
+    expect(await ui.find({ type: 'Text', text: /Native agent/ })).toBeFalsy()
     // the map: Explore (rung unknown) and the finished fixture run appear
     expect(await ui.find({ type: 'Text', text: /^Explore · \? · running$/ })).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: /^sonnet · workhorse · done$/ })).toBeTruthy()
-    // a run started before the session start is absent (H1)
+    // a run started before the session start is absent from the map (H1)
     expect(await ui.find({ type: 'Text', text: /sonnet · workhorse · failed/ })).toBeFalsy()
-    expect(await ui.find({ type: 'Text', text: /old000/ })).toBeFalsy()
     await ui.unmount()
   }
 })
 
-test('a finished native agent stays listed after the engine stops listing it', async ($, on) => {
+test('tree: an agent the engine stops listing leaves the tree but stays on the map', async ($, on) => {
   const world: World = { agents: [{ id: 'a1', type: 'agents-inc:terra', description: 'fix it', status: 'running' }] as any[], dirs: [] }
   const clock = await start($, on, world)
+  const before = await $.ui.mount({ ...MOUNT, surface: 'terminal' })
+  expect(await before.find({ type: 'Button', text: /fix it/ })).toBeTruthy()
+  await before.unmount()
   world.agents = []
   await clock.advance(1100)
   const ui = await $.ui.mount({ ...MOUNT, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /agents-inc:terra · fix it/ }))?.text).toContain('finished')
+  expect(await ui.find({ type: 'Button', text: /fix it/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /no delegates yet/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /terra · workhorse · /i })).toBeTruthy()
   await ui.unmount()
 })
 
-test('pure helpers: native filter, merge, offered types', () => {
-  expect(isNative('agents-inc:luna')).toBe(true)
-  expect(isNative('agents-inc:relay')).toBe(false)
-  expect(isNative('general-purpose')).toBe(false)
-  const one = mergeAgents([], [{ id: 'x', type: 'agents-inc:sol', description: 'd', status: 'running' }])
-  expect(mergeAgents(one, [])).toEqual([{ id: 'x', type: 'agents-inc:sol', description: 'd', status: 'finished' }])
+test('pure helpers: merge keeps every agent type by id and marks a vanished one finished', () => {
+  const one = mergeAgents([], [{ id: 'x', type: 'agents-inc:sol', description: 'd', status: 'running' }, { id: 'y', type: 'Explore', description: 'e', status: 'running' }])
+  expect(one.map(a => a.id)).toEqual(['x', 'y'])
+  expect(mergeAgents(one, [])[0]).toEqual({ id: 'x', type: 'agents-inc:sol', description: 'd', status: 'finished' })
   expect(mergeAgents([{ id: 'x', type: 'agents-inc:sol', description: 'd', status: 'completed' }], [])[0].status).toBe('completed')
-  expect(offeredTypes(STATUS)).toEqual(['agents-inc:luna'])
-  expect(offeredTypes('not json')).toEqual([])
 })
 
 // --- spec 039 pane tests (T010-T012, T015) ---
 
-test('the map sits below the lists and places a subagent and fixture runs at the right stations', async ($, on) => {
+test('the map comes first and places a subagent and fixture runs at the right stations', async ($, on) => {
   const world: World = {
     agents: [{ id: 'a1', type: 'Plan', description: 'anything', status: 'running' }],
     dirs: [ABC, DEF],
@@ -201,8 +186,8 @@ test('the map sits below the lists and places a subagent and fixture runs at the
     const ui = await $.ui.mount({ ...MOUNT, surface })
     const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
     const at = (re: RegExp) => texts.findIndex(t => re.test(t))
-    expect(at(/^Mission map$/)).toBeGreaterThan(at(/^Native agents this session$/))
-    expect(at(/^Native agents this session$/)).toBeGreaterThan(at(/^Native agent types$/))
+    expect(at(/^Mission map$/)).toBeGreaterThanOrEqual(0)
+    expect(at(/no delegates yet|^ *└─/)).toBe(-1) // the tree has rows, so no empty line
     expect(at(/session · chief of staff · 2 working|session · chief of staff · 1 working/)).toBeGreaterThan(at(/^Mission map$/))
     expect(at(/Plan · \? · running/)).toBeGreaterThan(at(/^Mission map$/))
     expect(await ui.find({ type: 'Text', text: /^sonnet · workhorse · done$/ })).toBeTruthy() // Build
@@ -340,13 +325,13 @@ test('D: past 40 subagents every one keeps a marker on the map', async ($, on) =
   await ui.unmount()
 })
 
-test('F: no delegates shows one "no delegates" line; the lists stay', async ($, on) => {
+test('F: no delegates shows "Nothing is running." and the tree says "no delegates yet"', async ($, on) => {
   const world: World = { agents: [], dirs: [] }
   await start($, on, world)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...MOUNT, surface })
-    expect((await ui.findAll({ type: 'Text', text: /^no delegates$/ })).length).toBe(1)
-    expect(await ui.find({ type: 'Text', text: /^Native agents this session$/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /^Nothing is running\.$/ })).toBeTruthy()
+    expect((await ui.findAll({ type: 'Text', text: /no delegates yet/ })).length).toBe(1)
     expect(await ui.find({ type: 'Text', text: /session · chief of staff · 0 working/ })).toBeTruthy()
     await ui.unmount()
   }
@@ -363,11 +348,11 @@ test('G(a): a value stored under an older shape tag renders the map and none of 
 })
 
 test('G(b): the current shape tag with fields missing renders without throw', async ($, on) => {
-  storedView(on, 'view-5', { types: ['agents-inc:luna'] })
+  storedView(on, 'view-5', { note: 'kept note' })
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...MOUNT, surface })
     expect(await ui.find({ type: 'Text', text: /^Mission map$/ })).toBeTruthy()
-    expect(await ui.find({ type: 'Text', text: /^ {2}agents-inc:luna$/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /no delegates yet/ })).toBeTruthy()
     await ui.unmount()
   }
 })
@@ -387,7 +372,7 @@ test('G(c): a stored sessionStart earlier than a run stamp survives session.star
 test('a value from the view-3 code (no map fields) normalizes; an unstarted pane renders', async ($, on) => {
   const old = { types: ['agents-inc:luna'], agents: [], note: '' }
   expect(normalizeView(old as any)).toMatchObject({ delegates: [], acked: {}, sessionStart: '', finalRuns: {}, mapNote: '' })
-  expect(normalizeView(undefined).types).toEqual([])
+  expect(normalizeView(undefined)).toMatchObject({ treeRows: [], summary: '', controlsOpen: false })
   // no session.start ran: the pane reads the atom's initial value
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...MOUNT, surface })

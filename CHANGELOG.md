@@ -9,6 +9,7 @@ All notable changes to this project are recorded here. The format follows
 ### Added
 
 - The delegate pane (mod 0.5.0) draws a mission map: a vertical spine of CoS, Lead and primary Worker, six task-category stations, pulses that follow who started whom, a status line and a feed with a dim rung column, and a static text map on narrow panes (spec 039). The pane now opens at session start; `/delegate-pane` reopens it.
+- The delegate pane (mod 0.6.0) now holds the agents-manager delegation tree, new-agent form and message box beside the mission map, fed by one 1 s poll; on panes under 34 columns the form and message box sit behind one toggle line. The agents-manager mod and the native types list are gone. The installer installs only the delegate pane and removes `agents-manager` and a stale `luna-pane-local` entry when present; a second run changes nothing (spec 040).
 
 ### Fixed
 

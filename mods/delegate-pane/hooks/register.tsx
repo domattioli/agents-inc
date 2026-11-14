@@ -1,24 +1,30 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { PaneAgent, PaneDelegate, PaneView } from '../types'
-import { MAIN_ROLE, ackId, hierarchyLines, categoryOf, dirTime, feed, isAlert, isDryRun, layoutFor, lifecycleOf, runFromFiles, rungOf, sessionRuns, stations, statusLine, withLost } from './mission'
-import type { Delegate, State, Station } from './mission'
+import type { PaneView } from '../types'
+import { MAIN_ROLE, ackId, hierarchyLines, layoutFor, stations, statusLine, feed, isAlert } from './mission'
+import type { State, Station, Delegate } from './mission'
 import { cosRoom, dispatchesOf, encodeCells, frame, FRAME_MS, landings, needsMotion, RASTER_ROWS, rasterColumns } from './frames'
 import type { Return } from './frames'
+import { controlsView, renderRun } from './controls'
+import { applyRunLines } from './controls'
+import { poll } from './poll'
+import { EMPTY, compose, newState, normalizeView, resetState, RUN_PANE } from './tree'
+import type { View } from './tree'
 
-// Spec 038 FR-020: the two top lists show only native agents (agents-inc:<nickname> subagents, running or finished in
-// this session) and the registered native types. Spec 039: the mission map below them also draws every other subagent
-// type and each dispatch run directory of this session (FR-003). A native agent's own transcript is Claude Code's
-// subagent view; the pane names it, it does not copy it.
+export { mergeAgents } from './poll'
+export { normalizeView } from './tree'
+
+// Spec 040: one pane for the delegates of the session. The map (spec 039) draws every subagent type and each dispatch
+// run directory of this session; the tree, the new-agent form and the message box (hooks/controls.tsx) act on them.
+// A native agent's own transcript is Claude Code's subagent view; the pane names it, it does not copy it.
+// view-5: acks became `<id>@<alertAt>` keys; a view-4 value (plain-id acks) reads as EMPTY and the store record refills it.
+// The state scan wants the atom spelled in each file that reads it, so controls.tsx and register.tsx both declare it.
+const view = atom({ plugin: 'delegate-pane', key: 'view' } as const, EMPTY as any, { shape: 'view-5' })
+
 export const PANE = 'agents-inc-delegates'
-const PREFIX = 'agents-inc:'
-// The legacy relay type (install --legacy-routes) is a route, not a native agent.
-const NOT_NATIVE = new Set(['agents-inc:relay'])
+const TITLE = 'agents-inc'
 const POLL_MS = 1000
-const KEEP = 40
-// Spec 039: the mission map. Dispatch runs live under the run root (plan R1); a map station shows at most MAP_CAP markers.
-const RUN_ROOT = '.scratch/agents-inc-runs'
 const MAP_CAP = 4
 const FEED_MIN = 3
 const FEED_MAX = 10
@@ -26,15 +32,9 @@ const FEED_MAX = 10
 // so `claude --resume` (a new process, empty $.state) keeps them. The store keeps the STORE_KEEP most recent sessions.
 const STORE_PREFIX = 'session:'
 const STORE_KEEP = 20
-const EMPTY: PaneView = {
-  types: [], agents: [], note: '', delegates: [], acked: {}, alertAt: {}, sessionStart: '', finalRuns: {}, lostRuns: {}, mapNote: '', model: '', seen: {},
-}
-
-// view-5: acks became `<id>@<alertAt>` keys; a view-4 value (plain-id acks) reads as EMPTY and the store record refills it.
-const view = atom({ plugin: 'delegate-pane', key: 'view' } as const, EMPTY, { shape: 'view-5' })
 
 type Saved = { sessionStart: string; acked: Record<string, string[]>; alertAt: Record<string, number>; savedAt: number }
-const savedOf = (v: PaneView): Omit<Saved, 'savedAt'> => ({ sessionStart: v.sessionStart, acked: v.acked, alertAt: v.alertAt })
+const savedOf = (v: View): Omit<Saved, 'savedAt'> => ({ sessionStart: v.sessionStart, acked: v.acked, alertAt: v.alertAt })
 
 // Read this session's record from $.store; undefined when there is none or the store or session id is not reachable.
 async function loadSaved($: any): Promise<Saved | undefined> {
@@ -49,7 +49,7 @@ async function loadSaved($: any): Promise<Saved | undefined> {
 
 // Write this session's record and drop all but the STORE_KEEP most recent session records. A store that fails is let
 // go: the pane keeps working from $.state.
-async function save($: any, v: PaneView): Promise<void> {
+async function save($: any, v: View): Promise<void> {
   try {
     const id = String(await $.session.id())
     const now = Number(await $.clock.now())
@@ -65,146 +65,6 @@ async function save($: any, v: PaneView): Promise<void> {
   }
 }
 
-// A value an older code version wrote (no map fields) still renders.
-export const normalizeView = (v: Partial<PaneView> | undefined): PaneView => ({ ...EMPTY, ...(v ?? {}) })
-
-export const isNative = (type: unknown): boolean =>
-  typeof type === 'string' && type.startsWith(PREFIX) && !NOT_NATIVE.has(type)
-
-type Listed = { id: string; type?: string; name?: string; description?: string; status?: string; parentId?: string }
-
-// Merge one agent.list answer into the session's agents. An agent the engine no longer lists stays, marked finished
-// unless it already ended: the pane keeps every native agent of the session (FR-020).
-// `cap` bounds the list (KEEP); the map passes Infinity so every subagent of the session keeps its marker (FR-003).
-export function mergeAgents(prev: PaneAgent[], listed: Listed[], keep: (type: unknown) => boolean = isNative, cap = KEEP): PaneAgent[] {
-  const now = new Map(listed.filter(a => a && keep(a.type)).map(a => [a.id, a] as const))
-  const out: PaneAgent[] = prev.map(p => {
-    const a = now.get(p.id)
-    if (!a) return p.status === 'running' ? { ...p, status: 'finished' } : p
-    now.delete(p.id)
-    return { ...p, status: String(a.status ?? p.status), description: String(a.description ?? p.description) }
-  })
-  for (const a of now.values())
-    out.push({
-      id: a.id, type: String(a.type), description: String(a.description ?? a.name ?? ''), status: String(a.status ?? 'running'),
-      ...(a.parentId ? { parentId: String(a.parentId) } : {}),
-    })
-  return Number.isFinite(cap) ? out.slice(-cap) : out
-}
-
-// The offered types from `agents-inc luna status --json --all` (the one read the agents-inc mod makes too).
-export function offeredTypes(statusJson: string): string[] {
-  try {
-    const models = (JSON.parse(statusJson) as { models?: unknown }).models
-    if (!Array.isArray(models)) return []
-    return models
-      .filter(m => m && typeof m.nickname === 'string' && m.offered === true)
-      .map(m => PREFIX + String(m.nickname))
-  } catch {
-    return []
-  }
-}
-
-// One poll of the run root: one list, then run files only for runs of this session that are not yet final (plan R1 bound).
-// A failed read is told apart from a missing file by $.fs.exists, called only after a failure.
-async function readRuns(
-  $: any,
-  v: PaneView,
-  now: number,
-): Promise<{ runs: PaneDelegate[]; finalRuns: Record<string, PaneDelegate>; lostRuns: Record<string, PaneDelegate>; mapNote: string }> {
-  const exists = async (path: string): Promise<boolean | undefined> => {
-    try {
-      return Boolean(await $.fs.exists(path))
-    } catch {
-      return undefined
-    }
-  }
-  let names: string[]
-  try {
-    names = ((await $.fs.list(RUN_ROOT)) as Array<{ name: string; kind: string }>).filter(x => x.kind === 'dir').map(x => x.name)
-  } catch (err) {
-    // No run root: no dispatch has run in this cwd yet. Nothing to draw, nothing to say.
-    if ((await exists(RUN_ROOT)) === false) return { runs: [], finalRuns: v.finalRuns, lostRuns: v.lostRuns, mapNote: '' }
-    // The root is there (or unknown) but the list failed: keep the dispatch markers already known, say only that.
-    const known = v.delegates.filter(d => d.source === 'dispatch')
-    return { runs: known, finalRuns: v.finalRuns, lostRuns: v.lostRuns, mapNote: `dispatch runs not listed: ${String((err as Error)?.message ?? err)}; showing last known` }
-  }
-  const runs: PaneDelegate[] = []
-  const finalRuns: Record<string, PaneDelegate> = {}
-  const lostRuns: Record<string, PaneDelegate> = {}
-  const newestOf = async (dir: string, name: string): Promise<number | undefined> => {
-    try {
-      const files = ((await $.fs.list(dir)) as Array<{ kind: string; mtimeMs: number }>).filter(x => x.kind === 'file')
-      if (!files.length) return dirTime(name)
-      return Math.max(...files.map(f => Number(f.mtimeMs) || 0))
-    } catch {
-      return undefined
-    }
-  }
-  const unreadable: string[] = []
-  // undefined: missing (normal before the first write); a read that fails on a file that exists is noted.
-  const attempt = async (path: string): Promise<string | undefined> => {
-    try {
-      return (await $.fs.read(path)) as string
-    } catch {
-      if ((await exists(path)) !== false) unreadable.push(path.slice(RUN_ROOT.length + 1))
-      return undefined
-    }
-  }
-  for (const name of sessionRuns(names, v.sessionStart)) {
-    const cached = v.finalRuns[name]
-    if (cached) {
-      runs.push(cached)
-      finalRuns[name] = cached
-      continue
-    }
-    const dir = `${RUN_ROOT}/${name}`
-    // Last event (FR-012): the newest mtimeMs among the run's files, from one $.fs.list of the run dir (the listing
-    // reads a regular file's time in its one call). No file yet: the run id's start time. A failed list: unknown,
-    // and a run whose last event is unknown is never called lost.
-    const newest = await newestOf(dir, name)
-    // A lost run is not read again until one of its files changes; the list above still notices that.
-    const lost = v.lostRuns[name]
-    if (lost && newest !== undefined && lost.newest !== undefined && newest <= lost.newest) {
-      runs.push(lost)
-      lostRuns[name] = lost
-      continue
-    }
-    const runJson = await attempt(`${dir}/run.json`)
-    if (isDryRun(runJson)) continue
-    const slotsJson = await attempt(`${dir}/slots.json`)
-    const events = runJson === undefined ? await attempt(`${dir}/events.jsonl`) : undefined
-    // Draw from what was read; a folder with no file yet draws from its name (model from the dir, state running).
-    // Start: the run id's stamp. End (a final run): its newest file time.
-    const r0 = runFromFiles(runJson, slotsJson, name, events)
-    const startedAt = dirTime(name)
-    const read1 = { ...r0, startedAt, ...(r0.state !== 'running' && newest !== undefined ? { endedAt: newest } : {}) }
-    // A failed run's alert event is named by its last event, stable across reloads and resumes.
-    const d = withLost(read1.state === 'failed' ? { ...read1, alertAt: newest ?? dirTime(name) ?? 0 } : read1, newest, now)
-    runs.push(d)
-    if (d.state === 'lost') lostRuns[name] = d
-    else if (d.state !== 'running') finalRuns[name] = d
-  }
-  const mapNote = unreadable.length
-    ? `dispatch run file unreadable: ${unreadable[0]}${unreadable.length > 1 ? ` (+${unreadable.length - 1} more)` : ''}; drawn from what was read`
-    : ''
-  return { runs, finalRuns, lostRuns, mapNote }
-}
-
-const subagentDelegate = (a: PaneAgent): PaneDelegate => {
-  const rung = rungOf('', a.type)
-  return {
-    id: a.id,
-    source: 'subagent',
-    nickname: a.type.replace(PREFIX, ''),
-    rung,
-    task: a.description,
-    category: categoryOf({ text: a.description, subagentType: a.type, rung }),
-    state: lifecycleOf('subagent', a.status),
-    ...(a.parentId ? { parentId: a.parentId } : {}),
-  }
-}
-
 // Motion (terminal only): one frame timer while the pane is shown in the terminal grid layout and a station moves.
 // Module state, as the engine wants every $-taking helper declared at the top of the file. `motion.timer` is the only
 // timer; stopMotion cancels it. `off`: a blit was refused, so the pane draws the static map until it is opened again.
@@ -217,7 +77,7 @@ const motion: { timer?: { cancel: () => void }; cols: number; off: boolean; seen
 }
 // The CoS node's label on the Raster: the glossary term and the main session's model when the engine gives one; the
 // model is dropped when it does not fit `room` cells.
-export const cosLabel = (v: PaneView, room = Infinity): string => {
+export const cosLabel = (v: View, room = Infinity): string => {
   const full = v.model ? `CoS · ${v.model}` : 'CoS'
   return full.length <= room ? full : 'CoS'
 }
@@ -258,93 +118,51 @@ function startMotion($: any): void {
 }
 
 export const register: Register = on => {
-  let agents: PaneAgent[] = []
-  let mapSubs: PaneAgent[] = [] // every subagent type of this session, for the map only
-  let lastSig = ''
+  const st = newState()
   on('session.start', async ($, e, next) => {
-    agents = []
-    mapSubs = []
-    lastSig = ''
+    resetState(st, e.cwd || '.')
     stopMotion()
     motion.off = false
     motion.seen = {}
     motion.returns = []
     const nowIso = new Date(await $.clock.now()).toISOString()
-    await $.command.register({ name: 'delegate-pane', description: 'Open the agents-inc pane: native agent types and native agents of this session' })
-    let types: string[] = []
-    let note = ''
-    try {
-      const stream = $.process.spawn({ argv: ['agents-inc', 'luna', 'status', '--json', '--all', '--cwd', e.cwd || '.'], cwd: e.cwd || undefined })
-      let out = ''
-      for (;;) {
-        const n = await stream.next()
-        if (n.done) {
-          if (n.value.code !== 0) note = 'agents-inc status gave no answer; no native types listed'
-          break
-        }
-        if (n.value.stream === 'stdout') out += n.value.text
-      }
-      if (!note) types = offeredTypes(out)
-    } catch {
-      note = 'agents-inc status gave no answer; no native types listed'
-    }
+    await $.command.register({ name: 'delegate-pane', description: 'Open the agents-inc pane: the delegation tree, the mission map, a new-agent form and a message box' })
     // sessionStart, acked and finalRuns survive a reload: sessionStart is set once. After `--resume` $.state is empty:
     // this session's $.store record (FR-013) gives back its start, acks and subagent alert times.
     const saved = normalizeView(await read($, view)).sessionStart ? undefined : await loadSaved($)
     const started = await update($, view, v => {
       const n = normalizeView(v)
       const restored = !n.sessionStart && saved ? { sessionStart: saved.sessionStart, acked: saved.acked ?? {}, alertAt: saved.alertAt ?? {} } : {}
-      return { ...n, ...restored, types, agents: [], note, delegates: [], mapNote: '', sessionStart: (restored as any).sessionStart || n.sessionStart || nowIso }
+      return { ...n, ...restored, treeRows: [], summary: '', delegates: [], mapNote: '', note: '', sessionStart: (restored as any).sessionStart || n.sessionStart || nowIso }
     })
     await save($, normalizeView(started as PaneView))
 
+    // One poll a second feeds the tree, the map, the status line and the feed.
     $.clock.every(POLL_MS, async () => {
       try {
-        const listed = (await $.agent.list()) as Listed[]
-        agents = mergeAgents(agents, listed)
-        mapSubs = mergeAgents(mapSubs, listed, t => typeof t === 'string', Infinity)
         const v = normalizeView(await read($, view))
         const now = Number(await $.clock.now())
-        const { runs, finalRuns, lostRuns, mapNote } = await readRuns($, v, now)
-        // A subagent's failure episode starts when the pane first sees it failed; it ends when the agent leaves failed
-        // (a resumed agent runs again), so a later failure under the same id is a new event (FR-008).
-        const alertAt: Record<string, number> = {}
-        // Feed times: a subagent starts at the first poll that lists it and ends at the first poll that sees it end
-        // (done or failed; paused is not an end).
-        const seen: Record<string, [number, number | null]> = {}
-        const subs = mapSubs.map(a => {
-          const d0 = subagentDelegate(a)
-          const was = v.seen[d0.id]
-          const ended = d0.state === 'done' || isAlert(d0.state)
-          const times: [number, number | null] = [was?.[0] ?? now, ended ? (was?.[1] ?? now) : null]
-          seen[d0.id] = times
-          const d = { ...d0, startedAt: times[0], ...(times[1] !== null ? { endedAt: times[1] } : {}) }
-          if (!isAlert(d.state)) return d
-          alertAt[d.id] = v.alertAt[d.id] ?? now
-          return { ...d, alertAt: alertAt[d.id] }
-        })
-        let model = v.model
-        try {
-          model = String((await $.session.model()) ?? '')
-        } catch {
-          // no model known: the centre shows its fixed label only
-        }
-        const delegates = [...subs, ...runs]
-        const sig = JSON.stringify([agents.map(a => [a.id, a.status]), delegates, mapNote, model])
-        if (sig !== lastSig) {
-          lastSig = sig
-          const alertsMoved = JSON.stringify(alertAt) !== JSON.stringify(v.alertAt)
-          const next1 = await update($, view, x => ({ ...normalizeView(x), agents, delegates, finalRuns, lostRuns, alertAt, mapNote, model, seen }))
+        const r = await poll($, st, v, now)
+        const treeRows = compose(st)
+        const sig = JSON.stringify([treeRows, st.summary, r.delegates, r.mapNote, r.model, r.runLines])
+        if (sig !== st.lastSig || v.note.startsWith('poll error: ')) {
+          st.lastSig = sig
+          const alertsMoved = JSON.stringify(r.alertAt) !== JSON.stringify(v.alertAt)
+          const next1 = await update($, view, x => {
+            const n = normalizeView(x)
+            return { ...n, treeRows, summary: r.summary, delegates: r.delegates, finalRuns: r.finalRuns, lostRuns: r.lostRuns, alertAt: r.alertAt, mapNote: r.mapNote, model: r.model, seen: r.seen, note: n.note.startsWith('poll error: ') ? '' : n.note }
+          })
           if (alertsMoved) await save($, normalizeView(next1 as PaneView))
+          await applyRunLines($, r.runLines)
         }
       } catch (err) {
-        await update($, view, v => ({ ...normalizeView(v), note: `pane error: ${String((err as Error)?.message ?? err)}` }))
+        await update($, view, v => ({ ...normalizeView(v), note: `poll error: ${String((err as Error)?.message ?? err)}` }))
       }
     })
     // Open at session start; /delegate-pane reopens it. Non-blocking: a refused open must not break the start.
     motion.off = false
     try {
-      void Promise.resolve($.ui.open({ id: PANE, title: 'agents-inc native agents' })).catch(() => {})
+      void Promise.resolve($.ui.open({ id: PANE, title: TITLE })).catch(() => {})
     } catch {
       // open refused: the command still opens the pane
     }
@@ -353,17 +171,20 @@ export const register: Register = on => {
 
   on('ui.close', ($, e, next) => {
     if (e.id === PANE) stopMotion()
+    if (String(e.id).startsWith(RUN_PANE)) st.open.delete(String(e.id).slice(RUN_PANE.length))
     return next(e)
   })
 
   on('command.run', { command: 'delegate-pane' }, async $ => {
     motion.off = false
-    await $.ui.open({ id: PANE, title: 'agents-inc native agents' })
+    await $.ui.open({ id: PANE, title: TITLE })
     return { text: 'agents-inc pane opened.' }
   })
 
-  on('ui.render', { component: 'Pane' }, async ($, e) => {
-    if (String((e as any).requestId ?? '') !== PANE) return undefined
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    const rid = String((e as any).requestId ?? '')
+    if (rid.startsWith(RUN_PANE)) return renderRun($, e, st, rid.slice(RUN_PANE.length))
+    if (rid !== PANE) return next(e)
     const els = $.ui.resolve(e) as any
     const { Box, Text, Button } = els
     const v = normalizeView(await read($, view))
@@ -473,25 +294,8 @@ export const register: Register = on => {
       )
     return (
       <Box flexDirection="column">
-        <Text bold>Native agent types</Text>
-        {v.types.length ? v.types.map(t => <Text>{'  ' + t}</Text>) : <Text dimColor>  none registered</Text>}
-        <Text> </Text>
-        <Text bold>Native agents this session</Text>
-        {v.agents.length ? (
-          v.agents.map(a => (
-            <Text>
-              <Text color={a.status === 'running' ? 'green' : undefined}>{a.status === 'running' ? '● ' : '✓ '}</Text>
-              {`${a.type} · ${a.description} · ${a.status}`}
-            </Text>
-          ))
-        ) : (
-          <Text dimColor>  none yet</Text>
-        )}
-        {v.note ? <Text dimColor>{v.note}</Text> : null}
-        <Text> </Text>
         <Text bold>Mission map</Text>
         {map}
-        {v.delegates.length ? null : <Text dimColor>no delegates</Text>}
         <Text bold>{statusLine(v.delegates, columns)}</Text>
         {feed(v.delegates, columns, feedCap).map(row => (
           <Text key={'feed-' + row.id} color={row.kind === 'running' ? 'yellow' : row.kind === 'failed' ? 'red' : undefined} dimColor={row.kind === 'done' || row.kind === 'paused'}>
@@ -501,6 +305,7 @@ export const register: Register = on => {
           </Text>
         ))}
         {v.mapNote ? <Text dimColor>{v.mapNote}</Text> : null}
+        {await controlsView($, els, st, v, columns)}
       </Box>
     )
   })

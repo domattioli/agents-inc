@@ -4,14 +4,28 @@ One pane for the agents-inc delegates of the current session.
 
 The pane opens at session start; `/delegate-pane` reopens it.
 
-## Lists
+## Delegation tree
 
-- Native agent types registered by agents-inc (`agents-inc:<nickname>`).
-- Native agents of this session. Only `agents-inc:*` subagents appear here; dispatch run directories do not.
+Under the feed, the pane lists who delegates to whom. It replaces the retired `agents-manager` mod.
+
+- One row per agent of this session, nested under the agent that started it, then one row per dispatch run. The rows come from the engine's agent list and from `.scratch/agents-inc-runs`, so an agent the engine stops listing leaves the tree. It stays on the map.
+- Rows are numbered. Click an agent row to see its transcript in the main view. Click a run row to open a pane of its live events. A running run has a cancel button and an ask-to-stop button; ask-to-stop sends a stop request and the row says `stop requested`.
+- Finished runs from before this session stay hidden. The newest eight finished runs show; every running run shows. A line counts running and finished runs.
+- With nothing to show the tree says `no delegates yet`.
+
+## New agent and message
+
+- The new-agent form starts a delegate from a model and, for dispatch models, an effort. A free model (Gemini, Mistral, OpenRouter) starts through `agent.sh`. A new job shows as one row until its agent or run directory appears.
+- The message box sends text to the row you pick. A message to a finished dispatch run resumes it. A free run takes no messages: the pane says `this run takes no messages`.
+- Below 34 columns the form and the message box fold behind one line, `▸ new agent / message`. The tree stays. Click the line to unfold both; the pane keeps the choice for the session.
+
+## One poll
+
+One poll a second feeds the tree, the map, the status line and the feed. It lists the run root once and reads files only for runs that are not final. A session start clears everything the pane remembers.
 
 ## Mission map
 
-Below the lists the pane draws a mission map (spec 039): a centre line for the session, six stations, and one marker per working agent. A marker reads `nickname · rung · state`.
+At the top the pane draws a mission map (spec 039): a centre line for the session, six stations, and one marker per working agent. A marker reads `nickname · rung · state`.
 
 - Stations: Review, Build, Write, Scout, Plan, Other. The category comes from a fixed rule table (subagent type, dispatch slots `TASK_KIND` or `ROLE`, the leading verb of the task text, then the grunt rung), never from a model.
 - Sources: every subagent type of the session (`Explore`, `general-purpose`, `agents-inc:*`) and every `agents-inc dispatch` run of this session found under `.scratch/agents-inc-runs`.
@@ -56,7 +70,7 @@ Under the map, on every surface:
 
 - Dispatch runs are visible only when `<cwd>/.scratch/` is git-ignored. Otherwise runs land in `$CLAUDE_SCRATCHPAD` or `$TMPDIR`, which the pane cannot read, and it shows the note `dispatch runs not visible: .scratch not ignored`.
 - A run belongs to the session when its run id (UTC start time) is at or after the session start. A second session started later in the same directory shares those runs.
-- Each poll lists the run root once and reads files only for runs that are not final; final runs are cached.
+- A final run is cached once its files have been listed, and read again after a resume from this pane.
 - The pane calls no model and no network.
 
 Framing inspired by lot-map (https://github.com/alexeyw/lot-map, MIT); no code or art reused.
