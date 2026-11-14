@@ -37,9 +37,8 @@ class FreeBase(CliBase):
             patcher = mock.patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        env = mock.patch.dict(os.environ, {"FAKE_LOG": str(self.log), "FAKE_REPLY": "ok reply", "FAKE_RC": "0"})
-        env.start()
-        self.addCleanup(env.stop)
+        # CliBase.tearDown restores os.environ; a patch.dict cleanup here would run after it and leak HOME (#185).
+        os.environ.update({"FAKE_LOG": str(self.log), "FAKE_REPLY": "ok reply", "FAKE_RC": "0"})
         self.n = 0
 
     def _free_slots(self, **extra) -> Path:
