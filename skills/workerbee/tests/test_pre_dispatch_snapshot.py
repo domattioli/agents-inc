@@ -167,5 +167,36 @@ class RepoFlagTests(unittest.TestCase):
         self.assertEqual(_run(self.repo, "verify", self.snap, "--repo", "--allow", "a.md").returncode, 2)
 
 
+class UnreadableTests(unittest.TestCase):
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads chmod 000 files")
+    def test_unreadable_file_recorded_and_verified(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            _git(repo, "init", "-q")
+            _git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t",
+                 "commit", "-q", "--allow-empty", "-m", "init")
+            secret = repo / "secret.txt"
+            secret.write_text("s\n", encoding="utf-8")
+            secret.chmod(0)
+            snap = str(repo.parent / (repo.name + "-snap.json"))
+            try:
+                r = _run(repo, "capture", snap)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                r = _run(repo, "verify", snap)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn("UNREADABLE secret.txt", r.stdout)
+                (repo / "ok.txt").write_text("a\n", encoding="utf-8")
+                _run(repo, "capture", snap)
+                (repo / "ok.txt").write_text("b\n", encoding="utf-8")
+                r = _run(repo, "verify", snap)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("CHANGED ok.txt", r.stdout)
+                self.assertIn("UNREADABLE secret.txt", r.stdout)
+            finally:
+                secret.chmod(0o644)
+                if os.path.exists(snap):
+                    os.remove(snap)
+
+
 if __name__ == "__main__":
     unittest.main()

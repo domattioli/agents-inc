@@ -10,6 +10,9 @@ pre-existing dirty file plus every untracked file, enumerated recursively with
 `git ls-files --others --exclude-standard`). verify needs no particular cwd:
 it uses --repo, else the snapshot's repo, else the cwd's repository.
 
+Unreadable files are recorded as "unreadable"; verify lists them as `UNREADABLE <path>` and treats
+unreadable-before and unreadable-after as unchanged.
+
 verify exits 0 when every hashed file is unchanged and the tree differs from
 the snapshot only at --allow paths (a path or a directory prefix). Else it
 exits 1 and prints one `CHANGED <path>` line per offending path. Exit 2 on
@@ -43,12 +46,17 @@ def _unquote(p: str) -> str:
     return p
 
 
+UNREADABLE = "unreadable"  # marker digest for a path the process may not read (#173)
+
+
 def _sha(path: str) -> str | None:
     try:
         with open(path, "rb") as fh:
             return hashlib.sha256(fh.read()).hexdigest()
     except (FileNotFoundError, IsADirectoryError):
         return None
+    except OSError:  # PermissionError and kin: record, never crash
+        return UNREADABLE
 
 
 def _porcelain_paths(line: str) -> list[str]:
@@ -105,8 +113,14 @@ def verify(snap_path: str, allow: list[str]) -> int:
         snap = json.load(fh)
     changed: set[str] = set()
     hashes = snap.get("sha256", {})
+    unreadable: list[str] = []
     for path, digest in hashes.items():
-        if not _allowed(path, allow) and _sha(path) != digest:
+        if _allowed(path, allow):
+            continue
+        now = _sha(path)
+        if now == UNREADABLE and digest == UNREADABLE:
+            unreadable.append(path)  # unreadable before and after: unchanged
+        elif now != digest:
             changed.add(path)
     ignored = list(snap.get("ignored", []))
     old = set(snap.get("porcelain", "").splitlines())
@@ -124,6 +138,8 @@ def verify(snap_path: str, allow: list[str]) -> int:
             changed.add(p)
     if snap.get("head") and _git("rev-parse", "HEAD").strip() != snap["head"]:
         changed.add("HEAD")
+    for p in sorted(unreadable):
+        print(f"UNREADABLE {p}")
     for p in sorted(changed):
         print(f"CHANGED {p}")
     if changed:
