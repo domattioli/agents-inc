@@ -534,3 +534,20 @@ test('dropNoiseReminders: partial or mixed blocks and unknown shapes are kept; a
   expect(dropNoiseReminders([mixed, two, quoted, quotedDeferred, odd] as never)).toEqual([mixed, two, quoted, quotedDeferred, odd])
   expect(dropNoiseReminders(null as never)).toEqual([])
 })
+
+// #187: a tool result over RESULT_CAP is cut to its head, and the model is told it was cut and how to read the rest.
+test('a tool result over the cap is cut with a warning that says how to read the rest; a short one is untouched', () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const turn = (text: string) => [
+    { role: 'user', content: [{ type: 'text', text: 'Index the file.' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'r1', name: 'Bash', input: { command: 'cat big' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: text }] },
+  ]
+  const big = buildPrompt(a, 'm', 'S.', catalog([], ''), turn('x'.repeat(30_000)) as never)
+  expect(big).toContain('[truncated 10000 chars: this result was cut at 20000 chars, head only.')
+  expect(big).toContain('offset and limit')
+  expect(big).toContain('is cut to its first 20000')
+  const small = buildPrompt(a, 'm', 'S.', catalog([], ''), turn('short result') as never)
+  expect(small).toContain('tool result: short result')
+  expect(small).not.toContain('this result was cut')
+})

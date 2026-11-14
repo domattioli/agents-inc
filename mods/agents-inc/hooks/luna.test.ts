@@ -190,7 +190,7 @@ test('tool results are capped and a later user message follows the first', async
   await step($, 'e1')
   const stdin = calls[0].stdin ?? ''
   expect(stdin).toContain('assistant tool call: Read {"file_path":"/work/a.py"}')
-  expect(stdin).toContain('[truncated 10000 chars]')
+  expect(stdin).toContain('[truncated 10000 chars: this result was cut at 20000 chars')
   expect(stdin.indexOf(TASK)).toBeLessThan(stdin.indexOf('Actually count /work/b.py instead.'))
   expect(stdin).toContain('<system-reminder>Your final report is delivered through SubagentHandback</system-reminder>')
 })

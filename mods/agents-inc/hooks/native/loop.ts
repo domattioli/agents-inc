@@ -105,6 +105,7 @@ const header = (a: Adapter, slug: string) =>
   'A Read result starts each line with its line number and a tab: the last of those numbers is the line count of the part ' +
   'read. To count a file\'s lines, Read it whole (no offset or limit) or run wc -l.\n' +
   'A task is done only when every step it names has run: keep requesting tools until each result the report needs is in.\n' +
+  `A tool result over ${RESULT_CAP} characters is cut to its first ${RESULT_CAP}: read files about 150 lines at a time with Read offset and limit, never a whole large file,.\n` +
   'Act on the latest messages; earlier ones are history.\n' + NO_ASK + SUBAGENT_NOTE +
   'Reply with exactly one JSON object and nothing else:\n' +
   '{"say": "<short text, may be empty>", "tools": [{"name": "<tool from the catalog>", "input": {...}}]}\n' +
@@ -206,6 +207,9 @@ const debugOn = (nick: string) =>
   (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[`AGENTS_INC_${nick.toUpperCase()}_DEBUG`] === '1'
 
 const cap = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n[truncated ${s.length - n} chars]` : s)
+// #187: a tool result is cut to its head; the model is told so, and how to read the rest in pieces that fit.
+export const capResult = (s: string, n = RESULT_CAP) =>
+  s.length > n ? `${s.slice(0, n)}\n[truncated ${s.length - n} chars: this result was cut at ${n} chars, head only. Read about 150 lines at a time with offset and limit, or narrow with grep, to see the rest.]` : s
 
 // A field's `/** doc */` cut to its first sentence and FIELD_DOC_CAP chars; the field itself stays.
 const FIELD_DOC_CAP = 160
@@ -272,7 +276,7 @@ export function render(messages: readonly Msg[]): string {
         if (toolNames.get(b.tool_use_id) === 'Read' && (input.offset !== undefined || input.limit !== undefined)) {
           text += `\n[partial Read (offset ${input.offset ?? 'none'}, limit ${input.limit ?? 'none'}): these lines are part of the file; the last line number is not the file's line count]`
         }
-        out.push(`tool result${b.is_error ? ' (error)' : ''}: ${cap(text, RESULT_CAP)}`)
+        out.push(`tool result${b.is_error ? ' (error)' : ''}: ${capResult(text)}`)
       }
       else out.push(`${m.role}: [${b.type}]`)
     }
