@@ -60,7 +60,7 @@
 - [x] T026 DOCKER SC-005: `git grep -n agents-manager` excluding CHANGELOG.md, docs/DECISIONS.md and specs shows only the installer retired list and its test
 - [x] T027 DOCKER Run all mod tests: count >= the T001 baseline sum (measured 2026-11-14: 113), all pass; run `python3 -m unittest discover -s tests -p 'test_*.py'`; confirm no extra reads versus 0.5.0 plus 0.1.0 (SC-003); grep hooks for fetch, network or model calls (FR-014)
 - [x] T028 MAC Live check per quickstart.md steps 4-6: five fresh sessions open one pane; native, Codex, free starts; narrow toggle (Done by operator 2026-11-14: install ran twice; only delegate-pane listed; known_marketplaces has 0 retired entries.)
-- [x] T029 OPERATOR Commit the work first (needed before the move), then Move specs to DomI: run `bash ~/Projects/DomI/skills/speckit-pipeline/scripts/move_specs_to_domi.sh --apply`. Operator-gated. Depends on every other task; nothing runs after it.
+- [ ] T029 OPERATOR Commit the work first (needed before the move), then Move specs to DomI: run `bash ~/Projects/DomI/skills/speckit-pipeline/scripts/move_specs_to_domi.sh --apply`. Operator-gated. Depends on every other task; nothing runs after it.
 
 ## Dependencies
 
