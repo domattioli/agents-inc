@@ -319,7 +319,7 @@ test('session.start registers agents-inc:luna only when status says offered', as
   await setup($, on, { agentId: 'o1', replies: [], luna, registered })
   expect(luna[0].argv).toEqual(['agents-inc', 'luna', 'status', '--json'])
   const luna_ = registered.filter(r => (r as { name: string }).name === 'luna') // the relay agent registers beside it
-  expect(luna_).toMatchObject([{ name: 'luna', model: 'haiku' }])
+  expect(luna_).toMatchObject([{ name: 'luna', model: 'gpt-6-luna' }])
   expect(luna_[0]).not.toHaveProperty('tools')
   expect(luna_[0]).not.toHaveProperty('permissionMode')
 })

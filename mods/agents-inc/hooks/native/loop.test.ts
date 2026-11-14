@@ -103,7 +103,7 @@ test('the prompt carries the adapter fragments and the run uses the adapter argv
   await registerAgent(h.$ as never, a, { cwd: '/w' })
   await h.spawn('a1')
   const { result } = await h.step('a1')
-  expect(h.registered).toMatchObject([{ name: 'fake', description: 'fake agent (fake-1)', model: 'haiku' }])
+  expect(h.registered).toMatchObject([{ name: 'fake', description: 'fake agent (fake-1)', model: 'fake-1' }])
   expect(h.runs[0].argv).toEqual(['fake-run', '--thread', '/w/.scratch/agents-inc-fake/s1/a1.thread', '--timeout', '60'])
   expect(h.runs[0].input).toContain('TOOL-HOME. Example')
   expect(h.runs[0].input).toContain('You are fake (fake-1).\nOWN-TOOLS. Your reply')

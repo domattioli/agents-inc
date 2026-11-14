@@ -532,7 +532,7 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
       name: S.agent,
       description: (S.chatOnly ? `${adapter.description(status.slug)} Chat only, no tools: its tool-protocol probe failed, so it answers from the conversation alone.` : adapter.description(status.slug)) + limitsNote(status),
       prompt: AGENT_PROMPT,
-      model: 'haiku', // placeholder: turn.step never calls it for this agent
+      model: status.slug, // the window header names it; the engine accepts any string at register (probe), and turn.step never calls it for this agent
     })
     S.offered = true
   } catch (err) {
