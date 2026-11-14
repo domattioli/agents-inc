@@ -117,6 +117,16 @@ class NativeCli(unittest.TestCase):
         self.assertIn(json.loads(out)["snapshot"], ("captured", "no-repo"))
         self.assertTrue(self.status()["authorized"])
 
+    def test_status_shows_missing_workspace_allow_with_command(self):
+        self.key(); self.probe()
+        before = self.status()
+        self.assertTrue(before["needs_allow"]); self.assertFalse(before["authorized"])
+        cmd = f"agents-inc native allow gemini --workspace {os.path.realpath(self.ws)}"
+        self.assertIn("needs workspace allow", before["reason"]); self.assertIn(cmd, before["reason"])
+        run(["native", "allow", "gemini", "--workspace", str(self.ws)])
+        after = self.status()
+        self.assertFalse(after["needs_allow"]); self.assertEqual(after["reason"], "ready")
+
     def test_status_and_begin_carry_write_dirs(self):
         self.key(); self.probe()
         self.assertEqual(self.status()["write_dirs"], [])

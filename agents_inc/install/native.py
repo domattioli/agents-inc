@@ -220,9 +220,11 @@ def status_one(paths: InstallPaths, nick: str, cwd: str = ".") -> dict:
     elif not has_key: reason = f"no {entry['provider']} key (WB_NATIVE_KEY_MISSING; checked {', '.join(native_http.key_places(entry['provider']))})"
     elif probe == "fail": reason = f"chat only, no tools ({probe_reason})"
     elif probe != "pass": reason = probe_reason
-    else: reason = "ready" if authorized else "ready; first start in this workspace asks for authorization"
+    elif authorized: reason = "ready"
+    else: reason = f"needs workspace allow: operator runs `agents-inc native allow {entry['provider']} --workspace {_canon(cwd)}`"
     return {"nickname": nick, "provider": entry["provider"], "slug": entry["slug"], "kind": "stateless",
-            "offered": switch == "on" and has_key and (probe == "pass" or chat_only), "reason": reason, "switch": switch,
+            "offered": switch == "on" and has_key and (probe == "pass" or chat_only), "reason": reason,
+            "needs_allow": not authorized, "switch": switch,
             "key": "present" if has_key else "missing", "probe": probe, "authorized": authorized,
             "tools": probe == "pass", "write_dirs": list(record.get("write_dirs") or []) if record else [],
             "max_input_chars": entry.get("max_input_chars")}
