@@ -1022,8 +1022,8 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
                        on_line=(lambda ln: _LIVE_SINK.line("codex", ln)) if _LIVE_SINK is not None else None,
                        # the prompt names snapshot.json; a run dir outside cwd (TMPDIR) is otherwise unreadable
                        # the verifier copy too, so the delegate can run its own FAILURE GATE check (#66)
-                       extra_read=() if read_only else (Path(run_dir) / "pre_dispatch_snapshot.py",) + (
-                           () if _BROKER_SAFE_WRITES else (Path(run_dir) / "snapshot.json",)))
+                       extra_read=() if read_only else (Path(run_dir) / "pre_dispatch_snapshot.py",
+                                                        Path(run_dir) / "snapshot.json"))
     return {"rc": rc, "stdout": out.getvalue(), "stderr": err.getvalue(),
             "argv": ["run_codex", model, effort, str(cwd)] + (["resume", resume] if resume else []),
             "session_id": thread.get("thread_id") or resume, "is_error": False}
@@ -1948,8 +1948,9 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
     rc, prompt, err = render(slots_path, model, sdir)
     if rc != 0:
         _wtext(lint, f"render rc={rc}\n{err}")
-        spec["outcome"] = "refused-render"; _write_json(run_dir / "run.json", spec)
-        print(f"dispatch {run_id} {model} refused render rc={rc} lint={lint}")
+        why = " | ".join([ln.strip() for ln in (err or "").splitlines() if ln.strip()][:3])[:400]  # nested Leads cannot read lint
+        spec["outcome"] = "refused-render"; spec["reason_detail"] = why; _write_json(run_dir / "run.json", spec)
+        print(f"dispatch {run_id} {model} refused render rc={rc}: {why} lint={lint}")
         return EXIT_REFUSED
     if _BROKER_SAFE_WRITES and SCOPE_LINE not in prompt:
         _wtext(lint, "rendered prompt lacks the SCOPE BOILERPLATE line\n")
@@ -2263,7 +2264,8 @@ _HOME_CRED = r"(~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.(claud
 # ~/.local/bin/, ~/.local/share/agents-inc/ and ~/.local/state/agents-inc/ are exempt like ~/.claude/skills/; so is the instruction file ~/.claude/AGENTS.md
 # when it ends the path (#146).
 _HOME_CRED_TEXT = (r"(~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.(claude(?!/skills/(?!\S*\.\.))(?!/AGENTS\.md(?=$|[\s'\"`,;)]))|codex|ssh"
-                   r"|config|aws|gnupg|netrc|local(?!/(?:bin|share/agents-inc|state/agents-inc)/(?!\S*\.\.))|codex-bridge)\b"
+                   r"|config|aws|gnupg|netrc|local(?!/(?:bin|share/agents-inc|state/agents-inc)/(?!\S*\.\.))"
+                   r"|codex-bridge(?!/usage\.jsonl(?=$|[\s'\"`,;)]|\.(?:\s|$))))\b"
                    r"/(?![^\s/]*[*?\[])[^\s/'\"`,;)]+")
 _ENV_READ_VERBS = r"cat|read|print|open|source|dump|echo|show|less|head|tail"
 CREDENTIAL_RE = re.compile(
@@ -2592,6 +2594,7 @@ def _process_request(run_dir: Path, rid: str, req: dict, spec: dict, home_repo: 
     wdir.mkdir()  # FileExistsError for a planted path: caller refuses
     slots = dict(req["slots"])
     slots.setdefault("FAN_OUT", "width 0, total 0, depth 0")  # D60: render would fill the rung default, which leads
+    slots.pop("PRE_EXISTING_CHANGES", None)  # broker-owned: render fills the Worker's own snapshot line, never the Lead's
     slots["PERMISSION_MODE"] = spec.get("permission_mode", DEFAULT_PERMISSION_MODE)
     slots_path = wdir / "slots.json"
     _atomic_write_json(slots_path, slots)
@@ -2622,7 +2625,7 @@ def _process_request(run_dir: Path, rid: str, req: dict, spec: dict, home_repo: 
     return dict(base, status=_req_status(code, cspec.get("outcome")), dispatch_exit_code=code,
                 child_run_id=cspec.get("run_id") or (child.name if child else None),
                 outcome=cspec.get("outcome"), reason=crash or cspec.get("reason") or (None if code == REQ_GREEN else "dispatch-rc"),
-                finished_at=_now(), status_line=out.getvalue().strip(),
+                reason_detail=cspec.get("reason_detail"), finished_at=_now(), status_line=out.getvalue().strip(),
                 _report_path=str(child / "stdout.md") if (child and launched) else None)
 
 

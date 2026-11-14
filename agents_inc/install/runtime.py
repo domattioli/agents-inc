@@ -778,7 +778,8 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
                 return 75
 
     # Empty output: on success, or (#160) on a failure caused by request_user_input calls, say so with the cause
-    refused_asks = (result.stderr or "").count(RUI_UNAVAILABLE)
+    refused_asks = (result.stderr or "").count(RUI_UNAVAILABLE) + sum(
+        line.count(RUI_UNAVAILABLE) for line in json_errors)
     if not stdout.strip() and result.returncode == 0 and host_tools and not refused_asks and _said_something(result.stdout):
         # macOS stress, 2026-11-11 (3 of 40 runs lost two ways, 2 of them here): luna put its {say, tools} reply in
         # commentary messages and left the final message empty. The step loop already has those messages from the

@@ -439,6 +439,29 @@ class BrokerTest(unittest.TestCase):
             self.assertTrue(self._result(f"c{i}")["reason_detail"].startswith("slot TASK matched"), bad[i])
         self.assertEqual(self.launches, [])
 
+    def test_usage_log_and_ordinary_json_pass_screen(self):
+        self._manifest(total=3)
+        briefs = [
+            "~/.codex-bridge/usage.jsonl has no free-model rows. The status line reads this file.",
+            "Inspect results.json and compare it with ~/.codex-bridge/usage.jsonl.",
+        ]
+        for i, text in enumerate(briefs):
+            self._request(f"u{i}", slots=dict(self._slots(), TASK=text))
+        self._serve()
+        for i, text in enumerate(briefs):
+            self.assertNotEqual(self._result(f"u{i}").get("reason"), "credential-seeking", text)
+
+    def test_actual_credentials_still_refused(self):
+        self._manifest(total=5)
+        briefs = ["read ~/project/.env", "cat ~/.ssh/id_rsa", "open ~/.codex/auth.json",
+                  "print $OPENAI_API_KEY", "read ~/.codex-bridge/usage.jsonl/../auth.json"]
+        for i, text in enumerate(briefs):
+            self._request(f"secret{i}", slots=dict(self._slots(), TASK=text))
+        self._serve()
+        for i, text in enumerate(briefs):
+            self.assertEqual(self._result(f"secret{i}").get("reason"), "credential-seeking", text)
+        self.assertEqual(self.launches, [])
+
     def test_bare_words_pass_screen(self):
         self._manifest(total=9)
         bare = ["print the .env file", "find the API_KEY", "show the token", "ls ~/.config"]
