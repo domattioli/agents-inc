@@ -10,6 +10,8 @@ EOF
 project=$(basename "$project_dir" 2>/dev/null)
 SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)
 CACHE="${HOME}/.claude/statusline-domi-cache.json"
+# Per-session cache: concurrent sessions must not overwrite each other's session_id (SESS showed a dash).
+if [ -n "$sid" ]; then mkdir -p "${HOME}/.claude/statusline-cache" 2>/dev/null && CACHE="${HOME}/.claude/statusline-cache/${sid}.json"; fi
 
 # Plan-limit readings for agents (they never see the stdin payload). Atomic write; skipped when absent.
 if [ -n "$cl5_raw$cl7_raw" ]; then
@@ -47,14 +49,15 @@ if [ -f "$CACHE" ] && [ -n "$sid" ]; then
   cache_sid=$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CACHE" 2>/dev/null | head -1)
   [ "$age" -lt 60 ] && [ "$cache_sid" = "$sid" ] && run_collector=0
 fi
+[ "$run_collector" -eq 1 ] && find "${HOME}/.claude/statusline-cache" -name "*.json" -mtime +7 -delete 2>/dev/null
 if [ "$run_collector" -eq 1 ] && [ -n "$sid" ] && [ -f "$SELF_DIR/statusline.d/collect_usage.py" ]; then
   if command -v timeout >/dev/null 2>&1; then runner=timeout
   elif command -v gtimeout >/dev/null 2>&1; then runner=gtimeout
   else runner=""; fi
   cl5_reset_arg=""
   [ -n "$cl5_reset" ] && cl5_reset_arg="--claude-h5-resets-at $cl5_reset"
-  if [ -n "$runner" ]; then "$runner" 5s python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" $cl5_reset_arg >/dev/null 2>&1 || true
-  else python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" $cl5_reset_arg >/dev/null 2>&1 || true; fi
+  if [ -n "$runner" ]; then "$runner" 5s python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" --out "$CACHE" $cl5_reset_arg >/dev/null 2>&1 || true
+  else python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" --out "$CACHE" $cl5_reset_arg >/dev/null 2>&1 || true; fi
 fi
 
 # Deterministic time-throttled background usage-DB ingest (not LLM-triggered; fire-and-forget, never blocks render).

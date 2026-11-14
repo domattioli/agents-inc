@@ -24,6 +24,8 @@ fi
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 export HOME="$WORK/home"; mkdir -p "$HOME/.claude"
+# Per-session cache: payloads with session_id sess-test read statusline-cache/sess-test.json; link it to the seeded global file.
+mkdir -p "$HOME/.claude/statusline-cache"; ln -sf "$HOME/.claude/statusline-domi-cache.json" "$HOME/.claude/statusline-cache/sess-test.json"
 unset NO_COLOR STATUSLINE_COLORS; export COLORTERM=truecolor
 
 # Python helper: widths (terminal columns), separator columns, 5-cell bars (text + filled-cell count) per line.
@@ -362,7 +364,7 @@ c.commit(); c.close()
 json.dump({"usage_db": db, "codex_state_db": "", "prices_json": [], "codex_sessions_glob": work + "/none/*.jsonl",
            "codex_config_toml": work + "/codex_config.toml"}, open(cfgp, "w"))
 PYEOF
-python3 "$DIR/../statusline.d/collect_usage.py" --session-id sess-rank --config "$RANKCFG" --out "$HOME/.claude/statusline-domi-cache.json" --current-claude-model 'claude-fable-5-1[1m]' --force >/dev/null
+python3 "$DIR/../statusline.d/collect_usage.py" --session-id sess-rank --config "$RANKCFG" --out "$HOME/.claude/statusline-cache/sess-rank.json" --current-claude-model 'claude-fable-5-1[1m]' --force >/dev/null
 RANKFIX="$WORK/rank_in.json"; jq '.session_id = "sess-rank" | .model.id = "claude-fable-5-1"' "$FIXTURE" >"$RANKFIX"
 run_case "$RANKFIX"; rank=$DISPLAY; rankraw=$RAW
 width_gate 147; sep_gate; border_gate
@@ -383,7 +385,7 @@ has "$rankraw" $'\033[38;2;112;213;186mOpus 5.5' "Opus 5.5 tier-2 teal (raw)"
 has "$rankraw" $'\033[38;2;95;182;167mSonnet 5' "Sonnet 5 tier-3 teal (raw)"
 has "$rankraw" $'\033[38;2;130;245;205mGPT-6 Astra' "GPT-6 Astra top-tier teal (raw)"
 # Pin inside the top 4 keeps its rank: current model claude-sonnet-5 stays row 1 (highlighted); Fable 5.1 is not pinned over Haiku.
-python3 "$DIR/../statusline.d/collect_usage.py" --session-id sess-rank --config "$RANKCFG" --out "$HOME/.claude/statusline-domi-cache.json" --current-claude-model claude-sonnet-5 --force >/dev/null
+python3 "$DIR/../statusline.d/collect_usage.py" --session-id sess-rank --config "$RANKCFG" --out "$HOME/.claude/statusline-cache/sess-rank.json" --current-claude-model claude-sonnet-5 --force >/dev/null
 jq '.model.id = "claude-sonnet-5"' "$RANKFIX" >"$WORK/rank_in2.json"
 run_case "$WORK/rank_in2.json"
 has "$RAW" $'\033[7mSonnet 5' "pin inside top 4: Sonnet 5 row highlighted in place"
