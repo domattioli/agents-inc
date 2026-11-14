@@ -261,6 +261,23 @@ def doctor_lines(paths: InstallPaths) -> list[str]:
     return out
 
 
+def write_refused_run(nick: str, cwd: str, ask: dict) -> Path | None:
+    """#177: a refused begin leaves a failed run record (run.json, outcome red) where a dispatch run writes its own
+    (dispatch.default_parent), so the pane settles the row to failed with the refusal text. Best effort."""
+    from . import dispatch
+    try:
+        run_id = dispatch.new_run_id(nick)
+        folder = dispatch.default_parent(Path(cwd)) / run_id
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        reason = (f"needs-authorization: {ask['provider']} is not authorized for {ask['workspace']}. Nothing was sent. "
+                  f"Authorize: {ask['allow']}")
+        dispatch._write_json(folder / "run.json", {"run_id": run_id, "model": nick, "kind": "native", "cwd": ask["workspace"],
+                                                   "outcome": "red", "reason": reason})
+        return folder
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def begin(paths, nick, session, agent, cwd, task) -> tuple[int, dict]:
     entry = model(nick)
     if nick == "luna": return 0, luna_native.begin(paths, session, agent, cwd, task)
@@ -268,7 +285,10 @@ def begin(paths, nick, session, agent, cwd, task) -> tuple[int, dict]:
         return 0, luna_native.begin(paths, session, agent, cwd, task, slug=codex_slug(paths, nick), source="native-codex",
                                     root=f"native-runs/{nick}", nickname=nick)
     record = authorization(paths, entry["provider"], cwd)
-    if record is None: return 3, needs_authorization(nick, entry["provider"], cwd)
+    if record is None:
+        ask = needs_authorization(nick, entry["provider"], cwd)
+        write_refused_run(nick, cwd, ask)
+        return 3, ask
     result = luna_native.begin(paths, session, agent, cwd, task, slug=entry["slug"], source=f"native-{entry['provider']}",
                                root=f"native-runs/{nick}", provider=entry["provider"], nickname=nick)
     return 0, {**result, "write_dirs": list(record.get("write_dirs") or [])}

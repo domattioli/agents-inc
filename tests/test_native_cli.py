@@ -100,6 +100,8 @@ class NativeCli(unittest.TestCase):
 
     def test_first_start_asks_second_does_not(self):
         self.key(); self.probe()
+        scratch = Path(self.tmp.name) / "scratchpad"
+        patch = mock.patch.dict(os.environ, {"CLAUDE_SCRATCHPAD": str(scratch)}); patch.start(); self.addCleanup(patch.stop)
         args = ["native", "--model", "gemini-flash", "begin", "--session", "s1", "--agent", "a1", "--cwd", str(self.ws)]
         code, out, _ = run(args)
         self.assertEqual(code, 3)
@@ -109,6 +111,12 @@ class NativeCli(unittest.TestCase):
         self.assertIn("whole conversation", ask["sends"])
         self.assertEqual(ask["write_dirs"], [os.path.join(os.path.realpath(self.ws), ".scratch")])
         self.assertFalse((self.paths.state / "native-runs").exists())  # nothing started
+        # #177: the refusal leaves one failed run record for the pane (red, with the reason and the allow command)
+        recs = list(scratch.glob("agents-inc-runs/*-gemini-flash-*/run.json"))
+        self.assertEqual(len(recs), 1)
+        rec = json.loads(recs[0].read_text())
+        self.assertEqual((rec["outcome"], rec["model"]), ("red", "gemini-flash"))
+        self.assertIn("needs-authorization", rec["reason"]); self.assertIn("native allow gemini", rec["reason"])
         code, out, _ = run(["native", "allow", "gemini", "--workspace", str(self.ws)])
         self.assertEqual(code, 0)
         self.assertEqual(oct((self.paths.state / native.ALLOW_FILE).stat().st_mode & 0o777), "0o600")

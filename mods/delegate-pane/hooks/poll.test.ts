@@ -118,3 +118,12 @@ test('mergeAgents: one entry per id, in first-seen order, a vanished agent marke
   const b = mergeAgents(a, [{ id: '2', type: 'Explore', description: 'e', status: 'running' }, { id: '3', type: 'Plan', description: 'q', status: 'running' }])
   expect(b.map(x => [x.id, x.status])).toEqual([['1', 'finished'], ['2', 'running'], ['3', 'running']])
 })
+
+test('poll: a refused guest agent leaves a red run.json and its row reads failed (#177)', async () => {
+  const R = '20991112T120700Z-ministral-cccccc'
+  const reason = 'needs-authorization: mistral is not authorized for /ws. Nothing was sent. Authorize: agents-inc native allow mistral --workspace /ws'
+  const f = fake([], [R], { [root(R) + '/run.json']: JSON.stringify({ run_id: R, model: 'ministral', kind: 'native', cwd: '/ws', outcome: 'red', reason }) })
+  const r = await poll(f.$, newState(), view, NOW)
+  expect(r.rows.find(x => x.id === R)?.state).toBe('failed')
+  expect(r.delegates.find(d => d.id === R)?.state).toBe('failed')
+})
