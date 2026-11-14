@@ -95,7 +95,7 @@ const header = (a: Adapter, slug: string) =>
   'You drive an agent loop with real tools. To run a tool, name it in "tools"; the host runs it and its result arrives ' +
   'in the next step. Bash, Read and every other catalog tool work this way, so never answer that you cannot run one.\n' +
   a.toolHome +
-  'Example, to run a shell command: {"say": "", "tools": [{"name": "Bash", "input": {"command": "ls"}}]}\n' +
+  'Example, to run a shell command: {"say": "Listing the files.", "tools": [{"name": "Bash", "input": {"command": "ls"}}]}\n' +
   a.identity(slug) +
   a.ownTools +
   'Your reply is the JSON object itself, written as your final message text. Every tool in the catalog below is real and available: call it ' +
@@ -105,9 +105,10 @@ const header = (a: Adapter, slug: string) =>
   'A Read result starts each line with its line number and a tab: the last of those numbers is the line count of the part ' +
   'read. To count a file\'s lines, Read it whole (no offset or limit) or run wc -l.\n' +
   'A task is done only when every step it names has run: keep requesting tools until each result the report needs is in.\n' +
+  `A tool result over ${RESULT_CAP} characters is cut to its first ${RESULT_CAP}: read files about 150 lines at a time with Read offset and limit, never a whole large file, and never repeat a tool call whose result is already in the conversation.\n` +
   'Act on the latest messages; earlier ones are history.\n' + NO_ASK + SUBAGENT_NOTE +
   'Reply with exactly one JSON object and nothing else:\n' +
-  '{"say": "<short text, may be empty>", "tools": [{"name": "<tool from the catalog>", "input": {...}}]}\n' +
+  '{"say": "<one short line on what you are doing now; never empty when you call a tool>", "tools": [{"name": "<tool from the catalog>", "input": {...}}]}\n' +
   'Use "tools": [] only when you have nothing to call.\n'
 const HANDBACK_RULES =
   'When the task is done, call SubagentHandback with your full report.\n' +
@@ -170,7 +171,7 @@ type Cli = {
   ui: { log: (message: string, options: { to: 'debug' }) => unknown }
   session: { id: () => unknown }
 }
-export type Status = { offered: boolean; slug: string; reason?: string; write_dirs?: string[]; tools?: boolean }
+export type Status = { offered: boolean; slug: string; reason?: string; write_dirs?: string[]; tools?: boolean; max_input_chars?: number }
 type Ran = { outcome: 'done' | 'failed' | 'quota-paused' | 'aborted'; usage: Usage }
 // Per subagent: the thread file it keeps, whether a run has used it, and how many api messages the model has seen.
 type AgentState = { n: number; used: boolean; sent: number }
@@ -206,6 +207,9 @@ const debugOn = (nick: string) =>
   (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[`AGENTS_INC_${nick.toUpperCase()}_DEBUG`] === '1'
 
 const cap = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n[truncated ${s.length - n} chars]` : s)
+// #187: a tool result is cut to its head; the model is told so, and how to read the rest in pieces that fit.
+export const capResult = (s: string, n = RESULT_CAP) =>
+  s.length > n ? `${s.slice(0, n)}\n[truncated ${s.length - n} chars: this result was cut at ${n} chars, head only. Read about 150 lines at a time with offset and limit, or narrow with grep, to see the rest.]` : s
 
 // A field's `/** doc */` cut to its first sentence and FIELD_DOC_CAP chars; the field itself stays.
 const FIELD_DOC_CAP = 160
@@ -272,7 +276,7 @@ export function render(messages: readonly Msg[]): string {
         if (toolNames.get(b.tool_use_id) === 'Read' && (input.offset !== undefined || input.limit !== undefined)) {
           text += `\n[partial Read (offset ${input.offset ?? 'none'}, limit ${input.limit ?? 'none'}): these lines are part of the file; the last line number is not the file's line count]`
         }
-        out.push(`tool result${b.is_error ? ' (error)' : ''}: ${cap(text, RESULT_CAP)}`)
+        out.push(`tool result${b.is_error ? ' (error)' : ''}: ${capResult(text)}`)
       }
       else out.push(`${m.role}: [${b.type}]`)
     }
@@ -526,15 +530,49 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
     // No tools and no permissionMode: the agent inherits the parent's, like any native subagent.
     await $.agent.register({
       name: S.agent,
-      description: S.chatOnly ? `${adapter.description(status.slug)} Chat only, no tools: its tool-protocol probe failed, so it answers from the conversation alone.` : adapter.description(status.slug),
+      description: (S.chatOnly ? `${adapter.description(status.slug)} Chat only, no tools: its tool-protocol probe failed, so it answers from the conversation alone.` : adapter.description(status.slug)) + limitsNote(status),
       prompt: AGENT_PROMPT,
-      model: 'haiku', // placeholder: turn.step never calls it for this agent
+      model: status.slug, // the window header names it; the engine accepts any string at register (probe), and turn.step never calls it for this agent
     })
     S.offered = true
   } catch (err) {
     $.ui.log(`${S.log} not registered: $.agent.register failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
   }
 }
+
+// #188: the context cap and the result cut, in the type description, so the dispatcher sizes the task before launch.
+export const limitsNote = (s: Pick<Status, 'max_input_chars'>) =>
+  typeof s.max_input_chars === 'number' && s.max_input_chars > 0
+    ? ` Context cap ${Math.round(s.max_input_chars / 1000)}K chars for the whole conversation (about ${Math.max(1, Math.floor(s.max_input_chars / RESULT_CAP))} file reads); tool results over ${RESULT_CAP / 1000}K chars are cut. Keep the task small and name line ranges for large files.`
+    : ''
+
+// #189: a Read, Grep or Glob call identical to one already answered in the conversation, with no write or command between.
+const READS = new Set(['Read', 'Grep', 'Glob'])
+const CHANGES = new Set(['Write', 'Edit', 'NotebookEdit', 'Bash'])
+export function repeatedReads(reply: Reply | string | null, messages: readonly unknown[]): { name: string; input: string; cut: boolean }[] {
+  if (reply === null || typeof reply === 'string') return []
+  const seen = new Map<string, string>() // key -> tool_use id
+  const lens = new Map<string, number>()
+  for (const m of messages as Msg[]) {
+    for (const b of Array.isArray(m.content) ? m.content : []) {
+      if (b.type === 'tool_use') {
+        const name = String(b.name)
+        if (CHANGES.has(name)) seen.clear()
+        else if (READS.has(name)) seen.set(`${name} ${JSON.stringify(b.input ?? {})}`, String(b.id))
+      } else if (b.type === 'tool_result') lens.set(String(b.tool_use_id), resultText(b.content).length)
+    }
+  }
+  const out: { name: string; input: string; cut: boolean }[] = []
+  for (const t of reply.tools) {
+    const id = seen.get(`${t.name} ${JSON.stringify(t.input ?? {})}`)
+    if (id !== undefined) out.push({ name: t.name, input: JSON.stringify(t.input ?? {}), cut: (lens.get(id) ?? 0) > RESULT_CAP })
+  }
+  return out
+}
+const repeatPush = (rep: readonly { name: string; input: string; cut: boolean }[]) =>
+  `Tool call repeated: ${rep.map(r => `${r.name} ${r.input}`).join('; ')} already ran and its result is in the conversation above. ` +
+  (rep.some(r => r.cut) ? `That result was cut at ${RESULT_CAP} chars, so you saw only its start: read about 150 lines at a time with Read offset and limit, or use grep to find the lines you need. ` : 'Use that result; do not run the call again. ') +
+  'Reply with exactly one JSON object.\n'
 
 const FILE_WRITERS: Readonly<Record<string, string>> = { Write: 'file_path', Edit: 'file_path', NotebookEdit: 'notebook_path' }
 // Lexical path resolution against the agent cwd (the mod has no filesystem stat, so symlinks are not followed).
@@ -861,6 +899,16 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
       chars += prompt.length
       const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
+    }
+    // #189: a repeated read gets one push naming why; a second repeat stands (the host runs it, the guard never loops).
+    if (!run.failed && !S.chatOnly) {
+      const rep = repeatedReads(run.reply, messages)
+      if (rep.length > 0) {
+        prompt = more(repeatPush(rep))
+        chars += prompt.length
+        const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
+        if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
+      }
     }
     // D76 condition 3: a free model's file-writing call outside the recorded write directories never reaches the host.
     // The model reads the refusal and gets one more try; a second violation is dropped and the step reports the refusal.

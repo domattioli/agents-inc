@@ -2,7 +2,7 @@
 // The hooks are captured from registerLoop through a stand-in `on` and driven with a stand-in `$`.
 import { expect, test } from 'claude-code/testing'
 import type { Adapter } from './adapter'
-import { admitsGap, dropMemorySection, dropNoiseReminders, buildPrompt, catalog, guestTools, outsideWrites, ranTool, registerAgent, registerLoop, registerLoops, skipsTools, stopsEarly, ungroundedValues } from './loop'
+import { admitsGap, dropMemorySection, dropNoiseReminders, buildPrompt, catalog, guestTools, outsideWrites, ranTool, repeatedReads, registerAgent, registerLoop, registerLoops, skipsTools, stopsEarly, ungroundedValues } from './loop'
 
 type Run = { out?: string; code?: number; hang?: boolean }
 type Chunk = { kind: string; [k: string]: unknown }
@@ -27,7 +27,7 @@ const fakeAdapter = (over: Partial<Adapter> = {}): Adapter => ({
   ...over,
 })
 
-function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?: 'throw' | unknown[]; timeout?: boolean; also?: Adapter[]; writeDirs?: string[]; beginDirs?: string[]; tools?: boolean; messages?: unknown[]; system?: string } = {}) {
+function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?: 'throw' | unknown[]; timeout?: boolean; also?: Adapter[]; writeDirs?: string[]; beginDirs?: string[]; tools?: boolean; maxChars?: number; messages?: unknown[]; system?: string } = {}) {
   const hooks: Record<string, (...a: unknown[]) => unknown> = {}
   const on = (event: string, a: unknown, b?: unknown) => {
     hooks[event] = (b ?? a) as (...a: unknown[]) => unknown
@@ -50,7 +50,7 @@ function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?:
     // Heartbeats never fire; the step limit fires at once when the test asks for a timeout.
     clock: { now: async () => 0, sleep: (ms: number) => (o.timeout && ms >= 60_000 ? Promise.resolve() : new Promise<never>(() => {})) },
     env: { get: async () => undefined },
-    tool: { list: async () => [{ name: 'Bash', description: 'Runs a command.' }, { name: 'Write', description: 'Writes a file.' }, { name: 'Edit', description: 'Edits a file.' }, { name: 'SubagentHandback', description: 'Hand back.' }] },
+    tool: { list: async () => [{ name: 'Read', description: 'Reads a file.' }, { name: 'Bash', description: 'Runs a command.' }, { name: 'Write', description: 'Writes a file.' }, { name: 'Edit', description: 'Edits a file.' }, { name: 'SubagentHandback', description: 'Hand back.' }] },
     prompt: { compose: async () => ({ sections: [{ text: o.system ?? 'System.' }] }) },
     fs: { read: async () => '', write: async () => undefined },
     plugin: { root: '/p' },
@@ -59,7 +59,7 @@ function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?:
       spawn: (a: { argv: string[]; input?: string }) => (async function* () {
         if (a.argv[0] === 'agents-inc') {
           verbs.push(a.argv)
-          const out = a.argv[2] === 'status' ? JSON.stringify({ offered: true, slug: 'fake-1', write_dirs: o.writeDirs, tools: o.tools }) : a.argv[2] === 'begin' ? JSON.stringify({ snapshot: 'captured', write_dirs: o.beginDirs }) : JSON.stringify({ snapshot: 'unchanged', changed: [] })
+          const out = a.argv[2] === 'status' ? JSON.stringify({ offered: true, slug: 'fake-1', write_dirs: o.writeDirs, tools: o.tools, max_input_chars: o.maxChars }) : a.argv[2] === 'begin' ? JSON.stringify({ snapshot: 'captured', write_dirs: o.beginDirs }) : JSON.stringify({ snapshot: 'unchanged', changed: [] })
           yield { stream: 'stdout' as const, text: out }
           return { code: 0 }
         }
@@ -103,7 +103,7 @@ test('the prompt carries the adapter fragments and the run uses the adapter argv
   await registerAgent(h.$ as never, a, { cwd: '/w' })
   await h.spawn('a1')
   const { result } = await h.step('a1')
-  expect(h.registered).toMatchObject([{ name: 'fake', description: 'fake agent (fake-1)', model: 'haiku' }])
+  expect(h.registered).toMatchObject([{ name: 'fake', description: 'fake agent (fake-1)', model: 'fake-1' }])
   expect(h.runs[0].argv).toEqual(['fake-run', '--thread', '/w/.scratch/agents-inc-fake/s1/a1.thread', '--timeout', '60'])
   expect(h.runs[0].input).toContain('TOOL-HOME. Example')
   expect(h.runs[0].input).toContain('You are fake (fake-1).\nOWN-TOOLS. Your reply')
@@ -533,4 +533,81 @@ test('dropNoiseReminders: partial or mixed blocks and unknown shapes are kept; a
   const odd = { role: 'user' as const, content: [{ type: 'text', text: 42 }, { type: 'image' }] }
   expect(dropNoiseReminders([mixed, two, quoted, quotedDeferred, odd] as never)).toEqual([mixed, two, quoted, quotedDeferred, odd])
   expect(dropNoiseReminders(null as never)).toEqual([])
+})
+
+// #187: a tool result over RESULT_CAP is cut to its head, and the model is told it was cut and how to read the rest.
+test('a tool result over the cap is cut with a warning that says how to read the rest; a short one is untouched', () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const turn = (text: string) => [
+    { role: 'user', content: [{ type: 'text', text: 'Index the file.' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'r1', name: 'Bash', input: { command: 'cat big' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: text }] },
+  ]
+  const big = buildPrompt(a, 'm', 'S.', catalog([], ''), turn('x'.repeat(30_000)) as never)
+  expect(big).toContain('[truncated 10000 chars: this result was cut at 20000 chars, head only.')
+  expect(big).toContain('offset and limit')
+  expect(big).toContain('is cut to its first 20000')
+  const small = buildPrompt(a, 'm', 'S.', catalog([], ''), turn('short result') as never)
+  expect(small).toContain('tool result: short result')
+  expect(small).not.toContain('this result was cut')
+})
+
+// #188: the context cap is in the registered type description, so the dispatcher sizes the task before launch.
+test('the registered description states the context cap and the result cut when status reports a cap', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const h = harness(a, { maxChars: 72000 })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  const d = String((h.registered[0] as { description: string }).description)
+  expect(d).toContain('Context cap 72K chars')
+  expect(d).toContain('about 3 file reads')
+  expect(d).toContain('over 20K chars are cut')
+  const none = harness(a)
+  await registerAgent(none.$ as never, a, { cwd: '/w' })
+  expect(String((none.registered[0] as { description: string }).description)).not.toContain('Context cap')
+})
+
+// #189: an identical Read already answered in the conversation gets one push; a result over the cap is named in it.
+const READ_A = { name: 'Read', input: { file_path: '/w/a.md', limit: 150 } }
+const READ_REPLY = JSON.stringify({ say: 'Reading.', tools: [READ_A] })
+const readTurn = (len: number) => [
+  { role: 'assistant', content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: READ_A.input }] },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: 'y'.repeat(len) }] },
+]
+test('repeatedReads: same call twice is found; a different range or an intervening command is not', () => {
+  const reply = { say: '', tools: [READ_A] }
+  expect(repeatedReads(reply, readTurn(100)).length).toBe(1)
+  expect(repeatedReads({ say: '', tools: [{ name: 'Read', input: { file_path: '/w/a.md', limit: 150, offset: 150 } }] }, readTurn(100)).length).toBe(0)
+  const after = [...readTurn(100), { role: 'assistant', content: [{ type: 'tool_use', id: 'w1', name: 'Bash', input: { command: 'ls' } }] }]
+  expect(repeatedReads(reply, after).length).toBe(0)
+  expect(repeatedReads(reply, readTurn(30_000))[0].cut).toBe(true)
+})
+
+test('a repeated Read is pushed once, naming the cut when the first result was over the cap; a second repeat stands', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const h = harness(a, { replies: [{ out: READ_REPLY }, { out: READ_REPLY }], messages: readTurn(30_000) })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('g1')
+  const { result } = await h.step('g1')
+  expect(h.runs.length).toBe(2)
+  expect(h.runs[1].input).toContain('Tool call repeated: Read')
+  expect(h.runs[1].input).toContain('cut at 20000 chars')
+  expect(nameOf(result)).toBe('Read')
+})
+
+test('a fresh Read is not pushed', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const h = harness(a, { replies: [{ out: READ_REPLY }] })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('g2')
+  await h.step('g2')
+  expect(h.runs.length).toBe(1)
+})
+
+// #190: the step prompt asks for a one-line "say" on every tool step, so the subagent window shows the model's own text.
+test('the step prompt asks for a one-line say on every tool step and no longer allows an empty one', () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const prompt = buildPrompt(a, 'm', 'S.', catalog([], ''), [{ role: 'user', content: [{ type: 'text', text: 'Task.' }] }] as never)
+  expect(prompt).toContain('never empty when you call a tool')
+  expect(prompt).not.toContain('may be empty')
+  expect(prompt).not.toContain('{"say": "", "tools": [{"name": "Bash"')
 })
