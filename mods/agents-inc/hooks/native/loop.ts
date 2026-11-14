@@ -105,7 +105,7 @@ const header = (a: Adapter, slug: string) =>
   'A Read result starts each line with its line number and a tab: the last of those numbers is the line count of the part ' +
   'read. To count a file\'s lines, Read it whole (no offset or limit) or run wc -l.\n' +
   'A task is done only when every step it names has run: keep requesting tools until each result the report needs is in.\n' +
-  `A tool result over ${RESULT_CAP} characters is cut to its first ${RESULT_CAP}: read files about 150 lines at a time with Read offset and limit, never a whole large file,.\n` +
+  `A tool result over ${RESULT_CAP} characters is cut to its first ${RESULT_CAP}: read files about 150 lines at a time with Read offset and limit, never a whole large file, and never repeat a tool call whose result is already in the conversation.\n` +
   'Act on the latest messages; earlier ones are history.\n' + NO_ASK + SUBAGENT_NOTE +
   'Reply with exactly one JSON object and nothing else:\n' +
   '{"say": "<short text, may be empty>", "tools": [{"name": "<tool from the catalog>", "input": {...}}]}\n' +
@@ -546,6 +546,34 @@ export const limitsNote = (s: Pick<Status, 'max_input_chars'>) =>
     ? ` Context cap ${Math.round(s.max_input_chars / 1000)}K chars for the whole conversation (about ${Math.max(1, Math.floor(s.max_input_chars / RESULT_CAP))} file reads); tool results over ${RESULT_CAP / 1000}K chars are cut. Keep the task small and name line ranges for large files.`
     : ''
 
+// #189: a Read, Grep or Glob call identical to one already answered in the conversation, with no write or command between.
+const READS = new Set(['Read', 'Grep', 'Glob'])
+const CHANGES = new Set(['Write', 'Edit', 'NotebookEdit', 'Bash'])
+export function repeatedReads(reply: Reply | string | null, messages: readonly unknown[]): { name: string; input: string; cut: boolean }[] {
+  if (reply === null || typeof reply === 'string') return []
+  const seen = new Map<string, string>() // key -> tool_use id
+  const lens = new Map<string, number>()
+  for (const m of messages as Msg[]) {
+    for (const b of Array.isArray(m.content) ? m.content : []) {
+      if (b.type === 'tool_use') {
+        const name = String(b.name)
+        if (CHANGES.has(name)) seen.clear()
+        else if (READS.has(name)) seen.set(`${name} ${JSON.stringify(b.input ?? {})}`, String(b.id))
+      } else if (b.type === 'tool_result') lens.set(String(b.tool_use_id), resultText(b.content).length)
+    }
+  }
+  const out: { name: string; input: string; cut: boolean }[] = []
+  for (const t of reply.tools) {
+    const id = seen.get(`${t.name} ${JSON.stringify(t.input ?? {})}`)
+    if (id !== undefined) out.push({ name: t.name, input: JSON.stringify(t.input ?? {}), cut: (lens.get(id) ?? 0) > RESULT_CAP })
+  }
+  return out
+}
+const repeatPush = (rep: readonly { name: string; input: string; cut: boolean }[]) =>
+  `Tool call repeated: ${rep.map(r => `${r.name} ${r.input}`).join('; ')} already ran and its result is in the conversation above. ` +
+  (rep.some(r => r.cut) ? `That result was cut at ${RESULT_CAP} chars, so you saw only its start: read about 150 lines at a time with Read offset and limit, or use grep to find the lines you need. ` : 'Use that result; do not run the call again. ') +
+  'Reply with exactly one JSON object.\n'
+
 const FILE_WRITERS: Readonly<Record<string, string>> = { Write: 'file_path', Edit: 'file_path', NotebookEdit: 'notebook_path' }
 // Lexical path resolution against the agent cwd (the mod has no filesystem stat, so symlinks are not followed).
 function resolvePath(raw: string, cwd: string): string {
@@ -871,6 +899,16 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
       chars += prompt.length
       const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
+    }
+    // #189: a repeated read gets one push naming why; a second repeat stands (the host runs it, the guard never loops).
+    if (!run.failed && !S.chatOnly) {
+      const rep = repeatedReads(run.reply, messages)
+      if (rep.length > 0) {
+        prompt = more(repeatPush(rep))
+        chars += prompt.length
+        const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
+        if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
+      }
     }
     // D76 condition 3: a free model's file-writing call outside the recorded write directories never reaches the host.
     // The model reads the refusal and gets one more try; a second violation is dropped and the step reports the refusal.

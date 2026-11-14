@@ -2,7 +2,7 @@
 // The hooks are captured from registerLoop through a stand-in `on` and driven with a stand-in `$`.
 import { expect, test } from 'claude-code/testing'
 import type { Adapter } from './adapter'
-import { admitsGap, dropMemorySection, dropNoiseReminders, buildPrompt, catalog, guestTools, outsideWrites, ranTool, registerAgent, registerLoop, registerLoops, skipsTools, stopsEarly, ungroundedValues } from './loop'
+import { admitsGap, dropMemorySection, dropNoiseReminders, buildPrompt, catalog, guestTools, outsideWrites, ranTool, repeatedReads, registerAgent, registerLoop, registerLoops, skipsTools, stopsEarly, ungroundedValues } from './loop'
 
 type Run = { out?: string; code?: number; hang?: boolean }
 type Chunk = { kind: string; [k: string]: unknown }
@@ -50,7 +50,7 @@ function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?:
     // Heartbeats never fire; the step limit fires at once when the test asks for a timeout.
     clock: { now: async () => 0, sleep: (ms: number) => (o.timeout && ms >= 60_000 ? Promise.resolve() : new Promise<never>(() => {})) },
     env: { get: async () => undefined },
-    tool: { list: async () => [{ name: 'Bash', description: 'Runs a command.' }, { name: 'Write', description: 'Writes a file.' }, { name: 'Edit', description: 'Edits a file.' }, { name: 'SubagentHandback', description: 'Hand back.' }] },
+    tool: { list: async () => [{ name: 'Read', description: 'Reads a file.' }, { name: 'Bash', description: 'Runs a command.' }, { name: 'Write', description: 'Writes a file.' }, { name: 'Edit', description: 'Edits a file.' }, { name: 'SubagentHandback', description: 'Hand back.' }] },
     prompt: { compose: async () => ({ sections: [{ text: o.system ?? 'System.' }] }) },
     fs: { read: async () => '', write: async () => undefined },
     plugin: { root: '/p' },
@@ -564,4 +564,41 @@ test('the registered description states the context cap and the result cut when 
   const none = harness(a)
   await registerAgent(none.$ as never, a, { cwd: '/w' })
   expect(String((none.registered[0] as { description: string }).description)).not.toContain('Context cap')
+})
+
+// #189: an identical Read already answered in the conversation gets one push; a result over the cap is named in it.
+const READ_A = { name: 'Read', input: { file_path: '/w/a.md', limit: 150 } }
+const READ_REPLY = JSON.stringify({ say: 'Reading.', tools: [READ_A] })
+const readTurn = (len: number) => [
+  { role: 'assistant', content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: READ_A.input }] },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: 'y'.repeat(len) }] },
+]
+test('repeatedReads: same call twice is found; a different range or an intervening command is not', () => {
+  const reply = { say: '', tools: [READ_A] }
+  expect(repeatedReads(reply, readTurn(100)).length).toBe(1)
+  expect(repeatedReads({ say: '', tools: [{ name: 'Read', input: { file_path: '/w/a.md', limit: 150, offset: 150 } }] }, readTurn(100)).length).toBe(0)
+  const after = [...readTurn(100), { role: 'assistant', content: [{ type: 'tool_use', id: 'w1', name: 'Bash', input: { command: 'ls' } }] }]
+  expect(repeatedReads(reply, after).length).toBe(0)
+  expect(repeatedReads(reply, readTurn(30_000))[0].cut).toBe(true)
+})
+
+test('a repeated Read is pushed once, naming the cut when the first result was over the cap; a second repeat stands', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const h = harness(a, { replies: [{ out: READ_REPLY }, { out: READ_REPLY }], messages: readTurn(30_000) })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('g1')
+  const { result } = await h.step('g1')
+  expect(h.runs.length).toBe(2)
+  expect(h.runs[1].input).toContain('Tool call repeated: Read')
+  expect(h.runs[1].input).toContain('cut at 20000 chars')
+  expect(nameOf(result)).toBe('Read')
+})
+
+test('a fresh Read is not pushed', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const h = harness(a, { replies: [{ out: READ_REPLY }] })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  await h.spawn('g2')
+  await h.step('g2')
+  expect(h.runs.length).toBe(1)
 })
