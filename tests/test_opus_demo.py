@@ -280,9 +280,10 @@ class TestDispatchRender(unittest.TestCase):
         self.assertEqual(len(made), 1)
         d = next(iter(made))
         for name in ("slots-build.json", "slots-review.json"):
-            done = subprocess.run(["agents-inc", "dispatch", "--slots", str(d / name),
+            done = subprocess.run([str(REPO / "scripts" / "agents-inc"), "dispatch", "--slots", str(d / name),
                                    "--model", "haiku", "--dry-run", "--cwd", str(REPO)],
-                                  capture_output=True, text=True, cwd=str(REPO))
+                                  capture_output=True, text=True, cwd=str(REPO),
+                                  env={**os.environ, "PYTHONPATH": str(REPO)})
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
 
