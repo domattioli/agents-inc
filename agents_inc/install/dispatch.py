@@ -2263,7 +2263,8 @@ _HOME_CRED = r"(~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.(claud
 # ~/.local/bin/, ~/.local/share/agents-inc/ and ~/.local/state/agents-inc/ are exempt like ~/.claude/skills/; so is the instruction file ~/.claude/AGENTS.md
 # when it ends the path (#146).
 _HOME_CRED_TEXT = (r"(~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)/\.(claude(?!/skills/(?!\S*\.\.))(?!/AGENTS\.md(?=$|[\s'\"`,;)]))|codex|ssh"
-                   r"|config|aws|gnupg|netrc|local(?!/(?:bin|share/agents-inc|state/agents-inc)/(?!\S*\.\.))|codex-bridge)\b"
+                   r"|config|aws|gnupg|netrc|local(?!/(?:bin|share/agents-inc|state/agents-inc)/(?!\S*\.\.))"
+                   r"|codex-bridge(?!/usage\.jsonl(?=$|[\s'\"`,;)]|\.(?:\s|$))))\b"
                    r"/(?![^\s/]*[*?\[])[^\s/'\"`,;)]+")
 _ENV_READ_VERBS = r"cat|read|print|open|source|dump|echo|show|less|head|tail"
 CREDENTIAL_RE = re.compile(
