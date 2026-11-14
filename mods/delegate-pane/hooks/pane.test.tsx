@@ -738,6 +738,43 @@ test('motion: a running delegate starts the frame timer in the terminal; it stop
   await ui.unmount()
 })
 
+test('motion: the timer keeps running while any agent still runs after the others ended (#191)', async ($, on) => {
+  const blits = blitsOf(on)
+  const world: World = {
+    agents: [
+      { id: 'a', type: 'Explore', description: 'a', status: 'running' },
+      { id: 'b', type: 'Explore', description: 'b', status: 'running' },
+      { id: 'c', type: 'Explore', description: 'c', status: 'running' },
+    ],
+    dirs: [],
+  }
+  const clock = await start($, on, world)
+  const ui = await $.ui.mount({ ...MOUNT, surface: 'terminal' })
+  await clock.advance(500)
+  world.agents[0]!.status = 'completed'
+  world.agents[1]!.status = 'failed'
+  await clock.advance(6000)
+  const n = blits.length
+  await clock.advance(1000)
+  expect(blits.length).toBeGreaterThan(n + 5) // c still runs: the frames go on
+  await ui.unmount()
+})
+
+test('motion: a render on another surface does not stop the terminal timer (#191)', async ($, on) => {
+  const blits = blitsOf(on)
+  const world: World = { agents: [{ id: 'a1', type: 'Explore', description: 'scout', status: 'running' }], dirs: [] }
+  const clock = await start($, on, world)
+  const term = await $.ui.mount({ ...MOUNT, surface: 'terminal' })
+  await clock.advance(500)
+  const desk = await $.ui.mount({ ...MOUNT, surface: 'desktop' })
+  await desk.redraw()
+  const n = blits.length
+  await clock.advance(1000)
+  expect(blits.length).toBeGreaterThan(n + 5) // the terminal pane still shows a running agent
+  await desk.unmount()
+  await term.unmount()
+})
+
 test('motion: no timer when nothing runs or alerts, on desktop, or below the minimum width', async ($, on) => {
   const blits = blitsOf(on)
   const world: World = { agents: [{ id: 'p', type: 'Plan', description: 'x', status: 'idle' }], dirs: [] }

@@ -243,7 +243,11 @@ export const register: Register = on => {
     // The role goes first when the line does not fit: the line is wrapped in `──── … ────`.
     const centre = centreRole.length + 10 <= columns ? centreRole : `◉ main session${centreTail}`
     // Motion: terminal, at least RASTER_MIN_COLUMNS wide (grid or stacked), Raster in the element table, no refused blit. Otherwise the static map only.
-    motion.cols = (e as any).surface === 'terminal' && !motion.off && els.Raster ? rasterColumns(columns) : 0
+    // The frame timer is shared by every mounted copy of the pane; only a terminal render may set its width or stop it,
+    // or a desktop or too-narrow render would cancel the animation of the terminal one while an agent still runs (#191).
+    const terminal = (e as any).surface === 'terminal'
+    const cols = terminal && !motion.off && els.Raster ? rasterColumns(columns) : 0
+    if (terminal) motion.cols = cols
     let now = 0
     try {
       now = Number(await $.clock.now())
@@ -252,10 +256,12 @@ export const register: Register = on => {
     }
     track(v.delegates, now)
     const dispatches = dispatchesOf(v.delegates, now)
-    if (motion.cols && needsMotion(sts, motion.returns, now, dispatches)) startMotion($)
-    else stopMotion()
-    const raster = motion.cols ? (
-      <els.Raster key="map" columns={motion.cols} rows={RASTER_ROWS} cells={encodeCells(frame(sts, now, motion.cols, RASTER_ROWS, motion.returns, { cos: cosLabel(v, cosRoom(motion.cols)), dispatches }))} />
+    if (terminal) {
+      if (cols && needsMotion(sts, motion.returns, now, dispatches)) startMotion($)
+      else stopMotion()
+    }
+    const raster = cols ? (
+      <els.Raster key="map" columns={cols} rows={RASTER_ROWS} cells={encodeCells(frame(sts, now, cols, RASTER_ROWS, motion.returns, { cos: cosLabel(v, cosRoom(cols)), dispatches }))} />
     ) : null
     // CoS, Lead and primary Worker in one or two dim lines, on every surface and layout (the static fallback included).
     const roles = hierarchyLines(v.delegates, v.model, columns).map((line, k) => <Text key={'roles-' + k} dimColor>{line}</Text>)
