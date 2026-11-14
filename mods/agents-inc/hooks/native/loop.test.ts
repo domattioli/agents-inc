@@ -602,3 +602,12 @@ test('a fresh Read is not pushed', async () => {
   await h.step('g2')
   expect(h.runs.length).toBe(1)
 })
+
+// #190: the step prompt asks for a one-line "say" on every tool step, so the subagent window shows the model's own text.
+test('the step prompt asks for a one-line say on every tool step and no longer allows an empty one', () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const prompt = buildPrompt(a, 'm', 'S.', catalog([], ''), [{ role: 'user', content: [{ type: 'text', text: 'Task.' }] }] as never)
+  expect(prompt).toContain('never empty when you call a tool')
+  expect(prompt).not.toContain('may be empty')
+  expect(prompt).not.toContain('{"say": "", "tools": [{"name": "Bash"')
+})

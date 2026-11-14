@@ -95,7 +95,7 @@ const header = (a: Adapter, slug: string) =>
   'You drive an agent loop with real tools. To run a tool, name it in "tools"; the host runs it and its result arrives ' +
   'in the next step. Bash, Read and every other catalog tool work this way, so never answer that you cannot run one.\n' +
   a.toolHome +
-  'Example, to run a shell command: {"say": "", "tools": [{"name": "Bash", "input": {"command": "ls"}}]}\n' +
+  'Example, to run a shell command: {"say": "Listing the files.", "tools": [{"name": "Bash", "input": {"command": "ls"}}]}\n' +
   a.identity(slug) +
   a.ownTools +
   'Your reply is the JSON object itself, written as your final message text. Every tool in the catalog below is real and available: call it ' +
@@ -108,7 +108,7 @@ const header = (a: Adapter, slug: string) =>
   `A tool result over ${RESULT_CAP} characters is cut to its first ${RESULT_CAP}: read files about 150 lines at a time with Read offset and limit, never a whole large file, and never repeat a tool call whose result is already in the conversation.\n` +
   'Act on the latest messages; earlier ones are history.\n' + NO_ASK + SUBAGENT_NOTE +
   'Reply with exactly one JSON object and nothing else:\n' +
-  '{"say": "<short text, may be empty>", "tools": [{"name": "<tool from the catalog>", "input": {...}}]}\n' +
+  '{"say": "<one short line on what you are doing now; never empty when you call a tool>", "tools": [{"name": "<tool from the catalog>", "input": {...}}]}\n' +
   'Use "tools": [] only when you have nothing to call.\n'
 const HANDBACK_RULES =
   'When the task is done, call SubagentHandback with your full report.\n' +
