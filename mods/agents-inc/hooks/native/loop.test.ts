@@ -27,7 +27,7 @@ const fakeAdapter = (over: Partial<Adapter> = {}): Adapter => ({
   ...over,
 })
 
-function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?: 'throw' | unknown[]; timeout?: boolean; also?: Adapter[]; writeDirs?: string[]; beginDirs?: string[]; tools?: boolean; messages?: unknown[]; system?: string } = {}) {
+function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?: 'throw' | unknown[]; timeout?: boolean; also?: Adapter[]; writeDirs?: string[]; beginDirs?: string[]; tools?: boolean; maxChars?: number; messages?: unknown[]; system?: string } = {}) {
   const hooks: Record<string, (...a: unknown[]) => unknown> = {}
   const on = (event: string, a: unknown, b?: unknown) => {
     hooks[event] = (b ?? a) as (...a: unknown[]) => unknown
@@ -59,7 +59,7 @@ function harness(adapter: Adapter, o: { replies?: Run[]; task?: string; agents?:
       spawn: (a: { argv: string[]; input?: string }) => (async function* () {
         if (a.argv[0] === 'agents-inc') {
           verbs.push(a.argv)
-          const out = a.argv[2] === 'status' ? JSON.stringify({ offered: true, slug: 'fake-1', write_dirs: o.writeDirs, tools: o.tools }) : a.argv[2] === 'begin' ? JSON.stringify({ snapshot: 'captured', write_dirs: o.beginDirs }) : JSON.stringify({ snapshot: 'unchanged', changed: [] })
+          const out = a.argv[2] === 'status' ? JSON.stringify({ offered: true, slug: 'fake-1', write_dirs: o.writeDirs, tools: o.tools, max_input_chars: o.maxChars }) : a.argv[2] === 'begin' ? JSON.stringify({ snapshot: 'captured', write_dirs: o.beginDirs }) : JSON.stringify({ snapshot: 'unchanged', changed: [] })
           yield { stream: 'stdout' as const, text: out }
           return { code: 0 }
         }
@@ -550,4 +550,18 @@ test('a tool result over the cap is cut with a warning that says how to read the
   const small = buildPrompt(a, 'm', 'S.', catalog([], ''), turn('short result') as never)
   expect(small).toContain('tool result: short result')
   expect(small).not.toContain('this result was cut')
+})
+
+// #188: the context cap is in the registered type description, so the dispatcher sizes the task before launch.
+test('the registered description states the context cap and the result cut when status reports a cap', async () => {
+  const a = fakeAdapter({ kind: 'stateless' })
+  const h = harness(a, { maxChars: 72000 })
+  await registerAgent(h.$ as never, a, { cwd: '/w' })
+  const d = String((h.registered[0] as { description: string }).description)
+  expect(d).toContain('Context cap 72K chars')
+  expect(d).toContain('about 3 file reads')
+  expect(d).toContain('over 20K chars are cut')
+  const none = harness(a)
+  await registerAgent(none.$ as never, a, { cwd: '/w' })
+  expect(String((none.registered[0] as { description: string }).description)).not.toContain('Context cap')
 })

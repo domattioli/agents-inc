@@ -171,7 +171,7 @@ type Cli = {
   ui: { log: (message: string, options: { to: 'debug' }) => unknown }
   session: { id: () => unknown }
 }
-export type Status = { offered: boolean; slug: string; reason?: string; write_dirs?: string[]; tools?: boolean }
+export type Status = { offered: boolean; slug: string; reason?: string; write_dirs?: string[]; tools?: boolean; max_input_chars?: number }
 type Ran = { outcome: 'done' | 'failed' | 'quota-paused' | 'aborted'; usage: Usage }
 // Per subagent: the thread file it keeps, whether a run has used it, and how many api messages the model has seen.
 type AgentState = { n: number; used: boolean; sent: number }
@@ -530,7 +530,7 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
     // No tools and no permissionMode: the agent inherits the parent's, like any native subagent.
     await $.agent.register({
       name: S.agent,
-      description: S.chatOnly ? `${adapter.description(status.slug)} Chat only, no tools: its tool-protocol probe failed, so it answers from the conversation alone.` : adapter.description(status.slug),
+      description: (S.chatOnly ? `${adapter.description(status.slug)} Chat only, no tools: its tool-protocol probe failed, so it answers from the conversation alone.` : adapter.description(status.slug)) + limitsNote(status),
       prompt: AGENT_PROMPT,
       model: 'haiku', // placeholder: turn.step never calls it for this agent
     })
@@ -539,6 +539,12 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
     $.ui.log(`${S.log} not registered: $.agent.register failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
   }
 }
+
+// #188: the context cap and the result cut, in the type description, so the dispatcher sizes the task before launch.
+export const limitsNote = (s: Pick<Status, 'max_input_chars'>) =>
+  typeof s.max_input_chars === 'number' && s.max_input_chars > 0
+    ? ` Context cap ${Math.round(s.max_input_chars / 1000)}K chars for the whole conversation (about ${Math.max(1, Math.floor(s.max_input_chars / RESULT_CAP))} file reads); tool results over ${RESULT_CAP / 1000}K chars are cut. Keep the task small and name line ranges for large files.`
+    : ''
 
 const FILE_WRITERS: Readonly<Record<string, string>> = { Write: 'file_path', Edit: 'file_path', NotebookEdit: 'notebook_path' }
 // Lexical path resolution against the agent cwd (the mod has no filesystem stat, so symlinks are not followed).
