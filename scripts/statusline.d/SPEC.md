@@ -3,7 +3,7 @@
 CODEX 5H/7D percentages use the newest rollout `rate_limits.primary/secondary.used_percent`, not state_5.sqlite tokens. `OPENAI 7D <tokens>` sums usage rows from codex/openai backends and configured OpenAI model buckets, with state_5.sqlite `threads.tokens_used` as fallback. If sources disagree, rollout wins for percentages and state tokens win for token counts.
 
 `collect_usage.py` (python3 stdlib only, no network, exit 0 always) writes
-`~/.claude/statusline-domi-cache.json`. Invoked by `statusline.sh` as
+`~/.claude/statusline-cache/<session_id>.json` (per session, so concurrent sessions never overwrite each other; `statusline.sh` passes `--out`; files older than 7 days are pruned; without a session id the legacy `~/.claude/statusline-domi-cache.json` is used). Invoked by `statusline.sh` as
 `timeout 5s python3 scripts/statusline.d/collect_usage.py --session-id ID --transcript PATH --session-start EPOCH`.
 Skip the run when the cache file is < 60 s old AND its `session_id` matches.
 
