@@ -151,7 +151,7 @@ In `CODEX_BRIDGE_MODE=ultra`, the runner refuses Anthropic names and follows `ro
 
 ### Persistent mandate sessions (spec-010)
 
-`submit` accepts additive flags so a Codex-backed role (Executive/Supervisor rung) can be re-engaged within one mandate without re-briefing, instead of `codex exec` cold-starting every call. Full spec: `specs/010-persistent-exec-session/`.
+`submit` accepts additive flags so a Codex-backed role (Executive/Orchestrator rung) can be re-engaged within one mandate without re-briefing, instead of `codex exec` cold-starting every call. Full spec: `specs/010-persistent-exec-session/`.
 
 ```bash
 # NOTE: --backend codex --wait is broken (bridge daemon can't see codex on PATH) and superseded by the delegate-agent MCP tool for luna; other codex models still use this async path until wired into delegate-agent.
@@ -234,7 +234,7 @@ The bridge uses your ChatGPT subscription, so rate limits and API restrictions a
 
 The token file at `~/.codex-bridge/token` grants shell-level access to codex-bridge operations. Protect it as you would an SSH key or API token. Do not commit it to version control.
 
-**Host-classifier gotcha (ultra-tier / high-autonomy delegates):** dispatching an ultra-tier delegate (e.g. `astra`) through codex-bridge/workerbee with `--approve-for-me` has been blocked by Claude Code's host permission classifier even when the same flag on a lower-tier delegate (`terra`/`luna`) was not blocked. Best-guess cause: auto-approve combined with autonomous git-push/PR authority reads as higher risk to the classifier. Fix observed: one live, explicit in-session operator approval ("i approve") unblocked it immediately, no code or flag change needed. **Do not loop retries on this block** — surface it and ask the operator for a live approval instead.
+**Host-classifier gotcha (Executive-rung / high-autonomy delegates):** dispatching an Executive-rung delegate (e.g. `astra`) through codex-bridge/workerbee with `--approve-for-me` has been blocked by Claude Code's host permission classifier even when the same flag on a lower-rung delegate (`terra`/`luna`) was not blocked. Best-guess cause: auto-approve combined with autonomous git-push/PR authority reads as higher risk to the classifier. Fix observed: one live, explicit in-session operator approval ("i approve") unblocked it immediately, no code or flag change needed. **Do not loop retries on this block** — surface it and ask the operator for a live approval instead.
 
 ## @-routing hook (at_route.sh)
 

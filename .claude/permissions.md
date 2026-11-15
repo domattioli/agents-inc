@@ -18,7 +18,7 @@ Scanned `.claude/settings.local.json` for `.env|credential|secret|.ssh|.aws|apik
 
 Was: `CLAUDE.md` 3-tier labor rule (2026-09-05: write=haiku+free, review=luna, orchestrate=fable/astra) vs `docs/DECISIONS.md` D27 4-rung ladder (2026-09-06). `CLAUDE.md` never placed opus/sol and never gated sonnet/terra behind promotion.
 
-Resolution: DECISIONS wins per `CLAUDE.md` own truth-source order (CONTEXT > DECISIONS > governance) + D27 is 1 day newer + more specific. Rewrote `CLAUDE.md` "Coding dispatch — labor rule" to the 4-rung ladder (Supervisor fable↔astra, Orchestrator opus↔sol, Workhorse sonnet↔terra promotion-gated, Grunt haiku↔luna) w/ escalation, second-opinion, promotion-trigger, run-spec and ideal/budget modality rules. Cites D25/D26/D27 + `docs/governance/ROUTING-RANKING.md` inline. `docs/DECISIONS.md` untouched (ruling, not conformed).
+Resolution: DECISIONS wins per `CLAUDE.md` own truth-source order (CONTEXT > DECISIONS > governance) + D27 is 1 day newer + more specific. Rewrote `CLAUDE.md` "Coding dispatch — labor rule" to the 4-rung ladder (Supervisor fable↔astra, Orchestrator opus↔sol, Workhorse sonnet↔terra promotion-gated, Grunt haiku↔luna) w/ escalation, second-opinion, promotion-trigger, run-spec and ideal/budget modality rules. Cites D25/D26/D27 + `docs/governance/ROUTING-RANKING.md` inline. `docs/DECISIONS.md` untouched (ruling, not conformed). <!-- terms: historical -->
 
 Old 3-tier text is not retracted, it is subsumed: budget modality = free grunts write, cross-vendor review, ladder kept for supervise/orchestrate/review — same intent, now with the missing rung + gate.
 

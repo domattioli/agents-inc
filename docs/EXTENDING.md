@@ -74,7 +74,7 @@ Not an endorsement. A shape.
 | task class | delegate? | verification |
 |---|---|---|
 | summarize a long deposition | yes, digest tier, 1M context | spot-check quotes against page numbers in source |
-| extract every date + party from discovery | yes, cheap tier, high volume | re-run on a hand-labeled sample, count misses |
+| extract every date + party from discovery | yes, Grunt rung, high volume | re-run on a hand-labeled sample, count misses |
 | find contradictions between two statements | yes, but as a CANDIDATE list only | read each candidate yourself |
 | draft a client letter | draft only, never send | you are the signatory. Delegate output is a first pass |
 | anything filed, served, or sent to a client | **NO. HARD STOP.** | n/a |
@@ -88,7 +88,7 @@ Not an endorsement. A shape.
 
 - Status
   - **Off by default.** It runs only when `WORKERBEES_LOCAL=1` is set and the caller asks for it by name (`worker_provider="ollama"` or `local_only=True`).
-  - **Scope:** grunt tier, `extract` and `summarize` only. Never review, draft, or adjudication work.
+  - **Scope:** Grunt rung, `extract` and `summarize` only. Never review, draft, or adjudication work.
 - Setup
   - Install and start the server: `brew install ollama`, then `brew services start ollama` (macOS). On Linux, use the distribution package or the official installer.
   - Pull the default model by hand: `ollama pull qwen2.5-coder:3b`. The larger allowlisted models (`qwen2.5-coder:7b`, `qwen3:8b`) are optional and suit hosts with more RAM. The pipeline never pulls, starts, or restarts anything.

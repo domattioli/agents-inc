@@ -1,5 +1,5 @@
 ---
-description: "Canonical delegation model — CEO, CoS, Lead, Worker; 9 speckit phases. Machine-readable (Mermaid) + human-readable table."
+description: "Canonical delegation model — reporting chain (CEO chain position, CoS, Lead, Worker); 9 speckit phases. Machine-readable (Mermaid) + human-readable table."
 version: 2.0.0
 ---
 
@@ -11,15 +11,18 @@ Example request used throughout: "add input validation to the export endpoint. o
 
 ## Roles
 
-Fixed nouns (D46.4): CEO, CoS. Every other role = reporting chain, not title.
+Fixed nouns (D46.4): CEO, CoS. Every other role = reporting chain, not title. Prose says operator for the human; CEO names only the chain position (chain figure, this list, "CEO and CoS").
 
-- CEO → operator (human). Alias Owner (pre-D46 text).
-- Chief of Staff (CoS; formerly Interlocutor) → agent CEO talks to directly; normally host session. Charter below (D43).
-- Lead → top-ranked model CEO named for the run; manages run, owns mandate. Aliases Supervisor, Orchestrator.
-- Worker → any agent reporting to a Lead. Aliases Delegate, Team (collective), Workhorse, Grunt.
+- CEO → the chain position held by the operator (human).
+- Chief of Staff (CoS) → agent the operator talks to directly; normally host session. Only dispatcher of the Lead, verifies before relay, only committer and pusher. Charter below (D43).
+- Lead → the one agent the CoS dispatches for a mandate; runs the mandate, owns it, may dispatch Workers within FAN_OUT and depth rules, reports once at mandate end.
+- Worker → agent dispatched by a Lead that reports to that Lead.
+- Delegate → relation, not a role: any agent reached by dispatch. Usually a Lead or Worker; a D78 native small-edit subagent is a delegate with neither role, and its supervisor is the CoS.
+- supervisor (lowercase) → relation, not a title: the party that dispatched a given delegate and verifies its return, the CoS or a Lead.
+- Guest agent → sits outside the reporting chain: started by the operator, not dispatched, reports to no Lead. Not a delegate.
 - Second → retired as a role noun (D46.4); an agent that helps a run gets no authority from being second, vendor, or rung.
 
-Rungs (Executive, Orchestrator, Workhorse, Grunt) = cost class only, never a role. Ladder (`ROUTING-RANKING.md`) picks the Lead among named models: higher rung manages; same rung → CoS asks CEO one interactive question naming the Lead, recommended answer first. CoS states resolved chain in one line only when surprising, with a discrete justification (D46.2). Example: opus (Orchestrator) = Lead, haiku (Grunt) = Worker.
+Rungs (Executive, Orchestrator, Workhorse, Grunt) = model classes, never a role. A rung sets ladder order for Lead choice (D46.2), delegation rights (D46.3) and default duties (D78, D80); it grants no Task Authority. Ladder (`ROUTING-RANKING.md`) picks the Lead among named models: higher rung manages; same rung → CoS asks the operator one interactive question naming the Lead, recommended answer first. CoS states resolved chain in one line only when surprising, with a discrete justification (D46.2). Example: opus (Orchestrator rung) = Lead, haiku (Grunt rung) = Worker.
 
 ## Delegation by rung (D46.3, D48)
 
@@ -30,19 +33,19 @@ Rungs (Executive, Orchestrator, Workhorse, Grunt) = cost class only, never a rol
 
 ## Chains (D46.11)
 
-- Grilling (bidirectional, before dispatch): CEO ↔ CoS.
+- Grilling (bidirectional, before dispatch): operator ↔ CoS.
 - Kickoff grammar (D46.9): `<task>. <models>.` Defaults: chain by ladder, effort medium, gates derived from task, home repo from consumer `AGENTS.md`. Each extra word (effort, budget mode, review vendor) overrides exactly one default.
-- Dispatch (top-down): CEO → CoS → Lead → Worker. CoS dispatches only the Lead, with full mandate + remaining roster. Lead runs its Workers to completion. Nested Lead dispatch goes through the broker (D51).
+- Dispatch (top-down): operator → CoS → Lead → Worker. CoS dispatches only the Lead, with full mandate + remaining roster. Lead runs its Workers to completion. Nested Lead dispatch goes through the broker (D51).
 - Report (bottom-up): Worker → Lead (a finished Worker may take resume turns and return more reports, D54). Lead → CoS exactly once, at mandate end. No progress updates flow up.
-- Escalation (question path only): Worker asks Lead (`ask_lead`, D54) → Lead asks CoS → CoS asks CEO. Each level answers what it can.
-- Outcome: Lead report → CoS verifies + re-projects (charter) → CEO.
+- Escalation (question path only): Worker asks Lead (`ask_lead`, D54) → Lead asks CoS → CoS asks operator. Each level answers what it can.
+- Outcome: Lead report → CoS verifies + re-projects (charter) → operator.
 
 ## Hard separations (D46.10, gate-enforced)
 
 1. Author never grades own work.
 2. Reviewer = different vendor for canon edits + irreversible acts; same vendor allowed for routine code.
 3. Only CoS commits and pushes.
-4. Delegate sees only its slice: never run tree, sibling reports, CEO reasoning.
+4. Delegate sees only its slice: never run tree, sibling reports, operator reasoning.
 
 ## Claude Code harness facts (verified 2026-10-28)
 
@@ -56,20 +59,20 @@ Source: issue #123. Harness capabilities only; routing stays D59/D60 (`docs/DECI
 
 ## Chief of Staff charter (D43, D46.5-6)
 
-Operator ruling 2026-09-22: CoS = CEO's right hand; takes Lead report, figures out what matters to CEO. Method = `accelerate` decision-instrument doctrine (optional user-scope skill; rules restated here so they bind w/o it).
+Operator ruling 2026-09-22: CoS = operator's right hand; takes Lead report, figures out what matters to operator. Method = `accelerate` decision-instrument doctrine (optional user-scope skill; rules restated here so they bind w/o it).
 
 1. Receive every Lead report + closure. Never forward raw.
 2. Verify before relay. Delegate PASS = claim, not evidence; CoS re-runs cheap checks (tests, grep, probe) on anything it passes up. Unverified -> labelled `[inferred]`/`[assumed]`, never hardened.
 3. Re-project, don't reduce. Every report atom lands in one pile; nothing dropped, no rounding, hedges kept:
-   - DECIDE (numbered `1, 2, ...`) — only items meeting decision bar: irreversible | spends money | externally visible | changes scope/goals. Each item self-contained: what, why CEO's call, options w/ consequences, one recommended. >5 DECIDE items = pseudo-decisions leaking; re-audit.
-   - HANDLED (`H1, H2, ...`) — below bar -> CoS decides, states choice in one line; CEO may veto ("hold H2").
-   - UNDERSTAND (`U1, U2, ...`) — context CEO needs to model situation; full depth behind a fold/file, one step away.
+   - DECIDE (numbered `1, 2, ...`) — only items meeting decision bar: irreversible | spends money | externally visible | changes scope/goals. Each item self-contained: what, why operator's call, options w/ consequences, one recommended. >5 DECIDE items = pseudo-decisions leaking; re-audit.
+   - HANDLED (`H1, H2, ...`) — below bar -> CoS decides, states choice in one line; operator may veto ("hold H2").
+   - UNDERSTAND (`U1, U2, ...`) — context operator needs to model situation; full depth behind a fold/file, one step away.
 4. Lead with DECIDE. Routine success, transient provider failure, process narration -> HANDLED/UNDERSTAND or absorbed, never top of reply.
-5. Honesty items always reach CEO even below bar: delegate broke a rule (e.g. banned git op), delegate reported GREEN on RED work, CoS itself was wrong earlier.
-6. Budget mode: CoS may hand pile-sorting to flash-tier triage helper (`skills/workerbee/SKILL.md` Step 4); CoS still owns verification + final wording.
-7. No automatic Task Authority over Lead work. CoS authority = what reaches CEO + below-bar calls. Rung-neutral: any model may be CoS; normally host session.
+5. Honesty items always reach operator even below bar: delegate broke a rule (e.g. banned git op), delegate reported GREEN on RED work, CoS itself was wrong earlier.
+6. Budget mode: CoS may hand pile-sorting to Grunt-rung triage helper (`skills/workerbee/SKILL.md` Step 4); CoS still owns verification + final wording.
+7. No automatic Task Authority over Lead work. CoS authority = what reaches operator + below-bar calls. Rung-neutral: any model may be CoS; normally host session.
 8. Hands (D46.5): CoS reads to route + verify; answers lookups of ≤3 tool calls itself; every repo edit goes through a delegate.
-9. CEO report shape (D46.6): decisions first, with CoS pick; then one line per result, marked verified or not; then lessons needing sign-off. Transcripts + reports stay in files, named once.
+9. Operator report shape (D46.6): decisions first, with CoS pick; then one line per result, marked verified or not; then lessons needing sign-off. Transcripts + reports stay in files, named once.
 10. Big lift (D46.7): run spawned ≥2 delegates, or edited canon (`AGENTS.md`, `CONTEXT.md`, `docs/DECISIONS.md`, any `SKILL.md`, policy) -> status card required.
 
 ## Run spec + home repo (D46.8)
@@ -82,7 +85,7 @@ Operator ruling 2026-09-22: CoS = CEO's right hand; takes Lead report, figures o
 
 Lead owns/runs all 9 phases. CoS role per phase = route + verify, not author. Worker phase limit (CHECKLIST onward) is the speckit pipeline's ownership rule (v1 fix 4), not a D46 dispatch limit; outside the pipeline a Lead dispatches by rung (D46.3).
 
-| Phase | CEO | CoS | Lead | Worker |
+| Phase | Operator | CoS | Lead | Worker |
 |---|---|---|---|---|
 | SPECIFY | — | — | YES | — |
 | CLARIFY | YES | YES (relays questions) | YES | — |
@@ -98,7 +101,7 @@ Lead owns/runs all 9 phases. CoS role per phase = route + verify, not author. Wo
 
 ```mermaid
 flowchart TD
-    CEO([CEO])
+    CEO([CEO: operator, chain position])
     CoS([Chief of Staff])
     Lead([Lead])
     Worker([Worker])
@@ -133,11 +136,11 @@ flowchart TD
 - Escalation is a question path; reporting is once at mandate end, no progress updates (D46.11).
 - Added: delegation by rung, fan-out (D48), hard separations (D46.10), CoS hands, report shape, big lift (D46.5-7), run spec + home repo (D46.8), kickoff defaults (D46.9). Second retired.
 - Cross-vendor review: sol, run 20261010T205403Z-sol-46bfad, VERDICT CHANGES (8), all applied.
-- Owner renamed CEO per D46.4. Static PNG still shows pre-D46 labels until regenerated; Mermaid wins.
+- Owner renamed CEO per D46.4. Static PNG still shows pre-D46 labels until regenerated; Mermaid wins. <!-- terms: historical -->
 
 ## Changes in 1.1.0 (D43)
 
-- Interlocutor renamed Chief of Staff (CoS); charter added; escalation + closure pass through CoS.
+- Interlocutor renamed Chief of Staff (CoS); charter added; escalation + closure pass through CoS. <!-- terms: historical -->
 
 ## Assets
 

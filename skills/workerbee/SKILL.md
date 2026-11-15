@@ -70,7 +70,7 @@ defensible `$1.15` to `$33.06`.
 A correctly-written dispatch prompt (Step 11: role, reporting chain, verified
 state, constraints, gates, output shape) costs roughly 600-1,200 tokens to
 write plus the delegate's own floor (measured: 3,181 tokens for a one-word
-ultra-tier reply). For a small task that fixed cost exceeds doing the work
+Executive-rung reply). For a small task that fixed cost exceeds doing the work
 directly. Answer both questions below before writing the prompt.
 
 **Q1 — Volume (D78).** Estimate the direct tool calls this task would take you
@@ -154,7 +154,7 @@ gate above. Downward is free, sideways is gated.
 
 ### Step 1: Place the task on the capability ladder
 
-Two vendors, one ladder. Pick the tier the task needs. **Step 0.5 gates which
+Two vendors, one ladder. Pick the rung the task needs. **Step 0.5 gates which
 vendor column you may use** — the ladder tells you the rung, not the vendor.
 
 | tier | Anthropic | OpenAI | use for |
@@ -222,9 +222,9 @@ Ported from DomI `subagent-dispatch-policy` v1.4.0 (#27).
 
 Coding by free bottom-rung models (not haiku or luna) is scope-gated, not banned: small, narrow, high-volume jobs only. A task needing scope/design judgment is workhorse+, dispatch it there.
 
-Under a mandate, dispatch Codex rows via `agent.sh submit --backend codex --model <slug> --mandate <run_id> --role <rung>`; bare `codex exec` is stateless and must not be used for Executive/Supervisor re-engagement (spec-010, `skills/codex-bridge/SKILL.md` `agent.sh` mandate flags).
+Under a mandate, dispatch Codex rows via `agent.sh submit --backend codex --model <slug> --mandate <run_id> --role <rung>`; bare `codex exec` is stateless and must not be used for Executive/Orchestrator re-engagement (spec-010, `skills/codex-bridge/SKILL.md` `agent.sh` mandate flags).
 
-**Scout = mode, not tier.** Recon before real dispatch (does X exist / what
+**Scout = mode, not rung.** Recon before real dispatch (does X exist / what
 shape / worth it). Text-only recon -> free grunt (OpenRouter free, gemini
 cheap/digest, mistral cheap, gpt-5.4-mini). Recon needs tools (walk repo,
 read tree, run cmd) -> Grunt rung only: haiku or luna; free grunts have no
@@ -234,11 +234,11 @@ report unverified -> re-derive before acting. Ledger: node with edge_type
 `probes`, no lineage row -> never a spawn ancestor. Canon: CONTEXT.md
 Scout rows + DECISIONS D28.
 
-**Escalate on evidence, not on a hunch.** A problem is not ultra-tier
-because it feels hard. It is ultra-tier because a flagship actually failed
+**Escalate on evidence, not on a hunch.** A problem is not Executive-rung
+because it feels hard. It is Executive-rung because a flagship actually failed
 at it, twice, and you can say how.
 
-**Ultra tier has a token floor.** Measured: a one-word reply from
+**Executive rung has a token floor.** Measured: a one-word reply from
 `gpt-6-astra` cost 3,181 tokens. So an ultra model is expensive per call
 regardless of task size. Never make it a default, and never make it
 discover context you already have — pre-load verified facts into its
@@ -350,10 +350,10 @@ same session, immediately after the astra/luna misidentification.
   above `medium` — silent escalation is the failure mode, not the token
   cost alone. (Superseded upward by Step 11 MUST 9: effort is now stated
   on every dispatch, at every level.)
-- Do not conflate this with the capability-ladder "ultra" **tier** in Step
-  1 (fable/astra as a *model choice*). Tier and effort are independent
-  dials; a `flash`-tier model can in principle run at high effort, and a
-  `ultra`-tier model can run at low effort. Name both when you report a
+- Do not conflate this with the capability-ladder "ultra" **rung** in Step
+  1 (fable/astra as a *model choice*). Rung and effort are independent
+  dials; a `flash` Grunt-rung model can in principle run at high effort, and a
+  `ultra` Executive-rung model can run at low effort. Name both when you report a
   dispatch: "astra @ medium effort", not just "astra".
 
 ### Step 2: Never accept a self-graded gate
@@ -507,8 +507,8 @@ is no token tracker and no lint check.
 
 ### Step 4: Triage delegate reports through a flash model
 
-In budget mode, route completed delegate reports to a standing flash-tier
-interlocutor. Forward the report **verbatim** via message; surface only
+In budget mode, route completed delegate reports to a standing Grunt-rung
+triage helper. Forward the report **verbatim** via message; surface only
 what it marks ESCALATE.
 
 ### Step 5: Chief of Staff triage — every report, every mode
@@ -523,7 +523,7 @@ away). Lead w/ DECIDE. Delegate rule breaks + GREEN-on-RED always surface.
 these rules by hand.
 
 Budget mode add-on: CoS may route completed delegate reports to a standing
-flash-tier triage helper. Forward the report **verbatim** via message; the
+Grunt-rung triage helper. Forward the report **verbatim** via message; the
 helper pre-sorts, CoS still verifies + owns final wording. Surface only
 what survives as DECIDE/honesty items.
 
@@ -631,7 +631,7 @@ grant. It is not a policy refusal and not a reason to try another tool. Run
 one plain command per Bash call, with no `cd`, `&&`, `;`, pipes, loops, or
 shell variables, because a compound command matches no grant. On a block the
 delegate stops, records the exact command, hands back, and never routes around
-it. The dispatcher adds the prefix to BASH_ALLOW and resumes or redispatches.
+it. The supervisor adds the prefix to BASH_ALLOW and resumes or redispatches.
 
 Same for a delegate's RED. A RED reported honestly is a good outcome. Say
 so **in the dispatch prompt** — delegates round up to GREEN when they
@@ -682,11 +682,11 @@ grunt dispatch also carries, checked by `--tier grunt`:
   = RED.
 - `STOP RULE:` numeric attempt cap (e.g. `stop after 2 failed runs of the
   success check; report RED w/ last output`). No open-ended "keep trying".
-- Supervisor-written tests where feasible: name the test file/ids in the
+- supervisor-written tests where feasible: name the test file/ids in the
   success gate; the delegate does not author its own acceptance test (Step
   2).
 
-**Pre-existing changes — every dispatch, every tier.** Supervisor runs
+**Pre-existing changes — every dispatch, every rung.** The supervisor runs
 `python3 skills/workerbee/scripts/pre_dispatch_snapshot.py capture <scratchpad>/pre_dispatch.json`
 before dispatch (time, HEAD, porcelain, sha256 of every pre-existing dirty
 file + every untracked file, recursive) and puts the snapshot path + verify
@@ -802,13 +802,12 @@ then reported "no files outside scope touched".
 14. **Lesson-learned handling: relay up the chain, never sideways.** Delegate
     surfacing a finding w/ canon-doc implications (`AGENTS.md`/`CONTEXT.md`/
     `docs/DECISIONS.md`/any `SKILL.md`/constitution) tags it
-    `LESSON-CANDIDATE` in its report, not buried in prose. Relays exactly one
-    rung up (Grunt→Workhorse→Orchestrator→Executive), never skipping. Each
-    receiving rung either drops it (state why) or relays further. Before it
-    reaches Executive, a scout check (Step 1 Scout mode) must confirm it
+    `LESSON-CANDIDATE` in its report, not buried in prose. Relays to the delegate's supervisor, one level up the chain, never skipping a level. Each
+    receiving supervisor either drops it (state why) or relays further. Before it
+    reaches the CoS, a scout check (Step 1 Scout mode) must confirm it
     doesn't already exist in canon + doesn't contradict canon — whoever
     relays is responsible for that check having happened somewhere in the
-    chain. **Only Executive (fable/astra) presents a survivor to the
+    chain. **Only the CoS presents a survivor to the
     operator** — one concise paragraph: lesson, evidence, scout's
     dedup/contradiction result, target canon file. Executive may land
     small/minor doc fixes itself; anything material needs operator sign-off,
@@ -940,7 +939,7 @@ Include, roughly this order:
     edit surgically
 14. PLAN CONTRACT (MUST 11), if deliverable is a delegation-capable plan —
     model + gates per task
-15. LESSON-CANDIDATE tag (MUST 14), if applicable — one rung up, never
+15. LESSON-CANDIDATE tag (MUST 14), if applicable — one level up the chain, never
     sideways; only Executive presents to operator
 16. OUTPUT SHAPE — fenced template
 
@@ -967,7 +966,7 @@ rotation. Keep using the file, never the pasted literal.
 | Relaying every delegate report to the operator | Buries the one item needing a decision |
 | Accepting GREEN without re-running the check | Ships defects with a passing gate attached |
 | Letting a delegate own its own verifier | Grades intent, not result |
-| Escalating to ultra tier on difficulty vibes | Pays a ~3.2k token floor for nothing |
+| Escalating to the Executive rung on difficulty vibes | Pays a ~3.2k token floor for nothing |
 | Describing code to a stateless buddy | It invents an API and you debug fiction |
 | Coercing unknown to zero | Confident wrong numbers outlive the session |
 | Rephrasing to get past a blocked permission | Destroys the trust the role depends on |
@@ -1017,7 +1016,7 @@ id, saved stdout/stderr, transient-failure retries, and a provider-neutral
 
 - Orchestrator stays cheap; work moves down-tier
 - Escalate a tier only on evidence a lower tier failed, never on difficulty vibes
-- Ultra tier carries a measured token floor (~3.2k for a one-word reply) —
+- Executive rung carries a measured token floor (~3.2k for a one-word reply) —
   pre-load verified facts into its prompt so it spends tokens on judgment
 - Cap tool calls and output lines in dispatch prompts to expensive tiers
 - Triage saves operator attention reliably; it saves tokens only on long

@@ -249,7 +249,7 @@ class RenderTest(unittest.TestCase):
 
 
 STOP_LINE = ("STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, "
-             "stop and hand back to the dispatcher with the work done so far; never switch to another tool to "
+             "stop and hand back to your supervisor with the work done so far; never switch to another tool to "
              "route around the block. A denial of an incidental side effect, such as a cache write, is not a "
              "block: ignore it and continue.")
 
