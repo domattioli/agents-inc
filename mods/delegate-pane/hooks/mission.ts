@@ -65,7 +65,7 @@ export function categoryOf(d: { text: string; subagentType?: string; taskKind?: 
   const roleWord = (d.role ?? '').trim().split(/[^A-Za-z]+/)[0]?.toLowerCase()
   if (roleWord && ROLE_WORD[roleWord]) return ROLE_WORD[roleWord]
   if (d.rung === 'grunt') return 'Scout'
-  // A general-purpose subagent whose description names no work reads as a scout: the pane cannot see its model or prompt.
+  // A general-purpose subagent whose description names no work reads as a scout: the pane cannot see its prompt, and its model only when the agent.spawn hook recorded it.
   if (d.subagentType === 'general-purpose') return 'Scout'
   return 'Other'
 }

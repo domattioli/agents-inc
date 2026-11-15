@@ -377,7 +377,7 @@ test('every running run stays listed beyond the newest eight finished', async ($
 })
 
 // 6 DISPLAY FIXES
-test('a guest agent row shows nickname and provider, other types keep the raw type', async ($, on) => {
+test('a guest agent row shows nickname and provider, other types show <type> <shortid>', async ($, on) => {
   const world = await start($, on)
   world.agents = [
     { id: 'a1', name: 'scout', type: 'agents-inc:luna', description: 'scout', status: 'running' },
@@ -390,7 +390,10 @@ test('a guest agent row shows nickname and provider, other types keep the raw ty
   const g = (await ui.find({ type: 'Button', text: /guest/ }))?.text ?? ''
   expect(g).toContain('codestral')
   expect(g).not.toContain('agents-inc:codestral')
-  expect((await ui.find({ type: 'Button', text: /x ·/ }))?.text).toContain('Explore')
+  const x = (await ui.find({ type: 'Button', text: /Explore a3/ }))?.text ?? ''
+  expect(x).toContain('Explore a3')
+  expect(x).not.toContain('general-purpose')
+  expect(g).toContain('codestral a2')
   await ui.unmount()
 })
 

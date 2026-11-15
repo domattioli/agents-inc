@@ -71,11 +71,13 @@ export type PaneState = {
   cwd: string
   // Every subagent of the session, for the map.
   mapSubs: PaneAgent[]
+  // Agent id -> model it was spawned with, recorded by the agent.spawn hook for every agent that starts, and from the Job's model for agents started from this pane's form.
+  models: Map<string, string>
   lastSig: string
 }
 export const newState = (): PaneState => ({
   jobs: new Map(), stopAsked: new Set(), resumed: new Set(), at: new Map(), tails: new Map(), lastAgents: new Set(), base: [], summary: '',
-  open: new Set(), cwd: '.', mapSubs: [], lastSig: '',
+  open: new Set(), cwd: '.', mapSubs: [], models: new Map(), lastSig: '',
 })
 export function resetState(s: PaneState, cwd: string): void {
   s.jobs.clear()
@@ -89,6 +91,7 @@ export function resetState(s: PaneState, cwd: string): void {
   s.open.clear()
   s.cwd = cwd
   s.mapSubs = []
+  s.models.clear()
   s.lastSig = ''
 }
 
@@ -123,13 +126,34 @@ export const MODELS: Pick[] = [
 export const FREE = new Set(['gemini', 'mistral', 'openrouter'])
 export const EFFORTS = ['low', 'medium', 'high', 'max'].map(v => ({ value: v, label: v }))
 
-// Row meta for an agent: `<nickname> · <Provider>` for an agents-inc type, the provider read from the MODELS labels; the raw type otherwise.
-export function agentMeta(type: string): string {
-  if (!type.startsWith('agents-inc:')) return type
-  const nick = type.slice('agents-inc:'.length)
-  const label = MODELS.find(m => m.value === nick)?.label ?? ''
+// A short model name for display: an alias as is (sonnet), a full id without a leading `claude-` and a trailing version or
+// date, and a trailing [tag] or @digits (claude-sonnet-5-5 gives sonnet, claude-haiku-4-5-20251001 gives haiku). rungs.ts maps ids to rungs, not to
+// nicknames, so it gives no shorter name; an id outside the claude- family keeps its text.
+export const shortModel = (m: string): string => {
+  const id = m.replace(/\[[^\]]*\]$/, '').replace(/@\d+$/, '')
+  if (!id.startsWith('claude-')) return id || m
+  return id.slice('claude-'.length).split('-').filter(p => !/^\d+$/.test(p)).join('-') || id
+}
+
+// The model an agent shows as: the guest nickname for an agents-inc type; else the model it was spawned with when the pane
+// knows it (sonnet, opus, haiku); else `claude` for general-purpose, or the type itself for another named type (Explore, Plan).
+export function modelName(type: string, model?: string): string {
+  if (type.startsWith('agents-inc:')) return type.slice('agents-inc:'.length)
+  if (model) return model
+  return !type || type === 'general-purpose' ? 'claude' : type
+}
+
+// `<model> <shortid>`: the label the pane uses for an agent everywhere (tree, map, delegate line).
+export const agentName = (type: string, id: string, model?: string): string => `${modelName(type, model)} ${id.slice(0, 4)}`
+
+// Row meta for an agent: `<nickname> · <Provider>` for an agents-inc type, the provider read from the MODELS labels;
+// `<model> · Claude` for a Claude type.
+export function agentMeta(type: string, model?: string): string {
+  const name = modelName(type, model)
+  if (!type.startsWith('agents-inc:')) return `${name} · Claude`
+  const label = MODELS.find(m => m.value === name)?.label ?? ''
   const provider = /^[^·]*·\s*([^(]+?)\s*(\(|$)/.exec(label)?.[1]
-  return provider ? `${nick} · ${provider}` : nick
+  return provider ? `${name} · ${provider}` : name
 }
 
 // A read-only 14-field slots file for a task typed in the pane; the report is the one file it may write.
@@ -250,15 +274,15 @@ export const startFreeRun = async (write: (path: string, text: string) => Promis
 type ListedAgent = { id: string; type?: string; name?: string; description?: string; status?: string; parentId?: string }
 
 // Agent rows of the current agent.list answer, nested under their parent. One row per agent id.
-export function agentRows(agents: ListedAgent[]): TreeRow[] {
+export function agentRows(agents: ListedAgent[], models: ReadonlyMap<string, string> = new Map()): TreeRow[] {
   const rows: TreeRow[] = []
   const uniq = agents.filter((a, i) => agents.findIndex(x => x.id === a.id) === i)
   const known = new Set(uniq.map(a => a.id))
   const add = (a: ListedAgent, depth: number) => {
     const type = String(a.type ?? '')
     rows.push({
-      n: rows.length + 1, depth, kind: 'agent', id: a.id, label: `${a.name ?? type} · ${a.description ?? ''}`,
-      state: String(a.status ?? ''), meta: agentMeta(type),
+      n: rows.length + 1, depth, kind: 'agent', id: a.id, label: `${agentName(type, a.id, models.get(a.id))} · ${a.description ?? ''}`,
+      state: String(a.status ?? ''), meta: agentMeta(type, models.get(a.id)),
     })
     for (const c of uniq.filter(x => x.parentId === a.id)) add(c, depth + 1)
   }
