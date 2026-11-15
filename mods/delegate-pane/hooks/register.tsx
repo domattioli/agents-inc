@@ -9,7 +9,7 @@ import type { Return } from './frames'
 import { controlsView, renderRun } from './controls'
 import { applyRunLines } from './controls'
 import { poll } from './poll'
-import { EMPTY, compose, newState, normalizeView, resetState, RUN_PANE } from './tree'
+import { EMPTY, compose, newState, shortModel, normalizeView, resetState, RUN_PANE } from './tree'
 import type { View } from './tree'
 
 export { mergeAgents } from './poll'
@@ -67,10 +67,11 @@ async function save($: any, v: View): Promise<void> {
 
 // Motion (terminal only): one frame timer while the pane is shown in the terminal grid layout and a station moves.
 // Module state, as the engine wants every $-taking helper declared at the top of the file. `motion.timer` is the only
-// timer; stopMotion cancels it. `off`: a blit was refused, so the pane draws the static map until it is opened again.
+// timer; stopMotion cancels it. `off`: a blit was refused, so the pane draws the static map until it is opened again or a terminal render sees a new body width.
 // `seen` and `returns`: the delegate states of the last look and the return pulses still in flight (frames.landings).
-const motion: { timer?: { cancel: () => void }; cols: number; off: boolean; seen: Record<string, State>; returns: Return[] } = {
+const motion: { timer?: { cancel: () => void }; cols: number; body: number; off: boolean; seen: Record<string, State>; returns: Return[] } = {
   cols: 0,
+  body: 0,
   off: false,
   seen: {},
   returns: [],
@@ -93,6 +94,8 @@ function stopMotion(): void {
 function startMotion($: any): void {
   if (motion.timer) return
   motion.timer = $.clock.every(FRAME_MS, async () => {
+    // the column count this tick blits at; a render may set a new one while the blit is in flight
+    const blitCols = motion.cols
     try {
       const cur = normalizeView(await read($, view))
       const sts = stations(cur.delegates, cur.acked)
@@ -101,13 +104,14 @@ function startMotion($: any): void {
       // a return pulse keeps the timer until it lands
       const dispatches = dispatchesOf(cur.delegates, t)
       if (!needsMotion(sts, motion.returns, t, dispatches) || !motion.cols) return stopMotion()
-      const cells = encodeCells(frame(sts, t, motion.cols, RASTER_ROWS, motion.returns, { cos: cosLabel(cur, cosRoom(motion.cols)), dispatches }))
-      const res = await $.ui.blit({ requestId: PANE, key: 'map', columns: motion.cols, rows: RASTER_ROWS, cells })
+      const cells = encodeCells(frame(sts, t, blitCols, RASTER_ROWS, motion.returns, { cos: cosLabel(cur, cosRoom(blitCols)), dispatches }))
+      const res = await $.ui.blit({ requestId: PANE, key: 'map', columns: blitCols, rows: RASTER_ROWS, cells })
       if (res?.deny) throw new Error(res.deny)
     } catch {
       // Not mounted, another size, or refused: stop and fall back to the static map.
       stopMotion()
-      motion.off = true
+      // Only a refusal at the size the pane still has turns motion off; after a resize the next render restarts motion.
+      if (blitCols === motion.cols) motion.off = true
       try {
         $.ui.invalidate('ui.render')
       } catch {
@@ -117,12 +121,26 @@ function startMotion($: any): void {
   })
 }
 
+// The agent.spawn hook: records the model of every agent that starts, whoever spawns it. It changes neither the event nor
+// the result and never throws into the spawn. AgentSpawnResult.model and .agentId: plugin-authoring types/claude-code.d.ts.
+export const recordSpawn = async (st: { models: Map<string, string> }, e: unknown, next: (e: any) => any) => {
+  const r = await next(e)
+  try {
+    if (r?.agentId && r.model) st.models.set(String(r.agentId), shortModel(String(r.model)))
+  } catch {
+    // the pane learns nothing; the spawn goes on
+  }
+  return r
+}
+
 export const register: Register = on => {
   const st = newState()
+  on('agent.spawn', ($, e, next) => recordSpawn(st, e, next as any))
   on('session.start', async ($, e, next) => {
     resetState(st, e.cwd || '.')
     stopMotion()
     motion.off = false
+    motion.body = 0
     motion.seen = {}
     motion.returns = []
     const nowIso = new Date(await $.clock.now()).toISOString()
@@ -246,6 +264,13 @@ export const register: Register = on => {
     // The frame timer is shared by every mounted copy of the pane; only a terminal render may set its width or stop it,
     // or a desktop or too-narrow render would cancel the animation of the terminal one while an agent still runs (#191).
     const terminal = (e as any).surface === 'terminal'
+    // A blit in flight during a resize can go out at the old width and be refused. A new width is a new chance: clear
+    // `off` when a terminal render sees another body width than the last one. (The deny reason cannot be told apart:
+    // the engine's types are not in this repo.) A refusal that is not about size is refused again, and `off` returns.
+    if (terminal) {
+      if (motion.body && motion.body !== columns) motion.off = false
+      motion.body = columns
+    }
     const cols = terminal && !motion.off && els.Raster ? rasterColumns(columns) : 0
     if (terminal) motion.cols = cols
     let now = 0

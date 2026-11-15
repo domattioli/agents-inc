@@ -15,12 +15,12 @@ Working routing ranking, not a universal benchmark ranking. 1 = best fit for tha
 
 ## Rungs
 
-Renamed 2026-09-07 (operator ruling, D34): top rung Supervisor -> Executive. Orchestrator gained "Supervisor" as a synonym/invocation keyword for the same rung, same role — not a new rung, not a name swap with Orchestrator.
+Renamed 2026-09-07 (operator ruling, D34): top rung Supervisor -> Executive. Orchestrator gained "Supervisor" as a synonym/invocation keyword for the same rung, same role — not a new rung, not a name swap with Orchestrator. Supervisor retired as synonym (D83): "supervisor" now names only the relation (the party that dispatched a delegate and verifies its return). <!-- terms: historical -->
 
 | Rung | Default | Escalate to | Second opinion when |
 |---|---|---|---|
 | Executive | Fable 5 or Astra | the other frontier model | final decisions, conflicting results, high-risk actions |
-| Orchestrator / Supervisor | Opus 5 or Sol | Fable 5 or Astra | task decomposition ambiguous, dependencies complex |
+| Orchestrator | Opus 5 or Sol | Fable 5 or Astra | task decomposition ambiguous, dependencies complex |
 | Workhorse | Sonnet 5 or Terra | Opus 5 or Sol | coding, research, or synthesis has meaningful uncertainty |
 | Grunt | Haiku 4.5 or Luna | the other cheap model | outputs anomalous or validation cheap |
 
@@ -37,6 +37,6 @@ elif normal research, coding, synthesis, or document work: Sonnet 5 <-> Terra
 else:                                                      Haiku 4.5 <-> Luna
 ```
 
-Second opinion: send the task to the paired model without showing the first answer. A Supervisor compares both outputs afterward. Claude Code `/advisor` and the `@model` router do not satisfy this column: `/advisor` sees the first answer, and neither writes a ledger node (see CONTEXT.md, Advisor / @model).
+Second opinion: send the task to the paired model without showing the first answer. The supervisor compares both outputs afterward. Claude Code `/advisor` and the `@model` router do not satisfy this column: `/advisor` sees the first answer, and neither writes a ledger node (see CONTEXT.md, Advisor / @model).
 
-Source: CEO message, 2026-09-06, citing openai.com positioning of Astra as frontier tier and GPT-5.6 as a family spanning capability and efficiency.
+Source: CEO message, 2026-09-06, citing openai.com positioning of Astra as a top-class model and GPT-5.6 as a family spanning capability and efficiency.

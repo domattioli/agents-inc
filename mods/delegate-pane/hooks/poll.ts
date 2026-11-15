@@ -1,9 +1,7 @@
 import type { PaneAgent, PaneDelegate } from '../types'
 import { categoryOf, dirTime, isAlert, isDryRun, lifecycleOf, runFromFiles, rungOf, sessionRuns, withLost } from './mission'
-import { PRE_CAP, RUNS, STALE_MS, STAMP, agentRows, describe, isFreeRun, parse, runTitle, stampOf, treeRuns } from './tree'
+import { PRE_CAP, RUNS, STALE_MS, STAMP, agentName, agentRows, describe, isFreeRun, parse, runTitle, stampOf, treeRuns } from './tree'
 import type { PaneState, RunDelegate, TreeRow, View } from './tree'
-
-const PREFIX = 'agents-inc:'
 
 export type Listed = { id: string; type?: string; name?: string; description?: string; status?: string; parentId?: string }
 
@@ -44,12 +42,12 @@ export function mergeAgents(prev: PaneAgent[], listed: Listed[]): PaneAgent[] {
   return out
 }
 
-export const subagentDelegate = (a: PaneAgent): PaneDelegate => {
-  const rung = rungOf('', a.type)
+export const subagentDelegate = (a: PaneAgent, model?: string): PaneDelegate => {
+  const rung = rungOf(model ?? '', a.type)
   return {
     id: a.id,
     source: 'subagent',
-    nickname: a.type.replace(PREFIX, ''),
+    nickname: agentName(a.type, a.id, model),
     rung,
     task: a.description,
     category: categoryOf({ text: a.description, subagentType: a.type, rung }),
@@ -251,7 +249,7 @@ async function openLines($: any, st: PaneState, scan: RunScan): Promise<Record<s
 export async function poll($: any, st: PaneState, v: View, now: number): Promise<PollResult> {
   const listed = (await $.agent.list()) as Listed[]
   st.mapSubs = mergeAgents(st.mapSubs, listed)
-  const rows: TreeRow[] = agentRows(listed)
+  const rows: TreeRow[] = agentRows(listed, st.models)
   const scan = await readRuns($, st, v, now)
   const { shown, summary } = treeRuns(scan.runRows, st.at, stampOf(v.sessionStart), now)
   rows.push(...shown)
@@ -278,7 +276,7 @@ export async function poll($: any, st: PaneState, v: View, now: number): Promise
   // (done or failed; paused is not an end).
   const seen: Record<string, [number, number | null]> = {}
   const subs = st.mapSubs.map(a => {
-    const d0 = subagentDelegate(a)
+    const d0 = subagentDelegate(a, st.models.get(a.id))
     const was = v.seen[d0.id]
     const ended = d0.state === 'done' || isAlert(d0.state)
     const times: [number, number | null] = [was?.[0] ?? now, ended ? (was?.[1] ?? now) : null]

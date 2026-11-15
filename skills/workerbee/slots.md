@@ -41,11 +41,11 @@ Worked example (read-only scout, every slot filled; render appends header.md bel
 The example has no GATES (a scout writes nothing). A code task adds `"GATES": [{"argv": ["python3", "-m", "unittest", "tests.test_x"]}]` to the JSON; `cwd`, `timeout_s` and `expect_rc` take their defaults, and the renderer appends one sentence naming the command to SUCCESS GATE. A plain string entry such as `"python3 -m unittest tests.test_x"` is also accepted: the renderer splits it with shlex and no shell runs it.
 
 ```text
-ROLE: Grunt scout (haiku, Agent tool), dispatched by Supervisor (opus) in /path/to/repo.
+ROLE: Grunt scout (haiku, Agent tool), dispatched by the CoS in /path/to/repo.
 REPORTING CHAIN: haiku reports to sonnet; sonnet reports to fable; fable reports to the operator
 TASK: Read-only scout. 1. Read agents_inc/policy.py. 2. List every function name that contains the word route, with file:line. 3. Return the list; write nothing.
-CONSTRAINTS: read-only; no file writes; no network; at most 10 tool calls. Stop-on-block: if a hook or permission classifier blocks a tool call, stop and hand back to the dispatcher; never switch tool to route around it.
-STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, stop and hand back to the dispatcher with the work done so far; never switch to another tool to route around the block. A denial of an incidental side effect, such as a cache write, is not a block: ignore it and continue.
+CONSTRAINTS: read-only; no file writes; no network; at most 10 tool calls. Stop-on-block: if a hook or permission classifier blocks a tool call, stop and hand back to your supervisor; never switch tool to route around it.
+STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, stop and hand back to your supervisor with the work done so far; never switch to another tool to route around the block. A denial of an incidental side effect, such as a cache write, is not a block: ignore it and continue.
 OUT OF SCOPE: editing any file; judging routing design; running unittest suites.
 FILES IN SCOPE:
 none (read-only scout)

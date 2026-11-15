@@ -1,17 +1,30 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
-  agentMeta, agentRows, color, compose, describe, EMPTY, isFreeRun, KEEP_RUNS, newState, normalizeView, parse, resetState,
+  agentMeta, agentName, shortModel, agentRows, color, compose, describe, EMPTY, isFreeRun, KEEP_RUNS, newState, normalizeView, parse, resetState,
   runState, slotsFor, stampOf, startFreeRun, treeRuns,
 } from './tree'
 import type { TreeRow } from './tree'
 
 const run = (id: string, state: string, meta = 'luna · dispatch'): TreeRow => ({ n: 0, depth: 1, kind: 'run', id, label: id, state, meta })
 
-test('tree: agentMeta names the provider of an agents-inc type and keeps other types raw', () => {
+test('tree: agentMeta names the provider of an agents-inc type and never shows a raw type prefix', () => {
   expect(agentMeta('agents-inc:luna')).toBe('luna · OpenAI')
   expect(agentMeta('agents-inc:codestral')).toBe('codestral')
-  expect(agentMeta('Explore')).toBe('Explore')
+  expect(agentMeta('Explore')).toBe('Explore · Claude')
+  expect(agentMeta('general-purpose')).toBe('claude · Claude')
+  expect(agentMeta('general-purpose', 'sonnet')).toBe('sonnet · Claude')
+})
+
+test('tree: agentName is <model> <shortid>, never general-purpose or agents-inc:', () => {
+  expect(agentName('agents-inc:luna', 'abcdef')).toBe('luna abcd')
+  expect(agentName('general-purpose', 'abcdef', 'opus')).toBe('opus abcd')
+  expect(agentName('general-purpose', 'abcdef')).toBe('claude abcd')
+  expect(agentName('Explore', 'abcdef')).toBe('Explore abcd')
+  expect(agentName('Explore', 'abcdef', 'haiku')).toBe('haiku abcd')
+  const row = agentRows([{ id: 'abcdef', type: 'general-purpose', name: 'x', description: 'd', status: 'running' }], new Map([['abcdef', 'sonnet']]))[0]!
+  expect(row.label).toBe('sonnet abcd · d')
+  expect(row.meta).toBe('sonnet · Claude')
 })
 
 test('tree: slotsFor writes a read-only slots file that may only write report.md', () => {
@@ -127,4 +140,18 @@ test('tree: resetState empties every map and set of the pane state and sets the 
 test('tree: normalizeView fills fields an older code version did not write', () => {
   expect(normalizeView(undefined)).toEqual(EMPTY)
   expect(normalizeView({ note: 'n' } as any)).toMatchObject({ note: 'n', treeRows: [], controlsOpen: false, delegates: [] })
+})
+
+test('tree: shortModel keeps an alias and drops claude- and the version or date of an id', () => {
+  expect(shortModel('sonnet')).toBe('sonnet')
+  expect(shortModel('claude-sonnet-5-5')).toBe('sonnet')
+  expect(shortModel('claude-haiku-4-5-20251001')).toBe('haiku')
+  expect(shortModel('gpt-6-luna')).toBe('gpt-6-luna')
+  expect(shortModel('claude-3-5-sonnet-20241022')).toBe('sonnet')
+  expect(shortModel('claude-opus-5-5[1m]')).toBe('opus')
+  expect(shortModel('claude-sonnet-4-5@20250929')).toBe('sonnet')
+  expect(shortModel('opus[1m]')).toBe('opus')
+  expect(shortModel('gpt-5-4')).toBe('gpt-5-4')
+  expect(shortModel('gemini-2')).toBe('gemini-2')
+  expect(shortModel('mistral-large-2411')).toBe('mistral-large-2411')
 })

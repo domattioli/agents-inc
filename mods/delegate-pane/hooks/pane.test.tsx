@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { normalizeView, PANE } from './register'
-import { mergeAgents } from './poll'
+import { normalizeView, PANE, recordSpawn } from './register'
+import { agentRows, newState } from './tree'
+import { mergeAgents, subagentDelegate } from './poll'
 
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Dollar = Parameters<Parameters<typeof test>[1]>[0]
@@ -143,7 +144,7 @@ test('the tree lists every agent type and no run before the session; the map sho
     expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('Explore')
     expect(await ui.find({ type: 'Text', text: /Native agent/ })).toBeFalsy()
     // the map: Explore (rung unknown) and the finished fixture run appear
-    expect(await ui.find({ type: 'Text', text: /^Explore · \? · running$/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /^Explore \S{1,4} · \? · running$/ })).toBeTruthy()
     expect(await ui.find({ type: 'Text', text: /^sonnet · workhorse · done$/ })).toBeTruthy()
     // a run started before the session start is absent from the map (H1)
     expect(await ui.find({ type: 'Text', text: /sonnet · workhorse · failed/ })).toBeFalsy()
@@ -162,7 +163,7 @@ test('tree: an agent the engine stops listing leaves the tree but stays on the m
   const ui = await $.ui.mount({ ...MOUNT, surface: 'terminal' })
   expect(await ui.find({ type: 'Button', text: /fix it/ })).toBeFalsy()
   expect(await ui.find({ type: 'Text', text: /no delegates yet/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /terra · workhorse · /i })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /terra a1 · workhorse · /i })).toBeTruthy()
   await ui.unmount()
 })
 
@@ -189,7 +190,7 @@ test('the map comes first and places a subagent and fixture runs at the right st
     expect(at(/^Mission map$/)).toBeGreaterThanOrEqual(0)
     expect(at(/no delegates yet|^ *└─/)).toBe(-1) // the tree has rows, so no empty line
     expect(at(/session · chief of staff · 2 working|session · chief of staff · 1 working/)).toBeGreaterThan(at(/^Mission map$/))
-    expect(at(/Plan · \? · running/)).toBeGreaterThan(at(/^Mission map$/))
+    expect(at(/Plan a1 · \? · running/)).toBeGreaterThan(at(/^Mission map$/))
     expect(await ui.find({ type: 'Text', text: /^sonnet · workhorse · done$/ })).toBeTruthy() // Build
     expect(await ui.find({ type: 'Text', text: /^luna · grunt · running$/ })).toBeTruthy() // Scout, run.json absent
     expect(texts.some(t => /Build/.test(t))).toBe(true)
@@ -307,9 +308,9 @@ test('A: live subagent statuses never draw as done', async ($, on) => {
   }
   await start($, on, world)
   const ui = await $.ui.mount({ ...MOUNT, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /^Explore · \? · running$/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /^Plan · \? · paused$/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /^general-purpose · \? · paused$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^Explore \S{1,4} · \? · running$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^Plan w · \? · paused$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^claude i · \? · paused$/ })).toBeTruthy()
   expect(await ui.find({ type: 'Text', text: / · done$/ })).toBeFalsy()
   await ui.unmount()
 })
@@ -481,7 +482,7 @@ test('stacked layout keeps every marker; under 30 columns the line layout keeps 
     const narrow = await $.ui.mount({ ...MOUNT, surface, props: { ...MOUNT.props, bodyColumns: 50 } })
     expect(await narrow.find({ type: 'Text', text: /^sonnet · workhorse · failed$/ })).toBeTruthy()
     expect(await narrow.find({ type: 'Text', text: /^sonnet · workhorse · done$/ })).toBeTruthy()
-    expect(await narrow.find({ type: 'Text', text: /^Plan · \? · running$/ })).toBeTruthy()
+    expect(await narrow.find({ type: 'Text', text: /^Plan a1 · \? · running$/ })).toBeTruthy()
     expect(await narrow.find({ type: 'Text', text: /^─+ / })).toBeFalsy()
     await narrow.unmount()
     const tiny = await $.ui.mount({ ...MOUNT, surface, props: { ...MOUNT.props, bodyColumns: 20 } })
@@ -685,7 +686,7 @@ test('resume: a subagent failure acknowledged before the resume stays acknowledg
   }
   await start($, on, world)
   const ui = await $.ui.mount({ ...MOUNT, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /^Plan · \? · failed$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^Plan s1 · \? · failed$/ })).toBeTruthy()
   expect(await ui.find({ type: 'Text', text: /\d✗/ })).toBeFalsy()
   await ui.unmount()
 })
@@ -719,7 +720,7 @@ test('motion: a running delegate starts the frame timer in the terminal; it stop
   expect(raster).toBeTruthy()
   expect((raster as any).props.columns).toBe(56)
   // the static map stays under the Raster
-  expect(await ui.find({ type: 'Text', text: /^Explore · \? · running$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^Explore \S{1,4} · \? · running$/ })).toBeTruthy()
   await clock.advance(500)
   expect(blits.length).toBeGreaterThanOrEqual(5)
   expect(blits.length).toBeLessThanOrEqual(7) // 80 ms a frame: 12.5 a second
@@ -788,13 +789,13 @@ test('motion: no timer when nothing runs or alerts, on desktop, or below the min
   await clock.advance(1100)
   ui = await $.ui.mount({ ...MOUNT, surface: 'desktop' })
   expect(await ui.find({ type: 'Raster' } as any)).toBeFalsy()
-  expect(await ui.find({ type: 'Text', text: /^Explore · \? · running$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^Explore \S{1,4} · \? · running$/ })).toBeTruthy()
   await clock.advance(1000)
   expect(blits.length).toBe(0)
   await ui.unmount()
   ui = await $.ui.mount({ ...MOUNT, surface: 'terminal', props: { ...MOUNT.props, bodyColumns: 33 } })
   expect(await ui.find({ type: 'Raster' } as any)).toBeFalsy()
-  expect(await ui.find({ type: 'Text', text: /^Explore · \? · running$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^Explore \S{1,4} · \? · running$/ })).toBeTruthy()
   await clock.advance(1000)
   expect(blits.length).toBe(0)
   await ui.unmount()
@@ -811,11 +812,84 @@ test('motion: a refused blit stops the timer and the pane falls back to the stat
   expect(blits.length).toBe(1)
   await ui.redraw()
   expect(await ui.find({ type: 'Raster' } as any)).toBeFalsy()
-  expect(await ui.find({ type: 'Text', text: /^Explore · \? · running$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^Explore \S{1,4} · \? · running$/ })).toBeTruthy()
   expect(await ui.find({ type: 'Text', text: /session · chief of staff · 1 working/ })).toBeTruthy()
   await clock.advance(1000)
   expect(blits.length).toBe(1)
   await ui.unmount()
+})
+
+test('motion: a blit refused during a width change does not turn the animation off for good', async ($, on) => {
+  const blits: any[] = []
+  let refuse = false
+  on('ui.blit', (_$, e: any) => (blits.push(e), ({ value: refuse ? { deny: 'size changed' } : {} }) as any))
+  const world: World = { agents: [{ id: 'a1', type: 'Explore', description: 'scout', status: 'running' }], dirs: [] }
+  const clock = await start($, on, world)
+  const small = await $.ui.mount({ ...MOUNT, surface: 'terminal', props: { ...MOUNT.props, bodyColumns: 50 } })
+  await clock.advance(200)
+  expect(blits.length).toBeGreaterThan(0)
+  refuse = true
+  await clock.advance(200) // the stale-size blit is refused: motion.off
+  refuse = false
+  await small.unmount()
+  const wide = await $.ui.mount({ ...MOUNT, surface: 'terminal', props: { ...MOUNT.props, bodyColumns: 90 } })
+  expect(await wide.find({ type: 'Raster' } as any)).toBeTruthy()
+  const n = blits.length
+  await clock.advance(500)
+  expect(blits.length).toBeGreaterThan(n + 3)
+  await wide.unmount()
+})
+
+test('motion: a blit refused after a render at a new width does not turn the animation off', async ($, on) => {
+  const blits: any[] = []
+  let wide: any
+  let small: any
+  let armed = false
+  on('ui.blit', async (_$, e: any) => {
+    blits.push(e)
+    if (!armed) return { value: {} } as any
+    armed = false
+    // the render at the new width lands while this old-size blit is in flight; the old-size blit is then refused
+    await small.unmount()
+    wide = await $.ui.mount({ ...MOUNT, surface: 'terminal', props: { ...MOUNT.props, bodyColumns: 90 } })
+    return { value: { deny: 'size changed' } } as any
+  })
+  const world: World = { agents: [{ id: 'a1', type: 'Explore', description: 'scout', status: 'running' }], dirs: [] }
+  const clock = await start($, on, world)
+  small = await $.ui.mount({ ...MOUNT, surface: 'terminal', props: { ...MOUNT.props, bodyColumns: 50 } })
+  await clock.advance(200)
+  expect(blits.length).toBeGreaterThan(0)
+  armed = true
+  await clock.advance(200)
+  expect(wide).toBeTruthy()
+  await wide.redraw()
+  expect(await wide.find({ type: 'Raster' } as any)).toBeTruthy()
+  const n = blits.length
+  await clock.advance(500)
+  expect(blits.length).toBeGreaterThan(n + 3)
+  await wide.unmount()
+})
+
+test('spawn hook: a throwing next propagates out of recordSpawn', async () => {
+  await expect(recordSpawn(newState(), {}, async () => { throw new Error('spawn failed') })).rejects.toThrow('spawn failed')
+})
+
+test('spawn hook: records the model of any spawn; the row shows <model> <shortid>', async ($, on) => {
+  const st = newState()
+  const result = { model: 'claude-sonnet-5-5', agentId: 'abcdef12' }
+  const r = await recordSpawn(st, { subagentType: 'general-purpose' }, async () => result)
+  expect(r).toBe(result)
+  expect(st.models.get('abcdef12')).toBe('sonnet')
+  const row = agentRows([{ id: 'abcdef12', type: 'general-purpose', description: 'd', status: 'running' }], st.models)[0]!
+  expect(row.label).toBe('sonnet abcd · d')
+  expect(subagentDelegate({ id: 'abcdef12', type: 'general-purpose', description: 'd', status: 'running' }, st.models.get('abcdef12')).nickname).toBe('sonnet abcd')
+  // no agentId: nothing recorded; the result is still returned as is
+  const bare = { model: 'haiku' }
+  expect(await recordSpawn(st, {}, async () => bare)).toBe(bare)
+  expect(st.models.size).toBe(1)
+  // a failing next is not swallowed (the spawn's own error), a bad result never throws
+  expect(await recordSpawn(st, {}, async () => undefined)).toBeUndefined()
+  expect(subagentDelegate({ id: 'abcdef12', type: 'general-purpose', description: 'd', status: 'running' }, 'sonnet').rung).toBe('workhorse')
 })
 
 test('pass 3: the centre names the main session and its model; the feed lists delegates newest first', async ($, on) => {
@@ -828,9 +902,9 @@ test('pass 3: the centre names the main session and its model; the feed lists de
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...MOUNT, surface })
     expect(await ui.find({ type: 'Text', text: /◉ main session · chief of staff · 1 working · claude-opus-5-5 ─/ })).toBeTruthy()
-    expect(await ui.find({ type: 'Text', text: /^Explore: scout the repo$/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /^Explore a1: scout the repo$/ })).toBeTruthy()
     const rows = ((await ui.findAll({ type: 'Text', text: /^[●✗·◐] / } as any)) as any[]).filter(r => r.text.length === 80) // feed rows fill the width
-    expect(rows.map(r => r.text.slice(0, 10))).toEqual(['✗ Plan    ', '● Explore ', '· sonnet  '])
+    expect(rows.map(r => r.text.slice(0, 10))).toEqual(['✗ Plan a2 ', '● Explore ', '· sonnet  '])
     expect(rows[0].props.color).toBe('red')
     expect(rows[1].props.color).toBe('yellow')
     expect(rows[1].text.endsWith(' running')).toBe(true)
@@ -864,7 +938,7 @@ test('hierarchy: a Lead spawn keeps the timer only for its real dispatch and res
   world.agents.push({ id: 'c', type: 'Explore', description: 'scout', status: 'running', parentId: 'p' })
   await clock.advance(1100)
   await ui.redraw()
-  expect(await ui.find({ type: 'Text', text: /Lead: Plan/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /Lead: Plan p/ })).toBeTruthy()
   world.agents[1]!.status = 'completed'
   await clock.advance(1100)
   expect(blits.length).toBeGreaterThan(5) // the dispatch, the heartbeat and the result moved
@@ -882,7 +956,7 @@ test('hierarchy: the static fallback names CoS, Lead and primary Worker on every
   await clock.advance(1000)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...MOUNT, surface })
-    expect(await ui.find({ type: 'Text', text: /^CoS: main session \(claude-opus-5-5\) · Lead: none, the CoS leads · Worker: sonnet$/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /Lead: none, the CoS leads · Worker: sonnet a$/ })).toBeTruthy()
     await ui.unmount()
   }
 })
