@@ -19,7 +19,9 @@ Short form of `SKILL.md` for routine dispatch. Read the full `SKILL.md` and `ski
 | executive | fable | astra | judgment only: operator dialogue, decisions, briefs, verification, final acceptance; delegates all writing |
 | orchestrator | opus | sol | briefs that need design or scope judgment, review, gates |
 | workhorse | sonnet | terra | default for anything that writes: code, docs, git and PR mechanics |
-| grunt | haiku | luna | read-only: scouts, summaries, triage; writes no code |
+| grunt | haiku | luna | scouts, summaries, triage and task-authorized edits |
+
+The supervisor derives authority from the operator’s instruction or a trusted explicit declaration, records the intended scope in the dispatch, and sets `TASK_ACCESS` to `read` or `write`. A model or delegate cannot grant itself authority. `TASK_ACCESS: read` denies worker workspace writes; supervisor gates still run on the host; `TASK_ACCESS: write` requires FILES_IN_SCOPE. Existing slots without TASK_ACCESS keep their legacy permissions. The snapshot checks write scope after execution; it is not a filesystem sandbox.
 
 Roles by rung per D78. Table shows shipped defaults; operator's `roles` settings win where they differ (D80); `agents-inc doctor` prints effective values. The executive (the session that talks to the operator) delegates any task a well-briefed orchestrator or workhorse delegate can do. Pick the cheapest rung that will not get the answer wrong. Escalate on evidence of failure. State the effort level on every dispatch (default medium; `ultra` only if the operator names it).
 

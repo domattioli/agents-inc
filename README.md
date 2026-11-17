@@ -47,8 +47,6 @@ Cheap models take routine work, and costlier models manage. An author never grad
 
 Requirements: Python 3.11 or later, Bash 3.2 or later, `jq`, `curl`, and the Claude Code CLI signed in to an Anthropic subscription. The Codex CLI is optional; when present, it serves the Codex rungs and cross-vendor review.
 
-Python 3.10 support ends in the next release; the current 0.4 release stays installable on Python 3.10.
-
 ```bash
 pip install agents-inc
 agents-inc install     # skills ship in the package; no checkout needed
@@ -108,7 +106,7 @@ The higher rung manages and the lower rung reports to it, so opus is the Lead an
 | Executive | fable | astra | Final say, irreversible acts, conflicting results |
 | Orchestrator | opus | sol | Decompose, dispatch, plan |
 | Workhorse | sonnet | terra | Normal coding, research, synthesis |
-| Grunt | haiku | luna | Classify, extract, summarize; free Gemini, Mistral and OpenRouter models enter only here |
+| Grunt | haiku | luna | Classify, extract, summarize, or make task-authorized edits; free Gemini, Mistral and OpenRouter models enter only here |
 
 The CoS then runs one command. It renders the prompt, lints it, snapshots the tree, launches the delegate and checks the report:
 
@@ -117,9 +115,11 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run   # drop --dry-r
 agents-inc models chain supervisor=opus                            # change the default REPORTING CHAIN
 ```
 
-Every dispatch prompt carries a `REPORTING CHAIN` line derived from the ladder, and every launched dispatch writes one `dispatched` row to the ledger. Codex delegates can write to `--cwd` by default, the same as a Claude subagent; the slot `CODEX_WRITE: no` makes one read-only. A worked slots file is in [skills/workerbee/slots.md](https://github.com/domattioli/agents-inc/blob/main/skills/workerbee/slots.md).
+Every dispatch prompt carries a `REPORTING CHAIN` line derived from the ladder, and every launched dispatch writes one `dispatched` row to the ledger. Codex delegates can write to `--cwd` by default, the same as a Claude subagent; the slot `CODEX_WRITE: no` makes one read-only. Use `TASK_ACCESS: read` to deny worker workspace writes, or `TASK_ACCESS: write` with `FILES_IN_SCOPE` for an authorized edit. Existing dispatches without the field retain their previous permissions. Scope is checked after execution; supervisor gates run on the host. A worked slots file is in [skills/workerbee/slots.md](https://github.com/domattioli/agents-inc/blob/main/skills/workerbee/slots.md).
 
 **Narrate (prototype, macOS).** `agents-inc narrate on` enables a watcher; `agents-inc narrate run` follows the active Claude Code transcript and speaks a two-sentence digest of each new assistant message with `say`. luna writes the digest through `agents-inc run`, so message text leaves the machine: messages with a classification marker are skipped, and `--summarizer local` makes no model call. Other options: `--voice`, `--transcript`, `--decide-only`, `--once`, `--dry-run`; `off` and `status` complete the set. Design: [docs/proposals/narrate.md](https://github.com/domattioli/agents-inc/blob/main/docs/proposals/narrate.md).
+
+For a trusted MCP client, `agents-inc mcp --cwd /absolute/workspace` exposes governed dispatch, status, results, cancellation, and follow-up; see [the MCP adapter guide](docs/HOW-IT-WORKS.md#workspace-bound-mcp-adapter). Write tasks and host gates require the server’s `--allow-writes` flag.
 
 Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. With `--legacy-routes`, `@haiku <question>` inside any Claude Code session sends one side question to a cheaper model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
 

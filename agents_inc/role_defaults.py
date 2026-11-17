@@ -15,7 +15,7 @@ RUNG_ROLES = {
     "executive": "judgment only",
     "orchestrator": "design or scope judgment, review, gates",
     "workhorse": "anything that writes: code, docs, git and PR mechanics",
-    "grunt": "read-only: scouts, summaries, triage; writes no code",
+    "grunt": "scouts, summaries, triage and task-authorized edits",
 }
 # R1: the default rung for any task that writes. A code edit never defaults to the grunt rung.
 WRITE_RUNG = "workhorse"
@@ -29,7 +29,7 @@ SETTINGS_KEY = "roles"
 CLAUDE_RUNG = {"fable": "executive", "opus": "orchestrator", "sonnet": "workhorse", "haiku": "grunt"}
 DEFAULTS = {
     "write_rung": WRITE_RUNG,
-    "grunt_read_only": True,
+    "grunt_read_only": False,
     "executive_judgment_only": True,
     "native_small_edit": True,
     "native_edit_model": NATIVE_EDIT_MODEL,
@@ -111,7 +111,7 @@ def _roles(r: dict | None) -> dict:
 
 def rung_roles(r: dict | None = None) -> dict:
     r, out = _roles(r), dict(RUNG_ROLES)
-    if not r["grunt_read_only"]: out["grunt"] = "scouts, summaries, triage, small mechanical edits"
+    if r["grunt_read_only"]: out["grunt"] = "read-only: scouts, summaries, triage; writes no code"
     if not r["executive_judgment_only"]: out["executive"] = "judgment first; may write when a brief costs more than the edit"
     if r["write_rung"] == "orchestrator":
         out["orchestrator"] = "anything that writes, plus design or scope judgment, review, gates"
@@ -128,7 +128,7 @@ def executive_line(r: dict | None = None) -> str:
 def roles_line(r: dict | None = None) -> str:
     r = _roles(r)
     grunt = ("grunt (haiku, luna) is read-only: scouts, summaries, triage." if r["grunt_read_only"] else
-             "grunt (haiku, luna) does scouts, summaries, triage and small mechanical edits.")
+             "grunt (haiku, luna) may write when authorized by the task and scoped permissions.")
     if r["write_rung"] == "orchestrator":
         return ("Rungs: orchestrator (opus, sol) writes code, docs, git and PRs and does design or scope judgment, "
                 f"review, gates; workhorse (sonnet, terra) writes only when a brief names it; {grunt}")

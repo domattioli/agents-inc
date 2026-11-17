@@ -169,7 +169,7 @@ scripts/watch.sh <stderr>
   - **Review**
     - Use `--sandbox read-only` for review-only work.
   - **Caller sandbox**
-    - `agents-inc dispatch` refuses to start from inside the Claude Code Bash sandbox or a Codex sandbox, because that sandbox blocks the provider API. It exits 69 with `detail=caller-sandboxed`. Rerun it outside the sandbox, for example by adding `"agents-inc *"` to `sandbox.excludedCommands` (D65).
+    - `agents-inc dispatch` refuses to start from inside the Claude Code Bash sandbox or a Codex sandbox, because that sandbox blocks the provider API. It exits 69 with `detail=caller-sandboxed`. Rerun it outside the sandbox, for example by adding `"agents-inc dispatch *"` to `sandbox.excludedCommands` (D65; `agents-inc install` adds the narrow entries `agents-inc dispatch *`, `run *`, `repair *` and `install *`, and `repair` replaces the older `"agents-inc *"`).
 
 ## Irreversible actions
 
@@ -493,3 +493,21 @@ curl -X POST http://127.0.0.1:8787/prompt \
 - `../skills/workerbee/SKILL.md` contains the supervision discipline.
 - `../skills/codex-bridge/reference/routing-policy.md` contains routing.
 - `../skills/codex-bridge/reference/budget-mode.md` contains budget mode.
+
+### Workspace-bound MCP adapter
+
+`agents-inc mcp --cwd /absolute/workspace` starts a stdio MCP server for a trusted
+local client. It exposes `submit`, `status`, `result`, `cancel`, and `follow_up`.
+The server binds all submissions to that workspace and calls the same
+`agents-inc dispatch` command used at the terminal. Each submission must set
+`TASK_ACCESS` to `read` or `write`. Read-only Codex workers can use tools inside their read-only workspace profile and may write their scratch directory; Claude workers have no shell. Without `--allow-writes`, the server rejects
+write tasks and host command gates. With that flag, the client may request writes
+and gate commands; grant access only to a trusted client. Write scopes must be
+workspace-relative concrete paths. The dispatch snapshot checks scope after a
+run; it is not a filesystem sandbox, and a gate runs on the host.
+
+The server runs one job at a time to avoid overlapping scope checks in its workspace. Jobs and their identifiers belong to the server process. After it exits, a new
+server cannot resume those identifiers; the dispatcher retains its own run
+artifacts under the private temporary directory printed by the process. This
+adapter is separate from the Lead's credential-blind MCP broker and does not
+replace its narrower authority model. A sandbox can still block provider access.

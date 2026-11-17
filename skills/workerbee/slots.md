@@ -128,3 +128,5 @@ A full grammatical sentence is allowed ONLY where a fragment would lose real pre
 one complete sentence = you failed the task, rewrite it. When you do use a full sentence,
 it should be rare and load-bearing, not a lapse back into prose by default.
 ```
+
+`TASK_ACCESS` may be `read` or `write`: the supervisor declares the operator-authorized access. Read denies worker workspace writes; supervisor gates still run on the host; write requires `FILES_IN_SCOPE`. Omission keeps legacy permissions. The snapshot checks scope after execution.

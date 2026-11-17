@@ -57,7 +57,8 @@ D55 in `docs/DECISIONS.md` records this.
 
 ## CoS steps (cutting the release)
 
-1. Pre-tag gate. Both commands must pass:
+1. Before tagging, review the [BenchLM triage evidence](benchlm-triage.md) if a local snapshot is used: refresh it from an authorized source, verify model IDs, job, direct/proxy evidence, cohort and source date, check the applicable data terms, then run `python3 -m agents_inc.benchlm /path/to/snapshot.json`. The command validates structure and freshness, not the correctness of the source data. If no authorized current data is available, leave the advisory off; do not bundle rankings or block the release.
+2. Pre-tag gate. Both commands must pass:
    - `grep -c TODO-operator CITATION.cff .zenodo.json` prints 0 for both files.
    - `python3 -m unittest discover -s tests -p 'test_*.py'` ends with `OK`.
 2. Check that `CHANGELOG.md` has a dated `[0.6.4]` section and that `agents_inc.__version__` is `0.6.4`. The mod's `mods/agents-inc/.claude-plugin/plugin.json` carries the same version (a test checks it); without a new version, `claude plugin update` keeps the old mod.

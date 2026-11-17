@@ -77,7 +77,8 @@ def filter_hard_limits(pool: tuple[Route, ...], hard_limits: dict) -> tuple[Rout
     return pool
 
 
-def rank(eligible: tuple[Route, ...], tie_break_order: tuple[str, ...]) -> tuple[Route, ...]:
+def rank(eligible: tuple[Route, ...], tie_break_order: tuple[str, ...], *,
+         benchlm_snapshot: str | Path | None = None, benchlm_job: str | None = None) -> tuple[Route, ...]:
     """Rank eligible candidates by tie_break_order, then model ID as final tie-break."""
     if not eligible:
         return ()
@@ -103,7 +104,17 @@ def rank(eligible: tuple[Route, ...], tie_break_order: tuple[str, ...]) -> tuple
         keys.append(route.model)
         return tuple(keys)
 
-    return tuple(sorted(eligible, key=sort_key))
+    from agents_inc.benchlm import advise
+    ordered = list(sorted(eligible, key=sort_key))
+    # Evidence is a tie-breaker only; it cannot override the caller's cost/latency priorities.
+    start = 0
+    while start < len(ordered):
+        end = start + 1
+        while end < len(ordered) and sort_key(ordered[end])[:-1] == sort_key(ordered[start])[:-1]:
+            end += 1
+        ordered[start:end] = advise(tuple(ordered[start:end]), benchlm_snapshot, benchlm_job)
+        start = end
+    return tuple(ordered)
 
 
 def with_pick(run: RunRecord, ranked: tuple[Route, ...], authority: Route) -> RunRecord:
@@ -233,7 +244,8 @@ def stop(run: RunRecord, reason: str = "") -> RunRecord:
     return run
 
 
-def route_step(run: RunRecord, event: str, pool: tuple[Route, ...]) -> RunRecord:
+def route_step(run: RunRecord, event: str, pool: tuple[Route, ...], *,
+               benchlm_snapshot: str | Path | None = None, benchlm_job: str | None = None) -> RunRecord:
     """Execute routing decision matrix row.
 
     event in {"start", "failure", "insufficient_capability", "holder_cannot_continue"}.
@@ -242,7 +254,7 @@ def route_step(run: RunRecord, event: str, pool: tuple[Route, ...]) -> RunRecord
     if event == "start":
         # Row 1: Normal dispatch.
         eligible = filter_hard_limits(pool, run.hard_limits)
-        ranked = rank(eligible, run.tie_break_order)
+        ranked = rank(eligible, run.tie_break_order, benchlm_snapshot=benchlm_snapshot, benchlm_job=benchlm_job)
         return with_pick(run, ranked, authority=run.authority_holder)
 
     if event == "failure":
@@ -250,7 +262,7 @@ def route_step(run: RunRecord, event: str, pool: tuple[Route, ...]) -> RunRecord
         if count_retries(run) < run.retry_rule["max_retries"]:
             return with_retry(run, same_candidate=True)
         remaining = remove_failed(pool, run)
-        ranked = rank(remaining, run.tie_break_order)
+        ranked = rank(remaining, run.tie_break_order, benchlm_snapshot=benchlm_snapshot, benchlm_job=benchlm_job)
         return with_pick(run, ranked, authority=run.authority_holder)
 
     if event == "insufficient_capability":
@@ -259,7 +271,7 @@ def route_step(run: RunRecord, event: str, pool: tuple[Route, ...]) -> RunRecord
         if not larger_pool:
             return stop(run, reason="no capability-escalation candidate fits; ask a human")
         eligible = filter_hard_limits(larger_pool, run.hard_limits)
-        ranked = rank(eligible, run.tie_break_order)
+        ranked = rank(eligible, run.tie_break_order, benchlm_snapshot=benchlm_snapshot, benchlm_job=benchlm_job)
         if not ranked:
             return stop(run, reason="no capability-escalation candidate fits; ask a human")
         if not authority_can_still_judge(run.authority_holder, ranked[0]):

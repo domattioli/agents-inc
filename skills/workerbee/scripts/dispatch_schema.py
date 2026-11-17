@@ -140,4 +140,15 @@ def validate_record(obj, model=None) -> list[str]:
         if not any(w in allowed for w in words):
             note = "" if "ultra" in allowed else " (ultra is for a codex model only)"
             errors.append(f"EFFORT must name one of {', '.join(allowed)}{note}")
+    access = obj.get("TASK_ACCESS")
+    if access is not None and access not in ("read", "write"):
+        errors.append("TASK_ACCESS must be read or write")
+    if access == "read":
+        if obj.get("PERMISSION_MODE") not in (None, "", "default", "plan"):
+            errors.append("TASK_ACCESS read conflicts with write permission mode")
+        if str(obj.get("CODEX_WRITE", "")).lower() in ("yes", "true") or obj.get("BASH_ALLOW"):
+            errors.append("TASK_ACCESS read conflicts with write or shell grants")
+    if access == "write" and (not isinstance(obj.get("FILES_IN_SCOPE"), list) or not any(
+            isinstance(item, str) and item.strip() and not _is_none_text(item) for item in obj["FILES_IN_SCOPE"])):
+        errors.append("TASK_ACCESS write needs FILES_IN_SCOPE")
     return errors

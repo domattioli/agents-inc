@@ -1,6 +1,6 @@
 # Start here
 
-## Install (0.6.0)
+## Install (0.6.4)
 
 ```bash
 pip install agents-inc
@@ -100,17 +100,18 @@ writes one row to the ledger. Details: `HOW-IT-WORKS.md`, section
 
 ### Watching a delegate work (optional)
 
-Install also adds a small Claude Code add-on, the agents-inc mod. It lets you
-watch a delegate while it works. Start a relay subagent with
-`subagent_type: "agents-inc:relay"`, give it a model and a slots file, and open
-its transcript: short rows appear as the delegate reads, edits and runs
-commands. The final answer is the same report you get without the mod.
+Install also adds a small Claude Code add-on, the agents-inc mod. Its delegate
+models appear as native agent types, such as `agents-inc:luna`, which you call
+with the `Agent` tool. The older relay route (`subagent_type: "agents-inc:relay"`)
+is off by default. It returns only after `agents-inc install --legacy-routes`.
+With that route, a relay subagent shows short rows as the delegate reads, edits
+and runs commands. The final answer is the same report you get without the mod.
 
 - **Install:** `agents-inc install` and `agents-inc repair` add the mod when the
   `claude` command is on your PATH. Add `--no-mod` to skip it. If the step
   fails you get a warning and everything else still works.
-- **Permission:** allow the tool `mcp__agents-inc__run` in your Claude Code
-  permissions, or the relay asks each time.
+- **Permission:** with `--legacy-routes` only, allow the tool
+  `mcp__agents-inc__run` in your Claude Code permissions, or the relay asks each time.
 - **Check:** `agents-inc doctor` prints the warning `MOD_NOT_INSTALLED` when the
   mod is missing. It still says `READY`.
 - **Stop a run:** stop the relay in Claude Code. Or run

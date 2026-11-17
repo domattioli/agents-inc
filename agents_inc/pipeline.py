@@ -201,7 +201,8 @@ def brief(source_path: Path, source_id: str, mode: str, workspace: Path, confide
           available: set[str] | None = None, review_enabled: bool = True, worker_tier: str = "grunt",
           worker_provider: str | None = None, runner=run_worker, max_corrections: int = 1,
           gate_reason: str | None = None, run_budget: dict | None = None, local_only: bool = False, *, governance_mode: str | None = None, registry=None, gateway=None,
-          codex_executable: str | None = None) -> BriefResult:
+          codex_executable: str | None = None, benchlm_snapshot: str | Path | None = None,
+          benchlm_job: str | None = None) -> BriefResult:
     gov_mode = governance_mode if governance_mode is not None else os.environ.get("WORKERBEES_GOVERNANCE", "off")
     if gov_mode not in ("off", "shadow", "enforce"):
         raise ValueError(f"Invalid WORKERBEES_GOVERNANCE mode: {gov_mode}")
@@ -217,10 +218,12 @@ def brief(source_path: Path, source_id: str, mode: str, workspace: Path, confide
     if local_only:
         worker_provider = "ollama"
         route = pick_model("extract", worker_tier, avail, is_authorized(workspace),
-                          prefer_provider=worker_provider, local_authorized=is_local_authorized(workspace), local_only=True)
+                          prefer_provider=worker_provider, local_authorized=is_local_authorized(workspace), local_only=True,
+                          benchlm_snapshot=benchlm_snapshot, benchlm_job=benchlm_job)
     else:
         route = pick_model("extract", worker_tier, avail, is_authorized(workspace), prefer_provider=worker_provider,
-                          local_authorized=is_local_authorized(workspace))
+                          local_authorized=is_local_authorized(workspace),
+                          benchlm_snapshot=benchlm_snapshot, benchlm_job=benchlm_job)
     if route is None:
         if local_only:
             return BriefResult("blocked", receipt={"reason": "WB_LOCAL_UNAVAILABLE"})
