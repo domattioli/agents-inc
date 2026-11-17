@@ -6,6 +6,8 @@
     "docs/adr/**",
     "docs/teach-me/**",
     "docs/proposals/**",
+    ".specify/**",
+    "specs/**",
     "docs/governance/ASTRA-REVIEW-2.md",
     "docs/governance/FREEZE-002.md",
     "docs/governance/PLAN-BUILD-2.md",

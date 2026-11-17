@@ -255,10 +255,11 @@ def luna_line(paths: InstallPaths) -> str | None:
 
 def check_install(paths: InstallPaths, live_model: str | None = None, runner=subprocess.run,
                   models: list[dict] | None = None, catalog_path: Path | None = None,
-                  which=shutil.which, sandbox_probe=None, net_probe=None) -> DoctorReport:
+                  which=None, sandbox_probe=None, net_probe=None) -> DoctorReport:
     from .dispatch import WORKER_PATH, sandbox_available, worker_env  # lazy: dispatch is heavy and optional here
     sandbox_probe = sandbox_probe or sandbox_available
     net_probe = net_probe or dispatch_path_probe
+    which = which or shutil.which  # resolved per call so a patched shutil.which applies
     codes = []; warnings = []
     try: receipt = InstallReceipt.load(paths.receipt)
     except (OSError, ValueError):
