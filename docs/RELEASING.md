@@ -57,6 +57,8 @@ D55 in `docs/DECISIONS.md` records this.
 
 ## CoS steps (cutting the release)
 
+Before cleaning the local `.scratch` directory, inspect unpushed commits with `git rev-list --count @{u}..HEAD`, inspect `git stash list`, and review scratch files for patches or other work that has not been committed. Keep files newer than seven days and retain anything needed for active runs or recovery. Remove older unneeded files only after that review; do not delete the directory wholesale.
+
 1. Before tagging, review the [BenchLM triage evidence](benchlm-triage.md) if a local snapshot is used: refresh it from an authorized source, verify model IDs, job, direct/proxy evidence, cohort and source date, check the applicable data terms, then run `python3 -m agents_inc.benchlm /path/to/snapshot.json`. The command validates structure and freshness, not the correctness of the source data. If no authorized current data is available, leave the advisory off; do not bundle rankings or block the release.
 2. Pre-tag gate. Both commands must pass:
    - `grep -c TODO-operator CITATION.cff .zenodo.json` prints 0 for both files.
