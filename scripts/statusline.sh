@@ -245,7 +245,9 @@ fi
 git_val="${bra_dirty_c}$(pad_left 3 "$bra_dirty")${R} ${bra_ahead_c}$(pad_left 3 "$bra_ahead")${R}"
 ctx=$(pct "$ctx_raw");cl5=$(pct "$cl5_raw");cl7=$(pct "$cl7_raw");ch5=$(pct "${ch5_raw:-}");cd7=$(pct "${cd7_raw:-}")
 # Context bar scaled to autoCompactWindow
-ac_win=$(jq -r 'if .autoCompactEnabled == false then "" else (.autoCompactWindow // "") end' "$HOME/.claude/settings.json" 2>/dev/null)
+# /autocompact writes modelSettings.<model-id>.autoCompactWindow (number or "auto"); it wins over the top-level key. "auto" = no scaling.
+ac_mid=${cur_id_raw%%\[*}; case "$ac_mid" in *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ac_mid=${ac_mid%-*};; esac
+ac_win=$(jq -r --arg id "$ac_mid" 'if .autoCompactEnabled == false then "" else ((.modelSettings[$id] // {}) as $m | (if ($m|has("autoCompactWindow")) then $m.autoCompactWindow else .autoCompactWindow end) // "" | if type=="number" then tostring else "" end) end' "$HOME/.claude/settings.json" 2>/dev/null)
 cw=${ctx_size%%.*}; case "$cw" in ''|*[!0-9]*) cw=200000;; esac
 cap=$cw
 if [ -n "$ac_win" ] && [ "$ac_win" -gt 0 ] 2>/dev/null && [ "$ac_win" -lt "$cw" ]; then cap=$ac_win
