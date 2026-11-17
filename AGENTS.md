@@ -53,6 +53,8 @@ See `docs/CONTRIBUTING.md` for the docker flow.
 
 ## Project rules
 
+Proceed with work the operator has already authorized. Resolve routine choices without asking again. Use the host harness for required permission requests; respect denials, and report a blocker instead of bypassing it. A supervisor handles missing delegate grants within the original task authority.
+
 - Incremental spend is capped at $0 per task. Pause and report quota exhaustion. Do not add a paid API fallback.
 - Claude is the required provider; Codex is optional. Optional providers may handle only allowed Grunt work. Current optional-provider routing is limited to `extract` and `summarize` tasks.
 - Confidential inputs may reach optional providers only after explicit per-workspace authorization.

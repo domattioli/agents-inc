@@ -224,8 +224,8 @@ test('the second step sends only the new messages on the same thread', async ($,
   expect(delta).toContain('New messages since your last reply.')
   expect(delta).toContain('tool result: 12 lines')
   // Asks started on later steps (macOS stress, 2026-11-11): the no-ask rule rides the delta prompt too.
-  expect(delta).toContain('never ask one and never ask for confirmation')
-  expect(one.stdin).toContain('never ask one and never ask for confirmation')
+  expect(delta).toContain('use the host tool permission flow when required')
+  expect(one.stdin).toContain('use the host tool permission flow when required')
   expect(one.stdin).toContain('Session-start steps in the instructions')
   expect(delta).not.toContain('System prompt:')
   expect(delta).not.toContain('- Read: Reads a file.')

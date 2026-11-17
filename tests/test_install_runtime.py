@@ -337,6 +337,8 @@ class EmptyReplyReasonTest(unittest.TestCase):
                 run_codex("luna", "medium", raw, io.StringIO("do it"), receipt, {"gpt-6-luna": ["medium"]}, tools=True)
             text = seen.read_text()
         self.assertTrue(text.startswith(runtime.NO_ASK_PREAMBLE)); self.assertTrue(text.endswith("do it"))
+        self.assertIn("host tool permission flow", text)
+        self.assertIn("respect denials", text)
 
     def _run_host_tools(self, events):
         """A host-tools thread run whose fake Codex prints these --json events and writes no final message."""
