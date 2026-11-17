@@ -168,6 +168,28 @@ def dispatch_return_row(spec: dict) -> dict:
         "cache_read": count("cache_read"), "cache_write": count("cache_write"), "files_created": None,
         "verdict": {"green": "pass", "red": "fail"}.get(outcome), "cwd": spec.get("cwd"), "source": "dispatch",
         "timestamp": ledger._now_iso(),
+        **_measured_fields(spec),
+    }
+
+
+def _measured_fields(spec: dict) -> dict:
+    """Spec 042 contracts/return-row.md: the measured fields of a return row, read from the run spec. Absent parts stay
+    empty (old runs, refusals before a gate), so a reader of older rows sees the same keys either way."""
+    scope, claims = spec.get("scope"), spec.get("claims")
+    return {
+        "dispatch_row_id": spec["run_id"],
+        "exit_code": spec.get("exit_code"),
+        "state": spec.get("state"),
+        "gate_results": [{"id": g.get("id"), "argv0": (g.get("argv") or [""])[0], "state": g.get("state"),
+                          "rc": g.get("rc"), "reason": g.get("reason")} for g in spec.get("gate_results") or []],
+        "scope": ({"state": scope.get("state"), "foreign_count": len(scope.get("foreign") or []),
+                   "in_scope_count": len(scope.get("in_scope") or []),
+                   **{k: len(scope[f]) for k, f in (("unreadable_count", "unreadable"), ("unbaselined_count", "unbaselined"))
+                      if scope.get(f)}} if scope else None),
+        "claims": ({"state": claims.get("state"), "unsupported": claims.get("unsupported", 0),
+                    "items": claims.get("items") or [], "omitted": claims.get("omitted") or [],
+                    "weak": claims.get("weak") or [],
+                    **({"not_checked": claims["not_checked"]} if claims.get("not_checked") else {})} if claims else None),
     }
 
 

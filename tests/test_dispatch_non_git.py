@@ -56,7 +56,7 @@ class NonGitBase(DispatchBase):
 
 class ReadOnlyRunsTest(NonGitBase):
     def _assert_skipped(self, rc, out, rec, kind):
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         self.assertEqual(len(rec.calls), 1, out)
         self.assertEqual(rec.calls[0]["kind"], kind)
         self.assertTrue(rec.calls[0]["kw"].get("read_only"))
@@ -93,7 +93,7 @@ class ReadOnlyRunsTest(NonGitBase):
         rec = Recorder()
         with mock.patch.object(dispatch, "launch", side_effect=rec):
             rc, out, _ = self.main("--resume", self.run_dir().name, "--message", "go on", "--run-dir", str(self.runs))
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         self.assertTrue(rec.calls[0]["kw"].get("read_only"))
         self.assertIn("snapshot=skipped outcome=unverified reason=snapshot-skipped", out)
 
@@ -141,7 +141,7 @@ class GitCwdUnchangedTest(NonGitBase):
         sub.mkdir(parents=True)
         self.assertTrue(dispatch.in_git_work_tree(sub))
         rc, out, _, rec = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=sub)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         spec = self.spec()
         self.assertNotEqual(spec["snapshot"], "skipped")
         self.assertTrue((self.run_dir() / "snapshot.json").is_file())
@@ -151,7 +151,7 @@ class GitCwdUnchangedTest(NonGitBase):
 
     def test_forged_skip_in_git_cwd_resume_refused(self):  # F3
         rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.repo)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         path = self.run_dir() / "run.json"
         spec = json.loads(path.read_text())
         spec["snapshot"] = "skipped"
@@ -165,7 +165,7 @@ class GitCwdUnchangedTest(NonGitBase):
     def test_resume_after_repo_removed_is_refused(self):
         work = self.repo
         rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=work)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         shutil.rmtree(work / ".git")
         rec = Recorder()
         with mock.patch.object(dispatch, "launch", side_effect=rec):
@@ -176,7 +176,7 @@ class GitCwdUnchangedTest(NonGitBase):
 
     def test_resume_of_captured_read_only_run_after_repo_removed_is_refused(self):
         rc, out, _, _ = self.go("luna", self.ro_slots(CODEX_WRITE="no"), cwd=self.repo)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         shutil.rmtree(self.repo / ".git")
         rec = Recorder()
         with mock.patch.object(dispatch, "launch", side_effect=rec):
@@ -210,7 +210,7 @@ class FreePathTest(NonGitBase):
     def test_free_non_git_skips_capture(self):
         rc, out, err, calls = self._go_free(self.plain)
         self.assertEqual(len(calls), 1, out + err)
-        self.assertEqual(rc, dispatch.EXIT_OK, out + err)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out + err)
         spec = self.spec()
         self.assertEqual((spec["snapshot"], spec["reason"]), ("skipped", "snapshot-skipped"))
         self.assertFalse((self.run_dir() / "snapshot.json").exists())
@@ -232,7 +232,7 @@ class FreePathTest(NonGitBase):
 class MoreNonGitTest(NonGitBase):
     def test_resume_after_cwd_became_git_refused(self):  # F3
         rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         subprocess.run(["git", "init", "-q", str(self.plain)], check=True)
         rec = Recorder()
         with mock.patch.object(dispatch, "launch", side_effect=rec):
@@ -243,7 +243,7 @@ class MoreNonGitTest(NonGitBase):
 
     def test_verify_red_when_cwd_now_git_with_skipped_trust(self):
         rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         subprocess.run(["git", "init", "-q", str(self.plain)], check=True)
         rc, log, snap = dispatch._snapshot_verify(self.spec(), self.run_dir())
         self.assertEqual(rc, 1, log)
@@ -252,7 +252,7 @@ class MoreNonGitTest(NonGitBase):
     def test_ledger_row_of_skipped_run(self):
         from agents_inc import host_ledger
         rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         row = host_ledger.dispatch_return_row(self.spec())
         self.assertEqual(row["status"], "unverified")
         self.assertIsNone(row["verdict"])
@@ -318,7 +318,7 @@ class CwdScopeTest(NonGitBase):
     def _resume_refused(self, cwd, word):
         """A first turn skipped in plain, then run.json's cwd moved to cwd: the resume must refuse before launch."""
         rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         path = self.run_dir() / "run.json"
         spec = json.loads(path.read_text())
         spec["cwd"] = str(cwd)
@@ -382,12 +382,12 @@ class CwdScopeTest(NonGitBase):
                 self.assertIs(dispatch.in_git_work_tree(cwd), False)
                 self.assertIsNone(dispatch.broad_cwd(cwd))
                 rc, out, _, rec = self.go("terra", self.ro_slots(CODEX_WRITE="no"), cwd=cwd)
-                self.assertEqual(rc, dispatch.EXIT_OK, out)
+                self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
                 self.assertEqual(len(rec.calls), 1)
 
     def test_broad_cwd_on_resume_refused(self):
         rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         secret = self.root / ".codex" / "sub"
         secret.mkdir(parents=True)
         path = self.run_dir() / "run.json"
@@ -403,11 +403,11 @@ class CwdScopeTest(NonGitBase):
 
     def _resume_read_only(self, model, slots):
         rc, out, _, _ = self.go(model, self.ro_slots(**slots), cwd=self.plain)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
         rec = Recorder()
         with mock.patch.object(dispatch, "launch", side_effect=rec):
             rc, out, err = self.main("--resume", self.run_dir().name, "--message", "go", "--run-dir", str(self.runs))
-        self.assertEqual(rc, dispatch.EXIT_OK, out + err)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out + err)
         self.assertIs(rec.calls[0]["kw"].get("read_only"), True)
 
     def test_resume_passes_read_only_claude(self):
@@ -419,7 +419,7 @@ class CwdScopeTest(NonGitBase):
     def test_broker_child_skip_path(self):
         with mock.patch.object(dispatch, "_BROKER_SAFE_WRITES", True), mock.patch.object(dispatch, "_WORKER_ASK", "r1"):
             rc, out, err, rec = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
-        self.assertEqual(rc, dispatch.EXIT_OK, out + err)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out + err)
         self.assertEqual(self.spec()["snapshot"], "skipped")
         self.assertIs(rec.calls[0]["kw"].get("read_only"), True)
         self.assertEqual(json.loads((self.run_dir() / "trust.json").read_text())["snapshot"], "skipped")
@@ -657,7 +657,7 @@ class UnitTest(unittest.TestCase):
 class ReviewFixesTest(NonGitBase):
     def _skipped_run(self):
         rc, out, _, _ = self.go("haiku", self.ro_slots(PERMISSION_MODE="plan"), cwd=self.plain)
-        self.assertEqual(rc, dispatch.EXIT_OK, out)
+        self.assertEqual(rc, dispatch.EXIT_UNVERIFIED, out)
 
     def test_resume_asks_git_once(self):  # a cwd that turns into a git tree between two asks must not drop the flags
         self._skipped_run()

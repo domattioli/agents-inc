@@ -1,0 +1,126 @@
+quickstart.md live run — 2026-09-12/13, executed by Sonnet (Supervisor-self, T040) against a real running codex-bridge (localhost:8787), real `codex exec` calls (operator-authorized for this run only).
+
+PRECONDITION — roster verification (constitution P7, W-13):
+  ~/.codex/config.toml: model = "gpt-5.6-sol", model_reasoning_effort = "low"
+  ~/.codex/models_cache.json roster includes: gpt-6-astra, gpt-reserve, gpt-5.6-sol,
+  gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, codex-auto-review
+  -> all 3 slugs the script names (gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra) are live and
+     current. No substitution needed.
+
+INCIDENT DURING RUN (not a spec-010 code defect — recorded for the record):
+  First attempt (mandate run-20260912213233) surfaced identical thread_id for two
+  independently-fresh role engagements (executive vs supervisor), which looks exactly like
+  the isolation defect spec-010 exists to fix. Root-caused instead to a STALE BRIDGE PROCESS:
+  the running `bridge.py` (PID 93590) had started at 2:31PM, before this session's bridge.py
+  edits (mtime 19:09, committed 21:26) were ever loaded — it was running pre-spec-010 code.
+  Confirmed via `ps -ef` (start time) vs `git log -1 --format=%ci -- bridge.py` (commit time),
+  and via two bare `codex exec` calls bypassing the bridge entirely (distinct thread_ids both
+  times, proving the CLI itself is not the source). Fixed by `down.sh` + `up.sh --force` to
+  reload current code; discarded the polluted mandate (run-20260912213233) and re-ran from
+  step 1 on a fresh mandate (run-20260912214101). All results below are from the clean run.
+  LESSON-CANDIDATE: a live quickstart/acceptance run against a long-lived bridge process
+  should verify (or force) that the running process reflects the current source before
+  trusting any result — a stale in-memory server can silently reproduce the exact defect
+  under test. Not checked against docs/DECISIONS.md canon this pass (no budget) — flagged as
+  candidate only.
+
+MANDATE: run-20260912214101
+
+Step 1 (executive, fresh):
+  job-34b5032e3b04d17c, exit_code 0
+  result.json: mode=fresh, thread_id=01a0986c-cb70-76d0-aa22-369eb9788970
+  PASS
+
+Step 2 (supervisor, fresh — isolation proof):
+  job-9bc2b329edb4a4ff, exit_code 0
+  result.json: mode=fresh, thread_id=01a0986d-85ef-7f73-99fa-21ac8ea7911a (DIFFERENT from
+    executive's — isolation confirmed)
+  Cross-talk probe job-1a00e6212fb74606: asked supervisor for the passphrase -> "unknown"
+    (never saw the executive's briefing)
+  PASS
+
+Step 3 (supervisor escalation -> executive resumed, no re-briefing):
+  job-dbef625650ae96a0, prompt "Supervisor escalation: what is the passphrase? Answer with
+    the word only." -> result.txt: "OCELOT-41"
+  result.json: mode=resumed, prior_engagement=job-34b5032e3b04d17c
+  PASS
+
+Step 3a (SC-001 automated test):
+  python3 -m unittest tests.test_mandate_session.MandateSessionTest.test_submit_mandate_prompt_body_byte_identical_no_preamble -v
+  -> OK (1 test)
+  PASS
+
+Step 3a-ii (live corroboration, read-only):
+  Read job-dbef625650ae96a0's result.json: prompt field byte-identical to Q3, mode=resumed
+  -> "SC-001 corroboration PASS: recorded round-2 prompt byte-identical, mode=resumed"
+  PASS
+
+Step 3b (FR-014/C3 — mandate dispatch does not steal the global thread):
+  PARENT=job-482235928aa5727a ("my codeword is BADGER-7")
+  mandate ping job-df8c38da2bdcb1c1 dispatched in between
+  follow-up job-73a57e5db9d42136 on PARENT -> result.txt: "BADGER-7" (global thread intact)
+  follow-up with --mandate/--role flags -> exit 2, "follow-up does not accept mandate flags
+    in v1; use submit --mandate"
+  PASS
+
+Step 4 (control — fresh dispatch, no mandate):
+  job-7f0f733faa7e1068 -> result.txt: "BADGER-7" (continues the still-active global thread,
+    correctly NOT OCELOT-41)
+  PASS
+
+Step 5 (duplicate guard, first guard):
+  J5=job-e51e52ffbcdb497c (no --wait, long task)
+  second submit -> exit 7, "mandate run-20260912214101 role executive in flight:
+    job-e51e52ffbcdb497c (use --force to override)"
+  PASS
+
+Step 5a (in-flight close refusal):
+  mandate close --by lead --reason "premature" -> exit 10, "... has role executive in
+    flight: job-e51e52ffbcdb497c (use --force to close anyway)"
+  mandate show -> state: open (refused close wrote nothing)
+  PASS
+
+Step 5b: waited on J5 (exit_code 0, ~83s) to clear the in-flight engagement.
+
+Step 6 (model mismatch, second guard, reachable only after 5b):
+  submit --model gpt-5.6-terra on executive role (opened with gpt-6-astra) -> exit 7,
+  "mandate run-20260912214101 role executive opened with gpt-6-astra, requested
+   gpt-5.6-terra (use --force to override)"
+  PASS
+
+Step 7 (process-restart survival — read-only):
+  mandate show .roles.executive.thread_id -> "01a0986c-cb70-76d0-aa22-369eb9788970" (same
+    as step 1, unchanged across every command above being a fresh process reading the file)
+  PASS
+
+Step 8 (close, third guard, no role in flight):
+  mandate close --by lead --reason "quickstart done" -> exit 0, "mandate ... closed by lead"
+  state -> closed
+  PASS
+
+Step 8a (--by allowlist fails closed, validation precedes state inspection):
+  M2=run-20260912215231-by, opened + engaged (job-64a32f9cea1e0024)
+  close --by grunt        -> exit 2, "--by must be one of: ceo, lead" (state stayed open)
+  close --by ""           -> exit 2, same message                     (state stayed open)
+  mandate show M2 state   -> open (confirmed no write on refused close)
+  close --by ceo          -> exit 0, closed
+  close --by lead         -> exit 0, "already closed ... by ceo" (idempotent)
+  close --by grunt        -> exit 2, same message (validation precedes idempotency, C2a step1)
+  submit on closed M      -> exit 8, "mandate run-20260912214101 closed at ... by lead; open
+                              a new mandate"
+  PASS (all sub-checks)
+
+Step 9 (stale warning, simulated on a separate seeded fixture — never reopens the real
+  closed mandates, per data-model.md's open->closed-only invariant):
+  M3=run-stale-20260912215405, seeded opened_at=2026-01-01 (age 255d)
+  mandate list ->
+    WARN: mandate run-stale-20260912215405 open 255d
+    run-20260912214101 closed ... (no WARN)
+    run-20260912215231-by closed ... (no WARN)
+    run-stale-20260912215405 open ... age=255d
+  WARN fired only for the stale mandate, correctly absent for both closed ones. Fixture
+  removed after.
+  PASS
+
+RESULT: 12/12 checkpoints (2, 3, 3a, 3a-ii, 3b, 4, 5, 5a, 6, 8, 8a, 9) PASS.
+SC-002, SC-006, R-B, Gate I-G4/I-G5/I-G8/I-G9: satisfied by this transcript.

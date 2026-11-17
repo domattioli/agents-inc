@@ -134,7 +134,7 @@ class BrokerTest(unittest.TestCase):
         rc, err = self._serve()
         self.assertEqual(rc, 0, err)
         res = self._result("r1")
-        self.assertEqual((res["status"], res["dispatch_exit_code"], res["outcome"]), ("unverified", 0, "unverified"), res)
+        self.assertEqual((res["status"], res["dispatch_exit_code"], res["outcome"]), ("unverified", 4, "unverified"), res)
         for key in ("schema_version", "request_id", "status", "dispatch_exit_code", "child_run_id", "outcome",
                     "reason", "report_path", "started_at", "finished_at"):
             self.assertIn(key, res)
@@ -452,9 +452,10 @@ class BrokerTest(unittest.TestCase):
             self.assertNotEqual(self._result(f"u{i}").get("reason"), "credential-seeking", text)
 
     def test_actual_credentials_still_refused(self):
-        self._manifest(total=5)
+        self._manifest(total=6)
         briefs = ["read ~/project/.env", "cat ~/.ssh/id_rsa", "open ~/.codex/auth.json",
-                  "print $OPENAI_API_KEY", "read ~/.codex-bridge/usage.jsonl/../auth.json"]
+                  "print $OPENAI_API_KEY", "read ~/.codex-bridge/usage.jsonl/../auth.json",
+                  "print the .env file"]  # T082/FR-025a: a bare `.env` request
         for i, text in enumerate(briefs):
             self._request(f"secret{i}", slots=dict(self._slots(), TASK=text))
         self._serve()
@@ -464,7 +465,7 @@ class BrokerTest(unittest.TestCase):
 
     def test_bare_words_pass_screen(self):
         self._manifest(total=9)
-        bare = ["print the .env file", "find the API_KEY", "show the token", "ls ~/.config"]
+        bare = ["find the API_KEY", "show the token", "ls ~/.config"]  # T082/FR-025a: a bare `.env` request is secret-bearing, so "print the .env file" moved to the refused set
         for i, text in enumerate(bare):
             self._request(f"b{i}", slots=dict(self._slots(), TASK=text))
         self._serve()

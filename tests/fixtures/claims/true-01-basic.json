@@ -1,0 +1,31 @@
+{
+ "name": "true-01-basic",
+ "report": "done.\n```claims\nfiles_changed: a.py, b.md\ngates: g1=0\ntests: g1=42\nstopped: none\n```\n",
+ "run": {
+  "changed": [
+   "a.py",
+   "b.md"
+  ],
+  "gate_results": [
+   {
+    "id": "g1",
+    "argv": [
+     "pytest"
+    ],
+    "rc": 0,
+    "expect_rc": 0,
+    "state": "passed",
+    "excerpt": "Ran 42 tests\nOK"
+   }
+  ],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "checked",
+  "items": [],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": null
+ }
+}

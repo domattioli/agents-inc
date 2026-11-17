@@ -1,0 +1,37 @@
+{
+ "name": "false-11-multiple-blocks",
+ "report": "done.\n```claims\nfiles_changed: x.py\ngates: g1=0\ntests: g1=1\nstopped: none\n```\ndone.\n```claims\nfiles_changed: a.py\ngates: g1=0\ntests: g1=42\nstopped: none\n```\n",
+ "run": {
+  "changed": [
+   "a.py"
+  ],
+  "gate_results": [
+   {
+    "id": "g1",
+    "argv": [
+     "pytest"
+    ],
+    "rc": 0,
+    "expect_rc": 0,
+    "state": "passed",
+    "excerpt": "Ran 42 tests\nOK"
+   }
+  ],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "checked",
+  "items": [
+   {
+    "kind": "claims-block",
+    "claimed": "2 blocks",
+    "observed": "1 block allowed",
+    "reason": "multiple-claims-blocks"
+   }
+  ],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": null
+ }
+}

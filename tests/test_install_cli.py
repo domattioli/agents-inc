@@ -55,6 +55,24 @@ class CliTest(unittest.TestCase):
             self.assertIn(paths.launcher, retained)
 
 
+class DispatchHelpFlagsTest(unittest.TestCase):
+    def _cli(self, *args):
+        return subprocess.run([sys.executable, "-m", "agents_inc.install.cli", "dispatch", *args], text=True, capture_output=True)
+
+    def test_rules_lists_every_rule(self):
+        from agents_inc.install import rules
+        r = self._cli("--rules")
+        self.assertEqual(r.returncode, 0)
+        for rid in rules.RULES:
+            self.assertIn(f"{rid}: ", r.stdout)
+
+    def test_print_template_is_a_slots_file(self):
+        import json
+        r = self._cli("--print-template")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("ROLE", json.loads(r.stdout))
+
+
 class RunGuardTest(unittest.TestCase):
     def test_run_rejects_claude_alias_and_passes_codex_alias(self):
         import contextlib, io
@@ -155,12 +173,12 @@ class RepairFailureTest(unittest.TestCase):
                 self.assertIn("run `agents-inc repair` from a normal terminal", err.getvalue())  # #155 (b): names the sandbox cause
                 marker = paths.state / "repair-failed.json"
                 self.assertTrue(marker.is_file())
-                report = check_install(paths, which=lambda *a, **k: '/x/claude', sandbox_probe=lambda: True)
+                report = check_install(paths, which=lambda *a, **k: '/x/claude', sandbox_probe=lambda: True, net_probe=lambda: True)
                 self.assertIn("WB_REPAIR_FAILED", report.codes)
                 self.assertFalse(report.ready)
                 self.assertEqual(cli.install(args), 0)
                 self.assertFalse(marker.exists())
-                self.assertNotIn("WB_REPAIR_FAILED", check_install(paths, which=lambda *a, **k: '/x/claude', sandbox_probe=lambda: True).codes)
+                self.assertNotIn("WB_REPAIR_FAILED", check_install(paths, which=lambda *a, **k: '/x/claude', sandbox_probe=lambda: True, net_probe=lambda: True).codes)
 
 
 class PackagedInstallTest(unittest.TestCase):

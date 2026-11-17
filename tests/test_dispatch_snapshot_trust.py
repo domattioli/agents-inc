@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from agents_inc.install import cli, dispatch
-from tests.test_dispatch_cli import EXAMPLE, GOOD_REPORT, STATUS_RE, _git_repo
+from tests.test_dispatch_cli import EXAMPLE, GOOD_REPORT, assert_status_output, _git_repo
 
 
 class DispatchBase(unittest.TestCase):
@@ -79,7 +79,7 @@ class SnapshotTrustTest(DispatchBase):
     def _assert_tampered(self, edit):
         rc, out, _ = self.dispatch(self._tamper(edit))
         self.assertEqual(rc, 1, out)
-        self.assertRegex(out.strip(), STATUS_RE)
+        assert_status_output(self, out)
         self.assertIn("snapshot=TAMPERED", out)
         spec = self.spec()
         self.assertEqual((spec["outcome"], spec["reason"]), ("red", "snapshot-tampered"))

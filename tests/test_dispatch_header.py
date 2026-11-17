@@ -57,6 +57,34 @@ class _Tmp(unittest.TestCase):
                               capture_output=True, text=True, timeout=60, cwd=str(self.dir))
 
 
+class ClaimsInstructionTest(_Tmp):
+    """Spec 042 phase 2 (T026, T075): the claims block instruction, gate ids, the single stop id; a missing block is advisory."""
+
+    def test_claims_instruction_is_in_the_prompt_with_and_without_contract_ref(self):
+        for extra in ((), ("--contract-ref", "skills/workerbee/header.md")):
+            with self.subTest(extra=extra):
+                proc = self.render(FULL_SLOTS, *extra)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(proc.stdout.count("CLAIMS BLOCK:"), 1)
+                if not extra:
+                    self.assertEqual(self.lint(proc.stdout, "--tier", "grunt").returncode, 0)
+
+    def test_gates_print_their_ids_and_the_stop_rule_is_one_rule_s1(self):
+        proc = self.render({**FULL_SLOTS, "GATES": [{"argv": ["true"]}, {"argv": ["false"], "expect_rc": 1}],
+                            "STOP_RULE": "stop after 2 failed runs; report RED. Then hand back."})
+        self.assertIn("g1: `true`", proc.stdout)
+        self.assertIn("g2: `false`", proc.stdout)
+        self.assertIn("STOP RULE: s1: stop after 2 failed runs; report RED. Then hand back.", proc.stdout)
+        self.assertNotIn("s2:", proc.stdout)
+
+    def test_missing_claims_block_is_advisory_for_the_report_profile(self):
+        report = self.dir / "report.md"
+        report.write_text("caveman ultra. GRILL: none. [verified] gate rc=0 exit code 0.\nOUT OF SCOPE / INCOMPLETE: none\nWORKERS SPAWNED: 0\n")
+        proc = subprocess.run([sys.executable, str(LINT), str(report), "--profile", "report"], capture_output=True, text=True, timeout=60)
+        self.assertEqual((proc.returncode, proc.stdout.strip()), (0, "COMPLIANT"), proc.stdout)
+        self.assertIn("claims-block-missing", proc.stderr)
+
+
 class HeaderRenderTest(_Tmp):
     def test_header_plus_slots_is_compliant(self):
         proc = self.render(FULL_SLOTS)

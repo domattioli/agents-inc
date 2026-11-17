@@ -21,6 +21,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from agents_inc.install import dispatch as D  # noqa: E402
+from agents_inc.install import rules  # noqa: E402
+
+
+def with_refusal(data: dict, reason, detail=None) -> dict:
+    """Spec 042 FR-022: add the refusal text beside the unchanged status, reason and request_id."""
+    return dict(data, refusal=rules.refuse(rules.broker_rule_id(str(reason)), detail or reason))
 
 SUPPORTED_VERSIONS = ("2025-06-18", "2024-11-05")  # newest first; the first is the fallback
 STRUCTURED_VERSION = "2025-06-18"
@@ -35,8 +41,8 @@ TOOLS = [
      "CONSTRAINTS must include: 'Stop-on-block: if a hook or permission classifier blocks a tool call, stop and hand "
      "back to the dispatcher; never switch tool to route around it.' SUCCESS_GATE and FAILURE_GATE each name a "
      "command in backticks. PRE_EXISTING_CHANGES may be 'snapshot <snapshot>' (the broker fills the path). "
-     "A Worker that writes nothing: ALLOWLIST 'none -- do all work yourself', FAN_OUT 'width 0, total 0, depth 0'. "
-     "A Worker never leads: FAN_OUT must be 'width 0, total 0, depth 0' or omitted (else worker-cannot-lead).",
+     "A Worker that writes nothing: ALLOWLIST 'none -- do all work yourself'. "
+     "A Worker never leads: FAN_OUT 'width 0, total 0, depth 0' or omitted (else worker-cannot-lead).",
      "inputSchema": {"type": "object", "required": ["model", "effort", "slots"], "properties": {
          "model": {"type": "string"}, "effort": {"type": "string"},
          "slots": {"type": "object", "additionalProperties": {"type": "string"}}}}},
@@ -46,7 +52,7 @@ TOOLS = [
      "Returns status needs-lead early when the Worker asked a question.",
      "inputSchema": {"type": "object", "required": ["request_id"], "properties": {
          "request_id": {"type": "string"}, "timeout": {"type": "number"}}}},
-    {"name": "resume", "description": "Send a follow-up message to a finished Worker (green or red) as a new turn in "
+    {"name": "resume", "description": "Follow up a finished Worker (green or red) in "
      "the same session. Returns the new request id <id>-r<n>, the result and the report. Cap: 1 resume for a "
      "Grunt Worker, 2 otherwise.",
      "inputSchema": {"type": "object", "required": ["request_id", "message"], "properties": {
@@ -341,6 +347,8 @@ def handle(broker: Broker, msg) -> dict | None:
             data, is_error, note = {"status": "refused", "reason": exc.code}, True, f"parent refused:{exc.code}"
         except Exception as exc:  # one bad call never stops the server
             data, is_error, note = {"status": "red", "reason": f"exception:{type(exc).__name__}"}, True, f"exception:{type(exc).__name__}"
+        if isinstance(data, dict) and data.get("status") == "refused" and "refusal" not in data:
+            data = with_refusal(data, data.get("reason"), data.get("reason_detail"))
         log_line(broker.run_dir, f"tool={name} {'error' if is_error else 'ok'} {note}")
         result = {"content": [{"type": "text", "text": json.dumps(data, indent=1)}], "isError": is_error}
         if (broker.version == STRUCTURED_VERSION and isinstance(data, dict)

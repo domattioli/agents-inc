@@ -1,0 +1,28 @@
+{
+ "name": "false-10-no-report-block",
+ "report": "I did everything.\n",
+ "run": {
+  "changed": [],
+  "gate_results": [
+   {
+    "id": "g1",
+    "argv": [
+     "pytest"
+    ],
+    "rc": 0,
+    "expect_rc": 0,
+    "state": "passed",
+    "excerpt": "Ran 42 tests\nOK"
+   }
+  ],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "not-checked",
+  "items": [],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": "claims-block-missing"
+ }
+}

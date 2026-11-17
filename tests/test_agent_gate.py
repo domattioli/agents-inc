@@ -142,7 +142,8 @@ class GateDenyTest(_Gate):
 
     def test_persona_deny_still_wins_with_its_exact_fr002_reason(self):
         result = self.run_hook(payload("general-purpose", description="terra: implement X"))
-        self.assertEqual(self.reason(result), PERSONA_REASON)
+        self.assertTrue(self.reason(result).startswith(PERSONA_REASON))  # spec 042: refusal text appended
+        self.assertIn("refused: hook-persona", self.reason(result))
         self.assertTrue(self.reason(result).startswith("FR-002:"))
 
     def test_bash_and_delegate_agent_are_never_gate_denied(self):
@@ -237,7 +238,7 @@ class GateCliTest(_Gate):
 
     def test_doctor_json_shape_unchanged_by_gate(self):
         _, text = self.cli_out(["doctor", "--json"])
-        self.assertEqual(set(json.loads(text)), {"ready", "codes", "live", "warnings"})
+        self.assertEqual(set(json.loads(text)), {"ready", "codes", "live", "warnings", "items"})  # spec 042 FR-017: items added
 
     def test_install_notice_text_names_unwire_env_bypass_and_settings_json(self):
         text = hook.gate_notice(self.paths)

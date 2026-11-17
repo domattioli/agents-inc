@@ -50,18 +50,7 @@ Free slugs (see `agents_inc/install/free_launch.py`) are dispatchable. Add `TASK
 
 ## Failure Mode This Solves
 
-Documented in session `33338e35-4ce9-43db-8cf0-624adf37e136` (2026-09-04/05).
-
-A supervisor delegating heavily accepts delegate self-reports because they
-arrive formatted as evidence. In one session three separate GREEN gates
-were false: an alignment gate that printed the delegate's intended array
-rather than its rendered output (claimed columns `0 12 44 91 124`, measured
-`0 12 49 122 214 329 446`); a harness that passed while row labels silently
-vanished from live output because it measured 4 boundaries on rows holding
-7 items; and a timing claim of `0.664s` that measured `0.461s`. None were
-dishonesty — each was a delegate grading its own work. Separately, a null
-price coerced to zero inflated a reported savings figure ~29x, from a
-defensible `$1.15` to `$33.06`.
+Load `references/history.md` when you need the incident that motivated this skill.
 
 ## Protocol
 
@@ -299,35 +288,7 @@ Gemini/Mistral/OpenRouter have no vendor-marketed codenames like astra/luna — 
 
 #### Step 1b: Discover models at runtime — don't hardcode, verify
 
-Nicknames, slugs, and available effort levels can change per Codex-account
-config. Before trusting this table on a machine or account you have not
-just verified, run:
-
-```bash
-# What's the current default model + effort for this Codex account?
-grep -E '^model' ~/.codex/config.toml
-# → model = "gpt-6-astra"
-# → model_reasoning_effort = "medium"
-
-# Full roster this account can see, with per-model reasoning levels:
-python3 -c "
-import json
-d = json.load(open('$HOME/.codex/models_cache.json'))
-for m in d['models']:
-    slug = m.get('slug') or m.get('id') or ''
-    levels = [e['effort'] for e in m.get('supported_reasoning_levels', [])]
-    print(slug, '|', m.get('display_name'), '| effort levels:', levels)
-"
-
-# Is a vendor CLI/credential actually present before you write a roster row for it?
-which codex; which gemini; which mistral
-ls ~/.codex-bridge/*-key 2>/dev/null   # gemini-key, openrouter-key present = wired
-ls ~/.config/devstral 2>/dev/null       # mistral agent creds present = wired
-```
-
-Never document a vendor row from memory or from a prior session's table —
-re-run this before dispatching to a nickname you have not already
-confirmed exists on this account, this session.
+Load `references/models-runtime.md` before writing or refreshing a roster row (runtime model discovery commands).
 
 #### Step 1c: Reasoning effort is an operator cost decision, not a model default
 
@@ -452,32 +413,7 @@ Self-test the poller both ways before trusting it, same bar as any harness
 
 ### Step 3b: Visibility contract — what the operator can and cannot see
 
-Claude `Agent` subagents stream into the transcript; codex-bridge jobs do
-not, and cannot. Bash tool output reaches the session only at command
-completion — no user-space script can push incremental lines into a
-transcript mid-run. This is a harness boundary, not a missing feature.
-What IS achievable, and is therefore required:
-
-1. **Default to blocking dispatch.** `agent.sh submit --backend <b> --wait`
-   run in the foreground returns into the transcript exactly like an `Agent`
-   call. Use it unless the job is long enough to need a background slot, and
-   say why when you don't. Exception: for `--backend codex` with luna, `--wait`
-   is broken (bridge daemon can't see codex on PATH); use the `DelegateAgent`
-   MCP tool instead for real-time transcript return. `--wait` remains the default
-   for gemini/mistral/openrouter backends.
-2. **Async submit → emit the watch line in the same turn, unasked.** Print
-   `scripts/watch.sh ~/.codex-bridge/jobs/<id>/stdout.log` immediately. The
-   operator's live view is a pane, not the transcript — it costs zero
-   context and is the only true live signal that exists.
-3. **Checkpoint with `poll.sh --once`, not a continuous poller in context.**
-   One state line per checkpoint the session was already going to hit.
-   Continuous polling into the transcript spends the tokens delegation saves.
-4. **Never narrate a job you are not polling.** "It's still working" without
-   a poll line is a guess; `DIED` and `thinking` look identical from outside.
-
-Real streaming parity would need an MCP server wrapping codex-bridge and
-exposing a streaming tool — different infrastructure, out of scope for a
-discipline skill. Do not re-litigate it as a doc gap.
+Load `references/operator-visibility.md` when you submit async work or must tell the operator what they can see (watch.sh, transcripts).
 
 ### Step 3c: Keep a delegate until its context ceiling
 
@@ -558,39 +494,11 @@ defensible figure was `$1.15`.
 
 ### Step 6: Feed stateless buddies real source
 
-Free-tier models see only your prompt. Given a *description* of a
-function, they will invent a plausible one that does not exist — this
-burned a whole collaboration round.
-
-Paste verbatim source, real sample rows, actual command output. And:
-**buddy output is never evidence.** Verify anything you keep against the
-real system yourself, with a citation.
-
-Expect provider failure. Observed verbatim:
-
-```
-ask_openrouter: API error: Upstream error from Nvidia: Service temporarily overloaded
-ask_gemini: API error: This model is currently experiencing high demand.
-ask_mistral: API error: Not enough capacity available for this request, please retry later.
-```
-
-Fail over across the family. Never stall on one dead provider.
+Load `references/stateless-and-sandbox.md` when you dispatch to a bare-API wrapper (gask/mask/oask) or a sandboxed delegate.
 
 ### Step 7: Know the sandbox gotchas
 
-- A delegate under `workspace-write` has **no network**. HTTP buddies fail
-  with `Could not resolve host: ...`. Fix:
-  `-c 'sandbox_workspace_write.network_access=true'`.
-- The same sandbox blocks `.git/index.lock`, so delegates **cannot
-  commit**. Expect `Operation not permitted`. Have the delegate report
-  `BLOCKED-SANDBOX` and land the commit yourself.
-- Do not commit while a delegate's snapshot is live: the commit moves HEAD
-  and the delegate's verify fails for a change it did not make. If a commit
-  is unavoidable, re-capture the snapshot and re-issue it to the delegate.
-- `--skip-git-repo-check` is required outside a git repo.
-- Read-only sandbox is the cheapest way to enforce a review-only scope. Do
-  not rely on the model honoring "do not edit" when the sandbox can
-  guarantee it.
+Load `references/stateless-and-sandbox.md` when a sandboxed delegate fails or you pick a sandbox mode.
 
 ### Step 8: Fail closed on irreversible actions
 
@@ -894,23 +802,7 @@ the fix. Overlap: `check_dispatch_prompt.py` checks *this repo's* 14
 elements; `handoff-lint` checks generic handoff hygiene any model→model msg
 needs. Both, not either.
 
-**Cross-repo dispatch, external session (upstream incident B gap — honest limit, not a
-claimed fix).** Incident B's actual root cause: a session working in a
-*different* repo (the upstream private governance repo), dispatching work about an agents-inc issue, never
-read agents-inc's `AGENTS.md` — it had no local reason to know this
-contract existed. This repo cannot reach into another repo's session and
-force a read; no such enforcement mechanism exists here (no hook, no CI
-gate that runs against external repos). The only thing achievable from
-this side: make the contract self-contained and say plainly, in the
-canonical source (`AGENTS.md` § Delegation prompt contract), that any
-session — this repo or another — dispatching work that touches an
-agents-inc issue/task MUST fetch and apply this section first. Paste-and-
-tick block above is written to be copy-pasted whole into a dispatch prompt
-from anywhere, needing no other agents-inc file open. **This does not
-close the gap for a session that never thinks to look** — that half of
-incident B stays open; a real fix would need the *dispatching* repo (the
-upstream private governance repo, or whichever originates the call) to add its own check, which is out of this
-repo's control.
+Cross-repo dispatch from another repo's session (incident B, honest limit): load `references/cross-repo-dispatch.md` when the dispatching session is outside agents-inc.
 
 Include, roughly this order:
 1. ROLE, one line
@@ -975,28 +867,7 @@ rotation. Keep using the file, never the pasted literal.
 
 ## CLI
 
-None. This is a discipline skill with no scripts of its own — it governs
-how you use someone else's. Dispatch goes through `codex-bridge`:
-
-```
-skills/codex-bridge/scripts/agent.sh submit --backend <b> --wait "<prompt>"  # DEFAULT for gemini/mistral/openrouter
-skills/codex-bridge/scripts/agent.sh result <id>
-skills/codex-bridge/scripts/agent.sh submit --class review "<prompt>"   # route.sh picks
-# For codex/luna, use DelegateAgent MCP tool instead (--wait is broken on codex backend)
-```
-
-Every `agents-inc dispatch` run that reaches launch leaves a `dispatched` node
-in the host ledger; its node id is the run id the status line prints. List open
-nodes and close one with the verdict you reached, not the delegate's:
-
-```
-agents-inc ledger pending
-agents-inc ledger append --run-id <id> --verdict pass|fail
-```
-
-Prefer `agent.sh` over calling a provider wrapper directly — it gives a job
-id, saved stdout/stderr, transient-failure retries, and a provider-neutral
-`result.json` you can attach to a report.
+Load `references/cli-and-interop.md` when you need launcher command syntax or how this skill interacts with other skills.
 
 ## Hard stops
 
@@ -1024,13 +895,7 @@ id, saved stdout/stderr, transient-failure retries, and a provider-neutral
 
 ## Cross-skill interaction
 
-| Skill | Relationship |
-|---|---|
-| `codex-bridge` | The mechanism this skill supervises. That skill owns transport, routing (`route.sh`), per-provider timeouts, job state and retries. This skill owns tier choice, trust, and honesty. Do not reimplement its dispatch here |
-| `caveman` | Agent-facing dispatch prompts are written at `ultra` level — the reader is a model |
-| `nested-notes` | Structures the supervisor's report back to the operator |
-| `accelerate` | Optional. Renders the Chief of Staff DECIDE / HANDLED / UNDERSTAND instrument (Step 4) |
-| `act-autonomously` | Sibling discipline skill for unattended routines; overlapping subagent-budget concerns |
+Load `references/cli-and-interop.md` when another skill (codex-bridge, speckit-pipeline, caveman) is in play.
 
 ## Files
 
@@ -1039,75 +904,4 @@ id, saved stdout/stderr, transient-failure retries, and a provider-neutral
 
 ## Version History
 
-- **Unreleased** — REPORTING CHAIN rendered from the optional slots `DELEGATE`,
-  `SUPERVISOR`, `EXECUTIVE` with ladder and settings defaults, `--model` on the
-  renderer, `agents-inc models chain`, and the `reporting-chain-inverted` lint
-  rule (#45); Step 1 relay paragraph for chains the tools cannot build;
-  `ledger pending` and `ledger append --run-id` in the CLI section (#49).
-
-- **v1.4.0** (2026-10-01) — Rung names (executive, orchestrator, workhorse,
-  grunt) and a generated tier table; five-dimension rung scoring grid ported
-  from DomI subagent-dispatch-policy (#27); Step 3c keep a delegate until its
-  context ceiling (#28); dispatch header plus slots (#36, #4); dispatch names
-  tell the truth and hierarchy statement (#17, #14).
-
-- **v1.3.0** (2026-09-22) — Step 4 generalized from budget-mode flash triage to always-on Chief of Staff triage (D43): verify, then DECIDE / HANDLED / UNDERSTAND re-projection; flash helper kept as budget add-on.
-
-- **v1.2.1** (2026-09-18) — DelegateAgent MCP tool clarification. Step 3b
-  (item 1) now notes that `--backend codex --wait` is broken for luna; use
-  DelegateAgent MCP tool instead for real-time transcript return. CLI section
-  conditional DEFAULT comment and DelegateAgent note added. MODEL ROSTER table
-  gains DelegateAgent row.
-- **v1.2.0** (2026-09-18) — Three additions. (1) Step 0.5 vendor eligibility
-  gate: non-Claude vendors are OFF by default and open only on operator
-  request, a stated capability fit, or declared budget modality (which opens
-  free grunts only, never paid Codex models); a one-line gate statement is now
-  required before any non-Claude dispatch. Closes the gap where "two vendors,
-  one ladder" read as a menu of equally-default options with no preference
-  expressed. (2) Step 3b visibility contract: states plainly that transcript
-  streaming parity with the `Agent` tool is a harness boundary and not
-  achievable, makes `--wait` the default dispatch form (which does buy
-  transcript-return parity), and requires an unprompted `watch.sh` line on
-  every async submit. (3) MUST 7 clarified: the sub-delegate allowlist is a
-  hard lock and is opt-in — an operator naming a model is a top-level
-  assignment (downward within Claude is free), not an implied allowlist.
-  Step 0.5 states the sideways half: downward within a
-  vendor is free, sideways across vendors is gated.
-- **v1.1.4** (2026-09-18) — Ports the upstream private governance repo's Step 0 dispatch-worthiness gate
-  (2 questions: volume ≤3 calls → don't dispatch; affordance → bare-API
-  buddies have no filesystem/shell/repo access) into this canonical copy,
-  closing the drift where the upstream private governance repo's workerbee fork had the gate and this one
-  didn't.
-- **v1.1.3** (2026-09-12) — upstream incident A root-cause follow-up: bare-prose
-  confirm-and-echo requirement (v1.1.2) is unenforceable by itself — same
-  class of instruction the issue says gets ignored. Adds
-  `scripts/check_subdelegate_allowlist.py`, a mechanical transcript lint
-  (no hook mechanism exists in this repo to block live) that flags a
-  nested sub-delegate call landing on a forbidden model or missing the
-  confirm-echo line. Self-tested both ways. Does not resolve incident A's open
-  (a) model-behavior vs (b) harness-gap question — only makes the drop
-  detectable after the fact. Also: incident B root cause (external-repo
-  session, no local reason to read this contract) cannot be closed from
-  this side alone — added an explicit cross-repo fetch-first note to
-  `AGENTS.md` and here as the smallest reachable fix, and corrected
-  checklist item 1's `(or no-Skill-tool stated)` wording, which read as a
-  blanket escape hatch not present in the original 14-point canon.
-- **v1.1** (2026-09-05) — Adds Step 1a (MODEL ROSTER: nickname → slug →
-  exact dispatch command, verified against this machine's `codex`
-  CLI/`codex-bridge` wrappers), Step 1b (runtime model-discovery snippet
-  via `~/.codex/config.toml` + `models_cache.json`), and Step 1c
-  (reasoning effort is a separate, operator-owned cost axis; `ultra`
-  effort self-delegates and is opt-in only). Closes the gap where the
-  capability-ladder table (Step 1, v1.0) named `astra`/`luna` as tier
-  labels without a slug or CLI mapping, forcing an orchestrator to
-  reverse-engineer both the vendor-nickname lookup and the effort-tier
-  distinction by hand mid-session. Same session as v1.0
-  (`33338e35-4ce9-43db-8cf0-624adf37e136`); two follow-on incidents same
-  day: (1) orchestrator misread "astra"/"luna" as absent Claude models
-  because it never checked `~/.codex/config.toml` / `models_cache.json`;
-  (2) orchestrator dispatched at `ultra` reasoning effort unprompted
-  after being told explicitly not to.
-- **v1.0** (2026-09-05) — Initial. Extracted from session
-  `33338e35-4ce9-43db-8cf0-624adf37e136`, where three false delegate GREENs
-  and a ~29x inflated savings figure motivated the verification and
-  honesty rules. Benchmark measured 3 → 0 in the same session.
+Load `references/history.md` when you need why a rule changed (version history).

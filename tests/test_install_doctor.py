@@ -16,7 +16,7 @@ from agents_inc.install.receipt import InstallReceipt
 from agents_inc.install.runtime import MODEL_ALIASES
 
 CATALOG_DIR = Path(__file__).parent / "fixtures/catalog"
-HOST = {"which": lambda *a, **k: "/usr/bin/claude", "sandbox_probe": lambda: True}  # results must not depend on the host
+HOST = {"which": lambda *a, **k: "/usr/bin/claude", "sandbox_probe": lambda: True, "net_probe": lambda: True}  # results must not depend on the host
 
 
 class DoctorTest(unittest.TestCase):
@@ -81,7 +81,7 @@ class DoctorWarningsTest(unittest.TestCase):
         stub_bin = Path(self.tmp.name) / "stub-bin"; stub_bin.mkdir()
         (stub_bin / "claude").write_text("#!/bin/sh\nexit 0\n"); (stub_bin / "claude").chmod(0o755)
         env = {"CODEX_HOME": str(self.codex_home), "PATH": str(stub_bin) + os.pathsep + os.environ.get("PATH", "")}  # doctor needs a claude CLI; CI has none
-        with mock.patch.object(cli, "_paths", return_value=self.paths), mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out):
+        with mock.patch.object(cli, "_paths", return_value=self.paths), mock.patch.dict(os.environ, env), mock.patch("agents_inc.install.doctor.dispatch_path_probe", return_value=True), contextlib.redirect_stdout(out):
             code = cli.main(["doctor"])
         lines = out.getvalue().splitlines()
         self.assertEqual(code, 0)
@@ -91,9 +91,9 @@ class DoctorWarningsTest(unittest.TestCase):
 
     def test_cli_json_shape_unchanged(self):
         out = io.StringIO()
-        with mock.patch.object(cli, "_paths", return_value=self.paths), mock.patch.dict(os.environ, {"CODEX_HOME": str(CATALOG_DIR)}), contextlib.redirect_stdout(out):
+        with mock.patch.object(cli, "_paths", return_value=self.paths), mock.patch.dict(os.environ, {"CODEX_HOME": str(CATALOG_DIR)}), mock.patch("agents_inc.install.doctor.dispatch_path_probe", return_value=True), contextlib.redirect_stdout(out):
             cli.main(["doctor", "--json"])
-        self.assertEqual(set(json.loads(out.getvalue())), {"ready", "codes", "live", "warnings"})
+        self.assertEqual(set(json.loads(out.getvalue())), {"ready", "codes", "live", "warnings", "items"})
 
     def test_install_stale_absent_when_checkout_matches(self):
         self.assertNotIn("INSTALL_STALE", check_install(self.paths, models=self.models, **HOST).warnings)

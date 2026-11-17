@@ -63,9 +63,10 @@ class PersonaDenyTest(_Home):
         for i, desc in enumerate(DENY + COLLISIONS):
             with self.subTest(desc=desc):
                 result, _ = self.run_hook("agent-nudge", payload(desc, session=f"d{i}"))
-                self.assertEqual(result, {"hookSpecificOutput": {
-                    "hookEventName": "PreToolUse", "permissionDecision": "deny",
-                    "permissionDecisionReason": REASON}})
+                out = result["hookSpecificOutput"]  # spec 042: the old reason is the prefix, the refusal text follows
+                self.assertEqual((out["hookEventName"], out["permissionDecision"]), ("PreToolUse", "deny"))
+                self.assertTrue(out["permissionDecisionReason"].startswith(REASON))
+                self.assertIn("refused: hook-persona", out["permissionDecisionReason"])
 
     def test_allow_fixtures_are_not_denied(self):
         for i, desc in enumerate(ALLOW):
