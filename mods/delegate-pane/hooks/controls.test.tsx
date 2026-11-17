@@ -1,5 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { resumeRun } from './controls'
+import { newState } from './tree'
+
 const RUN = '20991107T000000Z-luna-aaaaaa'
 const PANE = {
   plugin: 'delegate-pane',
@@ -386,7 +389,8 @@ test('a guest agent row shows nickname and provider, other types show <type> <sh
   ]
   await world.advance(1100)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('luna · OpenAI')
+  expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('luna')
+  expect((await ui.find({ type: 'Button', text: /scout/ }))?.text).toContain('OpenAI')
   const g = (await ui.find({ type: 'Button', text: /guest/ }))?.text ?? ''
   expect(g).toContain('codestral')
   expect(g).not.toContain('agents-inc:codestral')
@@ -473,4 +477,67 @@ test('session.start resets the pane state: a new session starts with no job row 
   const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await again.find({ type: 'Button', text: /count lines/ })).toBeFalsy()
   await again.unmount()
+})
+
+// Spec 042 FR-001, FR-001a: dispatch exits 4 for `unverified`. The readers must not label it failed.
+const resumeNote = async (code: number): Promise<string> => {
+  const notes: string[] = []
+  const child = Object.assign(
+    (async function* () {
+      yield { text: 'dispatch x outcome=unverified reason=no-gates\n' }
+    })(),
+    { result: Promise.resolve({ code }) },
+  )
+  resumeRun(newState(), () => child, async n => notes.push(n), 'run-1', 'go on')
+  await new Promise(r => setTimeout(r, 20))
+  return notes[0] ?? ''
+}
+
+test('a resume that exits 4 says unverified, never failed', async () => {
+  const note = await resumeNote(4)
+  expect(note).toContain('unverified')
+  expect(note).not.toContain('failed')
+})
+
+test('a resume that exits 0 says finished and any other nonzero exit says failed', async () => {
+  expect(await resumeNote(0)).toBe('resume finished')
+  expect(await resumeNote(1)).toContain('resume failed')
+  expect(await resumeNote(75)).toContain('resume failed')
+})
+
+const startedJob = async ($: any, on: any, code: number, task: string) => {
+  on('fs.write', () => ({ value: undefined as any }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout', text: 'dispatch x outcome=unverified reason=no-gates\n' }
+    return { value: { code, signal: null } }
+  })
+  await start($, on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.select({ key: 'model', value: 'terra' })
+  await ui.input({ key: 'task', text: task })
+  await new Promise(r => setTimeout(r, 20))
+  return ui
+}
+
+test('a start whose dispatch exits 4 shows an unverified job row, not failed', async ($, on) => {
+  const ui = await startedJob($, on, 4, 'count lines')
+  const row = await ui.find({ type: 'Button', text: /count lines/ })
+  expect(row?.text).toContain('unverified')
+  expect(row?.text).not.toContain('failed')
+  expect(await ui.find({ type: 'Text', text: /exit 4/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('a start whose dispatch exits 0 shows done', async ($, on) => {
+  const ui = await startedJob($, on, 0, 'count lines')
+  expect((await ui.find({ type: 'Button', text: /count lines/ }))?.text).toContain('done')
+  await ui.unmount()
+})
+
+test('a start whose dispatch exits 2 still shows failed', async ($, on) => {
+  const ui = await startedJob($, on, 2, 'count lines')
+  const row = await ui.find({ type: 'Button', text: /count lines/ })
+  expect(row?.text).toContain('failed')
+  expect(row?.text).not.toContain('unverified')
+  await ui.unmount()
 })
