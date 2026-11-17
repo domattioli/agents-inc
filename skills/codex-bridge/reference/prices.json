@@ -129,6 +129,18 @@
       "output": 10.0,
       "cache_read": 0.2,
       "cache_write": 2.5
+    },
+    "claude-fable-5-2": {
+      "input": 8.0,
+      "output": 40.0,
+      "cache_read": 0.2,
+      "cache_write": 10.0
+    },
+    "claude-haiku-5-5": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125
     }
   },
   "subscriptions": {
