@@ -25,13 +25,13 @@ One poll a second feeds the tree, the map, the status line and the feed. It list
 
 ## Mission map
 
-At the top the pane draws a mission map (spec 039): a centre line for the session, six stations, and one marker per working agent. A marker reads `nickname · rung · state`.
+At the top the pane draws a mission map (spec 039): the animated map, one dim roles line, and six stations. Delegates show on the map and in the feed below it, not as lines under a station.
 
 - Stations: Review, Build, Write, Scout, Plan, Other. The category comes from a fixed rule table (subagent type, dispatch slots `TASK_KIND` or `ROLE`, the leading verb of the task text, then the grunt rung), never from a model.
 - Sources: every subagent type of the session (`Explore`, `general-purpose`, `agents-inc:*`) and every `agents-inc dispatch` run of this session found under `.scratch/agents-inc-runs`.
 - Rung: from `hooks/rungs.ts`, which `tests/test_delegate_pane_rungs.py` checks against `agents_inc/models.json`. An unknown model shows `?`.
 - State: running, review (dispatch outcome `unverified`), done, failed, paused (`quota-paused`).
-- A station is lit (`●`) while a delegate on it is running or in review. It shows the count of failures not yet acknowledged (`2✗`). A station shows 4 markers, then `+K more`.
+- A station is lit (`●`) while a delegate on it is running or in review. It shows the count of failures not yet acknowledged (`2✗`).
 - Lost: a dispatch run with no outcome and no file change for 5 minutes shows `lost`. It is not counted as working and raises the station's count like a failure. A new event or an outcome brings it back.
 - Acknowledge: a Button on a station with failures acknowledges the failure events it covers (one delegate, one failure). The count returns for a new failure, including a second failure of the same delegate. Acknowledgements survive a reload and `claude --resume`: the pane keeps the session start and acknowledgements in its store, by session id, for the 20 most recent sessions.
 - Layout follows the pane width: a grid from 70 columns, stacked stations from 30 (the Raster map shows from 34), one line per station below that.
@@ -51,12 +51,12 @@ In a terminal pane 34 columns or wider the map gains a Raster above the station 
   - A delegate the main session started itself while a Lead runs gets a CoS edge, drawn only while its dispatch or its result travels.
   - A Worker that starts its own helper (workhorse to grunt) draws a curve between the two stations, only while that pulse travels.
   - Results go back to whoever started the delegate. A Lead's Worker never sends anything to the CoS. A failed result travels in red.
-- Each station shows the names of its working delegates. When they do not all fit, it shows `x2`, `x3` and so on.
+- Each station shows the names of its working delegates, or its newest delegate when none works. When they do not all fit, it shows `x2`, `x3` and so on.
 - An unacknowledged failure shows a steady red `✗` and its count. It does not blink.
 - One colour for activity, pale grey for passing edges, red for failure.
 - Frames run at 12.5 a second, only while something moves. A refused frame falls back to the static map. Desktop and narrow panes get the static map.
 - Frames come from `hooks/frames.ts`, a pure function of stations, returns, dispatches and time.
-- The static map (desktop, narrow panes, refused frames) names the three in one dim line, two when narrow: `CoS: main session (<model>) · Lead: <name> (<rung>) · Worker: <name>`.
+- Under the Raster, and alone on the static map (desktop, narrow panes, refused frames), one dim line names the three, two when narrow: `CoS: main session (<model>) · Lead: <name> (<rung>) · Worker: <name>`.
 
 ### Status line and feed
 
@@ -77,7 +77,7 @@ Framing inspired by lot-map (https://github.com/alexeyw/lot-map, MIT); no code o
 
 ## Roles
 
-Feed rows show a dim role word (the delegate's rung: executive, orchestrator, workhorse, grunt) between name and task; blank when the rung is unknown, dropped on a narrow pane. The static centre line reads `main session · chief of staff`. Only the hubs carry role words (CoS, Lead, Worker); stations show none.
+Feed rows show a dim role word (the delegate's rung: executive, orchestrator, workhorse, grunt) between name and task; blank when the rung is unknown, dropped on a narrow pane. Only the hubs carry role words (CoS, Lead, Worker); stations show none.
 
 ## Checks
 

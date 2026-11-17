@@ -9,11 +9,11 @@ import type { TreeRow } from './tree'
 const run = (id: string, state: string, meta = 'luna · dispatch'): TreeRow => ({ n: 0, depth: 1, kind: 'run', id, label: id, state, meta })
 
 test('tree: agentMeta names the provider of an agents-inc type and never shows a raw type prefix', () => {
-  expect(agentMeta('agents-inc:luna')).toBe('luna · OpenAI')
-  expect(agentMeta('agents-inc:codestral')).toBe('codestral')
-  expect(agentMeta('Explore')).toBe('Explore · Claude')
-  expect(agentMeta('general-purpose')).toBe('claude · Claude')
-  expect(agentMeta('general-purpose', 'sonnet')).toBe('sonnet · Claude')
+  expect(agentMeta('agents-inc:luna')).toBe('OpenAI')
+  expect(agentMeta('agents-inc:codestral')).toBe('')
+  expect(agentMeta('Explore')).toBe('Claude')
+  expect(agentMeta('general-purpose')).toBe('Claude')
+  expect(agentMeta('general-purpose', 'sonnet')).toBe('Claude')
 })
 
 test('tree: agentName is <model> <shortid>, never general-purpose or agents-inc:', () => {
@@ -24,7 +24,9 @@ test('tree: agentName is <model> <shortid>, never general-purpose or agents-inc:
   expect(agentName('Explore', 'abcdef', 'haiku')).toBe('haiku abcd')
   const row = agentRows([{ id: 'abcdef', type: 'general-purpose', name: 'x', description: 'd', status: 'running' }], new Map([['abcdef', 'sonnet']]))[0]!
   expect(row.label).toBe('sonnet abcd · d')
-  expect(row.meta).toBe('sonnet · Claude')
+  expect(row.meta).toBe('Claude')
+  expect(row.meta).not.toContain('sonnet')
+  expect(row.label).toContain('sonnet')
 })
 
 test('tree: slotsFor writes a read-only slots file that may only write report.md', () => {
@@ -56,6 +58,7 @@ test('tree: color and isFreeRun', () => {
   expect(color('running')).toBe('yellow')
   expect(color('done')).toBe('green')
   expect(color('failed')).toBe('red')
+  expect(color('unverified')).toBe('cyan')
   expect(color('lost')).toBeUndefined()
   expect(isFreeRun({ meta: 'gemini · agent.sh' })).toBe(true)
   expect(isFreeRun({ meta: 'gemini · free dispatch' })).toBe(true)
@@ -80,6 +83,15 @@ test('tree: startFreeRun writes run.json kind free, output rows and a run.end ro
   expect(ev).toContain('two')
   expect(ev).toContain('part')
   expect(ev).toContain('"run.end"')
+})
+
+test('tree: a free run that exits 4 ends unverified, not red', async () => {
+  const wrote: Record<string, string> = {}
+  const f = await startFreeRun(async (p, t) => void (wrote[p] = t), 'gemini', 'task', '/w/task.txt')
+  await f.end(4)
+  const ev = wrote[Object.keys(wrote).find(k => k.endsWith('/events.jsonl'))!]!
+  expect(ev).toContain('"outcome":"unverified"')
+  expect(color(runState([{ event: { type: 'run.end', outcome: 'unverified' } }]))).toBe('cyan')
 })
 
 test('tree: agentRows nests children under the parent and lists one row per agent id', () => {

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { PaneView } from '../types'
-import { MAIN_ROLE, ackId, hierarchyLines, layoutFor, stations, statusLine, feed, isAlert } from './mission'
+import { ackId, hierarchyLines, layoutFor, stations, statusLine, feed } from './mission'
 import type { State, Station, Delegate } from './mission'
 import { cosRoom, dispatchesOf, encodeCells, frame, FRAME_MS, landings, needsMotion, RASTER_ROWS, rasterColumns } from './frames'
 import type { Return } from './frames'
@@ -25,7 +25,6 @@ const view = atom({ plugin: 'delegate-pane', key: 'view' } as const, EMPTY as an
 export const PANE = 'agents-inc-delegates'
 const TITLE = 'agents-inc'
 const POLL_MS = 1000
-const MAP_CAP = 4
 const FEED_MIN = 3
 const FEED_MAX = 10
 // Spec 039 FR-013: session start, acks and subagent alert times are mirrored to $.store under `session:<session id>`,
@@ -212,7 +211,6 @@ export const register: Register = on => {
     const feedCap = Math.max(FEED_MIN, Math.min(FEED_MAX, Math.floor(bodyRows / 3)))
     const layout = layoutFor(columns)
     const sts = stations(v.delegates, v.acked)
-    const working = v.delegates.filter(d => d.state === 'running' || d.state === 'review').length
     const ack = (s: Station) => async () => {
       const cur = normalizeView(await read($, view))
       const keys = stations(cur.delegates, cur.acked).find(x => x.category === s.category)?.unacked ?? []
@@ -238,28 +236,12 @@ export const register: Register = on => {
           <Text color="red">{' ack '}</Text>
         </Button>
       ) : null
-    const markers = (s: Station) => {
-      const shown = s.delegates.slice(0, MAP_CAP)
-      return (
-        <>
-          {shown.map(d => (
-            <Text color={isAlert(d.state) ? 'red' : undefined}>{`${d.nickname} · ${d.rung} · ${d.state}`}</Text>
-          ))}
-          {s.delegates.length > MAP_CAP ? <Text dimColor>{`+${s.delegates.length - MAP_CAP} more`}</Text> : null}
-        </>
-      )
-    }
     const station = (s: Station) => (
       <Box key={s.category} flexDirection="column" width={22} borderStyle={s.delegates.length ? 'round' : undefined}>
         {title(s)}
-        {markers(s)}
         {ackButton(s)}
       </Box>
     )
-    const centreTail = ` · ${working} working${v.model ? ` · ${v.model}` : ''}`
-    const centreRole = `◉ main session · ${MAIN_ROLE}${centreTail}`
-    // The role goes first when the line does not fit: the line is wrapped in `──── … ────`.
-    const centre = centreRole.length + 10 <= columns ? centreRole : `◉ main session${centreTail}`
     // Motion: terminal, at least RASTER_MIN_COLUMNS wide (grid or stacked), Raster in the element table, no refused blit. Otherwise the static map only.
     // The frame timer is shared by every mounted copy of the pane; only a terminal render may set its width or stop it,
     // or a desktop or too-narrow render would cancel the animation of the terminal one while an agent still runs (#191).
@@ -294,7 +276,6 @@ export const register: Register = on => {
       layout === 'grid' ? (
         <Box flexDirection="column">
           {raster}
-          <Text>{`──── ${centre} ────`}</Text>
           {roles}
           <Box flexDirection="row">{sts.slice(0, 3).map(station)}</Box>
           <Box flexDirection="row">{sts.slice(3).map(station)}</Box>
@@ -302,12 +283,10 @@ export const register: Register = on => {
       ) : layout === 'stacked' ? (
         <Box flexDirection="column">
           {raster}
-          <Text>{centre}</Text>
           {roles}
           {sts.map(s => (
             <Box key={s.category} flexDirection="column">
               {title(s)}
-              {s.delegates.length ? <Box flexDirection="column" paddingLeft={2}>{markers(s)}</Box> : null}
               {ackButton(s)}
             </Box>
           ))}

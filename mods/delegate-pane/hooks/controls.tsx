@@ -36,7 +36,14 @@ export const resumeRun = (
     let tail = ''
     for await (const piece of child) tail = (tail + piece.text).slice(-400)
     const end = await child.result
-    await done(end?.code === 0 ? 'resume finished' : 'resume failed: ' + clip(tail, 120))
+    // Spec 042: dispatch exits 4 when it measured nothing it could pass or fail; that is not a failure.
+    await done(
+      end?.code === 0
+        ? 'resume finished'
+        : end?.code === 4
+          ? 'resume unverified: ' + clip(tail, 120)
+          : 'resume failed: ' + clip(tail, 120),
+    )
   })()
 }
 
@@ -174,7 +181,8 @@ export async function controlsView($: any, els: any, st: PaneState, v: View, col
           const code = end?.code ?? null
           if (free) await $.fs.write(`${dir}/report.md`, tail)
           if (freeRun) await freeRun.end(code)
-          job.state = code === 0 ? 'done' : 'failed'
+          // Exit 4 is `unverified` (spec 042), shown on its own.
+          job.state = code === 0 ? 'done' : code === 4 ? 'unverified' : 'failed'
           job.note = `exit ${code}: ${tail.trim().split('\n').pop() ?? ''}`
           await show()
         })()

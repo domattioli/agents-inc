@@ -21,7 +21,7 @@ export const STALE_MS = 30 * 60 * 1000
 export const RECENT_MS = 60 * 60 * 1000
 export const STOP_TEXT = 'Stop now and report what you have.'
 export const STAMP = /^\d{8}T\d{6}Z-/
-export const HINT = 'click a row to open it · or pick a target and type a message'
+export const HINT = 'click a row to open it'
 
 export const EMPTY: View = {
   note: '', delegates: [], acked: {}, alertAt: {}, sessionStart: '', finalRuns: {}, lostRuns: {}, mapNote: '', model: '', seen: {},
@@ -42,7 +42,7 @@ export type Job = {
   model: string
   task: string
   sig: string
-  state: 'starting' | 'running' | 'done' | 'failed'
+  state: 'starting' | 'running' | 'done' | 'failed' | 'unverified'
   note: string
   dir: string
   slots: string
@@ -146,14 +146,12 @@ export function modelName(type: string, model?: string): string {
 // `<model> <shortid>`: the label the pane uses for an agent everywhere (tree, map, delegate line).
 export const agentName = (type: string, id: string, model?: string): string => `${modelName(type, model)} ${id.slice(0, 4)}`
 
-// Row meta for an agent: `<nickname> · <Provider>` for an agents-inc type, the provider read from the MODELS labels;
-// `<model> · Claude` for a Claude type.
+// Row meta for an agent: only what the label (`<model> <shortid> · <description>`) does not show: the provider, read from the
+// MODELS labels for an agents-inc type (OpenAI for luna), `Claude` for a Claude type. Empty when the provider is unknown.
 export function agentMeta(type: string, model?: string): string {
-  const name = modelName(type, model)
-  if (!type.startsWith('agents-inc:')) return `${name} · Claude`
-  const label = MODELS.find(m => m.value === name)?.label ?? ''
-  const provider = /^[^·]*·\s*([^(]+?)\s*(\(|$)/.exec(label)?.[1]
-  return provider ? `${name} · ${provider}` : name
+  if (!type.startsWith('agents-inc:')) return 'Claude'
+  const label = MODELS.find(m => m.value === modelName(type, model))?.label ?? ''
+  return /^[^·]*·\s*([^(]+?)\s*(\(|$)/.exec(label)?.[1] ?? ''
 }
 
 // A read-only 14-field slots file for a task typed in the pane; the report is the one file it may write.
@@ -236,7 +234,9 @@ export const color = (s: string): string | undefined =>
       ? 'green'
       : s === 'failed' || s === 'red' || s === 'killed'
         ? 'red'
-        : undefined
+        : s === 'unverified'
+          ? 'cyan'
+          : undefined
 
 // A time as a run-dir stamp; run dirs are named <stamp>-<model>-<id>, so a plain string compare orders them. '' when unparseable.
 export const stampOf = (iso: string): string => {
@@ -265,7 +265,7 @@ export const startFreeRun = async (write: (path: string, text: string) => Promis
     },
     end: async (code: number | null) => {
       if (partial.trim()) row({ type: 'item.completed', item: { type: 'agent_message', text: partial } })
-      row({ type: 'run.end', outcome: code === 0 ? 'green' : 'red', rc: code })
+      row({ type: 'run.end', outcome: code === 0 ? 'green' : code === 4 ? 'unverified' : 'red', rc: code })
       await flush()
     },
   }
