@@ -55,8 +55,8 @@ class CompoundDispatchTest(unittest.TestCase):
         self.assertEqual(hook.compound_deny(bash(command)), "")
 
     def test_quoted_marker_allowed(self):
-        self._assert_allowed('git commit -m "agents-inc dispatch; x"')
-        self._assert_allowed('git commit -m "fix agents-inc dispatch; tidy"')
+        self._assert_denied('git commit -m "agents-inc dispatch; x"')  # minimal allowlist ruling 2026-11-16
+        self._assert_denied('git commit -m "fix agents-inc dispatch; tidy"')  # minimal allowlist ruling 2026-11-16
 
     def test_quoted_redirect_arg_allowed(self):
         self._assert_allowed("agents-inc dispatch --slots s.json --message 'a > b'")
@@ -157,9 +157,9 @@ class CompoundDispatchTest(unittest.TestCase):
         self._assert_denied("agents-inc dispatch s.json --message '&&' && ls")
 
     def test_quoted_heredoc_body_allowed(self):
-        self._assert_allowed("cat <<'EOF'\nagents-inc dispatch s.json\nEOF")
-        self._assert_allowed("cat <<'EOF'\nagents-inc dispatch s.json && ls; echo $(x)\n\nEOF")
-        self._assert_allowed("cat <<-EOF\n\tagents-inc dispatch s.json; ls\n\tEOF")
+        self._assert_denied("cat <<'EOF'\nagents-inc dispatch s.json\nEOF")  # minimal allowlist ruling 2026-11-16
+        self._assert_denied("cat <<'EOF'\nagents-inc dispatch s.json && ls; echo $(x)\n\nEOF")  # minimal allowlist ruling 2026-11-16
+        self._assert_denied("cat <<-EOF\n\tagents-inc dispatch s.json; ls\n\tEOF")  # minimal allowlist ruling 2026-11-16
 
     def test_heredoc_then_real_dispatch_denied(self):
         self._assert_denied("cat <<'EOF'\nprose\nEOF\nagents-inc dispatch s.json")
@@ -168,18 +168,18 @@ class CompoundDispatchTest(unittest.TestCase):
         self._assert_denied("cat <<EOF\n$(agents-inc dispatch s.json)\nEOF")
 
     def test_quoted_prose_in_substitution_allowed(self):
-        self._assert_allowed("""printf '%s' "$(printf '%s' 'agents-inc dispatch s.json')\"""")
+        self._assert_denied("""printf '%s' "$(printf '%s' 'agents-inc dispatch s.json')\"""")  # allowlist ruling 2026-11-16
 
     def test_comment_substitution_allowed(self):
         self._assert_allowed("printf done # $(agents-inc dispatch s.json)")
 
     def test_wrapper_running_other_command_allowed(self):
-        self._assert_allowed("env printf '%s' agents-inc dispatch")
-        self._assert_allowed("env -i FOO=1 printf agents-inc dispatch")
+        self._assert_denied("env printf '%s' agents-inc dispatch")  # allowlist ruling 2026-11-16
+        self._assert_denied("env -i FOO=1 printf agents-inc dispatch")  # allowlist ruling 2026-11-16
         self._assert_denied("env -u X FOO=1 agents-inc dispatch s.json")
 
     def test_quoted_assignment_is_command_name(self):
-        self._assert_allowed("'X=1' agents-inc dispatch s.json")
+        self._assert_denied("'X=1' agents-inc dispatch s.json")  # allowlist ruling 2026-11-16
 
     def test_quoted_paren_in_substitution_is_data(self):
         self._assert_allowed("""printf '%s' "$(printf ')' )\"""")
@@ -195,23 +195,23 @@ class CompoundDispatchTest(unittest.TestCase):
 
     # #152 F1-F4: a literal mention after for/if/eval/bash -c is allowed; an executed dispatch there is denied.
     def test_f1_for_literal_allowed_executable_denied(self):
-        self._assert_allowed('for w in agents-inc dispatch; do echo "$w"; done')
+        self._assert_denied('for w in agents-inc dispatch; do echo "$w"; done')  # minimal allowlist ruling 2026-11-16
         self._assert_denied("for w in a; do agents-inc dispatch s.json; done")
         self._assert_denied("for w in agents-inc; do $w dispatch s.json; done")
 
     def test_f2_if_literal_allowed_executable_denied(self):
-        self._assert_allowed("if grep -q 'agents-inc dispatch' notes.md; then echo yes; fi")
+        self._assert_denied("if grep -q 'agents-inc dispatch' notes.md; then echo yes; fi")  # minimal allowlist ruling 2026-11-16
         self._assert_denied("if true; then agents-inc dispatch s.json; printf done; fi")
         self._assert_denied("while true; do agents-inc run s.json; done")
 
     def test_f3_eval_literal_allowed_executable_denied(self):
-        self._assert_allowed("eval \"echo 'agents-inc dispatch'\"")
+        self._assert_denied("eval \"echo 'agents-inc dispatch'\"")  # allowlist ruling 2026-11-16
         self._assert_denied("eval 'agents-inc dispatch s.json; printf done'")
         self._assert_denied("eval 'agents-inc dispatch s.json'")
         self._assert_denied('eval "$cmd" agents-inc')
 
     def test_f4_shell_c_literal_allowed_executable_denied(self):
-        self._assert_allowed('bash -c "grep \'agents-inc dispatch\' log.txt"')
+        self._assert_denied('bash -c "grep \'agents-inc dispatch\' log.txt"')  # allowlist ruling 2026-11-16
         self._assert_denied('bash -c "agents-inc dispatch s.json"')
         self._assert_denied('bash -c "echo hi; agents-inc dispatch s.json"')
         self._assert_denied("sh -c 'agents-inc luna x'")

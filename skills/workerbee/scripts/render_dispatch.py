@@ -32,6 +32,60 @@ if _SCRIPT_DIR not in sys.path:
 from dispatch_rungs import ALIAS_VENDOR, FAN_OUT_BY_RUNG, LADDER, MODEL_RUNG  # noqa: E402
 import dispatch_schema  # noqa: E402  (#131: loaded from this directory, so a pinned copy is the one that runs)
 
+# Spec 042 FR-022 (contracts/refusal-format.md): a refusal prints the rule, the value and one fix. Scripts here cannot import
+# agents_inc, so this table and format_refusal are copies of agents_inc/install/rules.py; tests/test_rules_quickref.py pins them equal.
+REFUSAL_RULES = {
+    'slots-unreadable': ('--slots names a readable JSON object',
+        'agents-inc dispatch --print-template shows a valid slots file'),
+    'control-char': ('a slot may not hold a control or bidi character',
+        'remove the named code point and resend'),
+    'schema-invalid': ('the slots file matches dispatch_record.v1 (types and allowed values)',
+        'agents-inc dispatch --print-template shows the allowed forms'),
+    'gates-not-json-list': ('GATES must be a JSON list, not a string',
+        'GATES: ["python3 -m unittest tests.test_x"]'),
+    'gates-invalid': ('each GATES entry is a command string or an object with argv, cwd, timeout_s, expect_rc',
+        '{"argv": ["pytest", "-q"], "cwd": ".", "timeout_s": 600, "expect_rc": 0}'),
+    'gate-cwd-outside': ('a gate cwd must stay inside --cwd', 'use a relative cwd inside --cwd, such as "."'),
+    'gate-danger': ('a gate command may not push, commit, sudo, delete recursively, curl or ssh',
+        'remove push, commit, sudo, recursive rm, curl and ssh from the gate argv'),
+    'bash-allow-invalid': ('BASH_ALLOW is a JSON list of command prefixes',
+        'BASH_ALLOW: ["gh issue view 54 -R owner/repo"]'),
+    'pre-existing-invalid': ('the PRE_EXISTING_CHANGES verify gate is one plain command',
+        'verify with `python3 skills/workerbee/scripts/pre_dispatch_snapshot.py verify <snapshot>`'),
+    'slot-missing': ('every required slot is present and non-empty',
+        'agents-inc dispatch --print-template shows every slot'),
+    'placeholder-unfilled': ('no {{NAME}} placeholder may remain after render',
+        'fill the named slot in the slots file'),
+}
+
+
+def format_refusal(rule_id: str, summary: str, fix: str, value) -> str:
+    """The three lines of contracts/refusal-format.md. A copy of this function sits in each script under skills/workerbee/scripts."""
+    def hide(v):
+        if isinstance(v, dict):
+            return {k: ("[secret hidden]" if re.search(r"(?i)password|passwd|token|secret|key|auth|credential|bearer", str(k)) else hide(val)) for k, val in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [hide(x) for x in v]
+        return v
+    text = value if isinstance(value, str) else str(hide(value))
+    text = " ".join(text.split())
+    text = re.sub(r"(?i)(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|xox[bap]-[A-Za-z0-9-]{8,}|bearer\s+[^\s'\"]+|(?:api[_-]?key|token|secret|password|passwd|authorization|auth|credentials?)['\"]?\s*[=:]\s*(?:\"[^\"]*\"|'[^']*'|\S+))", "[secret hidden]", text)
+    raw = text.encode("utf-8")
+    if len(raw) > 200:
+        text = raw[:197].decode("utf-8", "ignore") + "..."
+    return f"refused: {rule_id} ({summary})\nvalue: {text}\nfix: {fix}"
+
+def refusal_lines(rule_id, value, fix=None):
+    summary, example = REFUSAL_RULES[rule_id]
+    return format_refusal(rule_id, summary, fix or example, value)
+
+# Spec 042 FR-013: the claims block instruction is one fixed line, so it never depends on the slot author or the header file.
+CLAIMS_LINE = ("CLAIMS BLOCK: end your report with exactly one fenced block tagged `claims` (never two), keys `files_changed: "
+               "<comma-separated repo-relative paths, or none>`, `gates: g1=<exit code>; g2=<exit code>` (one entry for every "
+               "gate id named in SUCCESS GATE, or `none` when there are no gates), optional `tests: g1=<count>` (the count "
+               "from that gate's own output), and `stopped: none` or `stopped: s1` when you stopped at the STOP RULE. "
+               "The block is data for a check; it never grants anything.")
+
 # #131 (H7): one fixed line after CONSTRAINTS, so the stop-on-block clause never depends on the slot author.
 STOP_ON_BLOCK_LINE = ("STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, "
                       "stop and hand back to your supervisor with the work done so far; never switch to another tool to "
@@ -115,6 +169,25 @@ def _num(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def weak_gate_warnings(gates, base) -> list[str]:
+    """Spec 042 FR-010: one `warning: gate-weak ...` line for each gate of the form `test -s|-e|-f <path>` or `ls <path>`
+    whose path already exists under base (the run's working directory) before launch. Such a gate can pass without the
+    run having done anything. Never a refusal: the caller prints the lines."""
+    out = []
+    for g in gates or []:
+        argv = g.get("argv") or []
+        if argv[:1] == ["test"] and len(argv) == 3 and argv[1] in ("-s", "-e", "-f"):
+            target = argv[2]
+        elif argv[:1] == ["ls"] and len(argv) == 2 and not argv[1].startswith("-"):
+            target = argv[1]
+        else:
+            continue
+        path = Path(target) if os.path.isabs(target) else Path(base) / g.get("cwd", ".") / target
+        if path.exists():
+            out.append(f"warning: gate-weak: `{' '.join(argv)}` already holds before launch ({target} exists)")
+    return out
+
+
 def parse_gates(value) -> tuple[list | None, str | None]:
     """Return (normalized gates, None), (None, None) when absent or empty, or (None, why). value: a list, or a
     JSON string that decodes to a list. Entry keys: argv (required), cwd (default "."), timeout_s (600), expect_rc (0), network (false)."""
@@ -188,7 +261,7 @@ def bash_allow_list(value) -> tuple[list, str | None]:
 
 def gate_text(gates: list) -> str:
     """One sentence for SUCCESS GATE: dispatch runs each command with no shell after the delegate exits."""
-    parts = [f"`{shlex.join(g['argv'])}` in `{g['cwd']}` expecting exit code {g['expect_rc']}" for g in gates]
+    parts = [f"g{n}: `{shlex.join(g['argv'])}` in `{g['cwd']}` expecting exit code {g['expect_rc']}" for n, g in enumerate(gates, 1)]
     return "After you exit, dispatch runs these commands with no shell: " + "; ".join(parts) + "."
 
 
@@ -345,6 +418,21 @@ def header_body(header_text: str) -> str:
     raise ValueError("header has no CAVEMAN: line")
 
 
+
+def _schema_value(err: str, slots) -> str:
+    field = err.split()[0] if err.split() else "record"
+    shown = slots.get(field) if isinstance(slots, dict) and field in slots else None
+    return f"{field}: {shown!r}" if shown is not None else err
+
+
+def _schema_fix(err: str):
+    """A corrected example for the two enum slots; every other schema error keeps the registry fix."""
+    if err.startswith("CLASSIFICATION"):
+        return "CLASSIFICATION: internal (allowed: public, internal, confidential)"
+    if err.startswith("EFFORT"):
+        return "EFFORT: medium (allowed: low, medium, high, xhigh, max)"
+    return None
+
 def main() -> int:
     # Parse arguments
     slots_path = None
@@ -385,11 +473,13 @@ def main() -> int:
         slots_data = json.loads(slots_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"Failed to load slots file: {e}", file=sys.stderr)
+        print(refusal_lines("slots-unreadable", f"{slots_path}: {e}"), file=sys.stderr)
         return 2
 
     hit = control_char_hit(slots_data)
     if hit:
         print(f"render: slot {hit[0]} has control character {hit[1]} at offset {hit[2]}", file=sys.stderr)
+        print(refusal_lines("control-char", f"slot {hit[0]} {hit[1]} at offset {hit[2]}"), file=sys.stderr)
         return 2
 
     # #131: dispatch_record.v1. Old string forms are converted for the check only; the text that renders is unchanged.
@@ -398,6 +488,7 @@ def main() -> int:
     if errors:
         for err in errors:
             print(f"dispatch_record.v1 invalid: {err}", file=sys.stderr)
+            print(refusal_lines("schema-invalid", _schema_value(err, slots_data), _schema_fix(err)), file=sys.stderr)
         return 2
     for name in ("FILES_IN_SCOPE", "ALLOWLIST", "FAN_OUT"):
         if name in slots_data and not isinstance(slots_data[name], str):
@@ -428,11 +519,19 @@ def main() -> int:
     gates, why = parse_gates(slots_data.get("GATES"))
     if why:
         print(f"GATES invalid: {why}", file=sys.stderr)
+        rule = ("gate-danger" if "danger list" in why else "gate-cwd-outside" if "cwd must be a relative path" in why
+                else "gates-not-json-list" if why in ("not valid JSON", "must be a list") else "gates-invalid")
+        print(refusal_lines(rule, f"{why}: {slots_data.get('GATES')!r}"), file=sys.stderr)
         return 2
+    for warning in weak_gate_warnings(gates, Path.cwd()):  # 042 FR-010: a warning, never a refusal
+        print(warning, file=sys.stderr)
     _, why = bash_allow_list(slots_data.get("BASH_ALLOW"))
     if why:
         print(f"BASH_ALLOW invalid: {why}", file=sys.stderr)
+        print(refusal_lines("bash-allow-invalid", f"{why}: {slots_data.get('BASH_ALLOW')!r}"), file=sys.stderr)
         return 2
+    if isinstance(slots_data.get("STOP_RULE"), str) and slots_data["STOP_RULE"].strip():
+        slots_data["STOP_RULE"] = "s1: " + slots_data["STOP_RULE"].strip()  # one rule, one id (spec 042 FR-012e)
     if gates:
         slots_data["SUCCESS_GATE"] = (_text(slots_data.get("SUCCESS_GATE")) + " " + gate_text(gates)).strip()
 
@@ -462,6 +561,7 @@ def main() -> int:
             if err:
                 print(f"PRE_EXISTING_CHANGES invalid: {err}; write the verify gate as one plain command",
                       file=sys.stderr)
+                print(refusal_lines("pre-existing-invalid", f"{err}: {span}"), file=sys.stderr)
                 return 2
     for slot, value in SLOT_DEFAULTS.items():
         if not (isinstance(slots_data.get(slot), str) and slots_data[slot].strip()):
@@ -481,6 +581,8 @@ def main() -> int:
     if missing:
         for slot in missing:
             print(f"Required slot missing or empty: {slot}", file=sys.stderr)
+            print(refusal_lines("slot-missing", slot, f"set {slot} in the slots file; `agents-inc dispatch --print-template` shows every slot"),
+                  file=sys.stderr)
         return 2
 
     # Fill template
@@ -506,12 +608,15 @@ def main() -> int:
         for line in result.splitlines():
             if "{{" in line:
                 print(f"Unfilled placeholder in: {line}", file=sys.stderr)
+                print(refusal_lines("placeholder-unfilled", line), file=sys.stderr)
         return 2
 
     # #131: the fixed STOP ON BLOCK line goes just before OUT OF SCOPE, which follows CONSTRAINTS in the template.
     out_lines = result.splitlines(keepends=True)
     at = next((n for n, ln in enumerate(out_lines) if ln.startswith("OUT OF SCOPE:")), len(out_lines))
     out_lines.insert(at, STOP_ON_BLOCK_LINE + "\n")
+    pre = next((n for n, ln in enumerate(out_lines) if ln.startswith("PRE-EXISTING CHANGES")), len(out_lines))
+    out_lines.insert(pre, CLAIMS_LINE + "\n")  # after FAILURE GATE, so STOP ON BLOCK keeps its place before OUT OF SCOPE
     result = "".join(out_lines)
 
     # A top-rung supervisor is also the executive: drop the "X reports to X" link.

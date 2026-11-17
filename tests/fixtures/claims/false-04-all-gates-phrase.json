@@ -1,0 +1,36 @@
+{
+ "name": "false-04-all-gates-phrase",
+ "report": "All gates passed.\n```claims\nfiles_changed: a.py\ngates: g1=1\nstopped: none\n```\n",
+ "run": {
+  "changed": [
+   "a.py"
+  ],
+  "gate_results": [
+   {
+    "id": "g1",
+    "argv": [
+     "pytest"
+    ],
+    "rc": 1,
+    "expect_rc": 0,
+    "state": "failed",
+    "excerpt": "Ran 42 tests\nOK"
+   }
+  ],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "checked",
+  "items": [
+   {
+    "kind": "all-gates-passed",
+    "claimed": "all gates passed",
+    "observed": "g1 failed"
+   }
+  ],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": null
+ }
+}

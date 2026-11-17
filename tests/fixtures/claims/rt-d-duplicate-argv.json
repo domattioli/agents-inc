@@ -1,0 +1,46 @@
+{
+ "name": "rt-d-duplicate-argv",
+ "report": "done.\n```claims\nfiles_changed: a.py\ngates: g1=0; g2=1\nstopped: none\n```\n",
+ "run": {
+  "changed": [
+   "a.py"
+  ],
+  "gate_results": [
+   {
+    "id": "g1",
+    "argv": [
+     "pytest"
+    ],
+    "rc": 0,
+    "expect_rc": 0,
+    "state": "passed",
+    "excerpt": "Ran 42 tests\nOK"
+   },
+   {
+    "id": "g2",
+    "argv": [
+     "pytest"
+    ],
+    "rc": 2,
+    "expect_rc": 0,
+    "state": "failed",
+    "excerpt": "bad"
+   }
+  ],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "checked",
+  "items": [
+   {
+    "kind": "gate-result",
+    "claimed": "g2=1",
+    "observed": "rc=2"
+   }
+  ],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": null
+ }
+}

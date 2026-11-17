@@ -3,6 +3,7 @@ in fixtures/live-events/golden/, which were recorded with the code before spec 0
 from __future__ import annotations
 import contextlib
 import os
+import re
 import shutil
 import stat
 import sys
@@ -76,8 +77,18 @@ class FakeCliMixin:
 
 
 class GoldenTest(FakeCliMixin, CliBase):
+    # spec 042 added tokens; goldens are pre-027 and frozen (fixtures/live-events/README.md)
+    ADDED = (re.compile(r" gates=\d+/\d+"), re.compile(r" claims=not-checked"))
+    GATE_LINE = re.compile(r"^gate passed rc=0 cmd=.* last=.*\n?", re.M)  # the run prints `gate <state> rc=.. cmd=.. last=..`, no g<n> id
+
+    def _strip_added(self, out: str) -> str:
+        for pat in self.ADDED:
+            out = pat.sub("", out)
+        return self.GATE_LINE.sub("", out)
+
     def _verdict(self, out: str, run_dir: Path) -> str:
-        return out.strip().replace(str(run_dir), "<RUN_DIR>").replace(run_dir.name, "<RUN_ID>")
+        status = self._strip_added(out).strip()
+        return status.replace(str(run_dir), "<RUN_DIR>").replace(run_dir.name, "<RUN_ID>")
 
     def _check(self, model: str, name: str, has_usage: bool):
         rc, out, _, run = self._dispatch(model)
@@ -88,6 +99,10 @@ class GoldenTest(FakeCliMixin, CliBase):
         else:
             self.assertFalse((run / "usage.json").exists())
         self.assertEqual(self._verdict(out, run) + "\n", (GOLDEN / f"{name}.verdict.txt").read_text())
+        # the stripped tokens and lines were really in the output
+        self.assertEqual(len(re.findall(r" gates=1/1", out)), 1, out)
+        self.assertEqual(len(re.findall(r" claims=not-checked", out)), 1, out)
+        self.assertEqual(len(re.findall(r"^gate passed rc=0 cmd=", out, re.M)), 1, out)
 
     def test_claude_dispatch_matches_golden(self):
         self._check("haiku", "claude", has_usage=True)

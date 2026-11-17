@@ -4,7 +4,8 @@ import hashlib, json, os, re, sys, tempfile, time
 from datetime import datetime
 from .. import role_defaults
 from .. import native_names
-from .doctor import check_install
+from .doctor import check_install, format_age
+from . import rules
 from .paths import InstallPaths
 
 # The rung is the model; the route is always `agents-inc dispatch` (D59, QUICKREF step 2). The earlier wording
@@ -59,12 +60,11 @@ FAN_OUT = "agents-inc: fan-out"
 INFLIGHT_TTL_S = 7200  # a spawn that never reports done stops warning after 2 h
 DISPATCH_RE = re.compile(r"agents-inc\s+dispatch|\b(?:gask|mask|oask|agent)\.sh\b|\bcodex\s+exec\b")
 DELEGATE_RE = re.compile(r"\Amcp__.*__DelegateAgent\Z")
-QUICKREF_HEADER = ("agents-inc quickref (skills/workerbee/QUICKREF.md, loaded once per session on first dispatch; full "
-                   "SKILL.md still required for non-Claude rungs, prompts from scratch, or disputed gates):")
+QUICKREF_HEADER = "agents-inc quickref (skills/workerbee/QUICKREF.md, loaded once per session):"
 
 def session_start(paths: InstallPaths, host: str) -> str:
     report = check_install(paths)
-    status = "READY" if report.ready else " ".join(report.codes)
+    status = "READY" if report.ready else (" ".join(report.codes) or "NOT READY (not tested now: " + ", ".join(report.untested) + ")")
     skill = paths.current / "skills/workerbee/QUICKREF.md"
     # D78 R4: on Claude the PreToolUse hook injects QUICKREF on the first Agent, Task, DelegateAgent or Bash dispatch
     # (D53), so the read instruction stays only for the route it does not cover (a direct mcp__agents-inc__run call).
@@ -72,9 +72,14 @@ def session_start(paths: InstallPaths, host: str) -> str:
     read = (f"the first Agent, Task or Bash dispatch loads the quick reference; read {skill} yourself only before a "
             "direct mcp__agents-inc__run call" if host == "claude" else f"read {skill} before the first dispatch")
     text = (f"agents-inc is installed (doctor: {status}). Every delegation in this session routes through agents-inc; "
-            f"{read} (full SKILL.md only for a non-Claude rung, a prompt from scratch, "
-            f"or a disputed gate). {route_rule(role_defaults.load(paths.settings))} Launcher: {paths.launcher}.")
-    if not report.ready: text += " Tell the operator doctor is not READY and suggest `agents-inc repair --source <agents-inc checkout>`."
+            f"{read}. {route_rule(role_defaults.load(paths.settings))} Launcher: {paths.launcher}.")
+    if not report.ready and report.codes: text += " Tell the operator doctor is not READY and suggest `agents-inc repair --source <agents-inc checkout>`."
+    elif not report.ready:  # FR-018: nothing failed, but a required path was not tested now
+        text += (" Tell the operator doctor could not test " + ", ".join(report.untested) + ", so it did not print READY; "
+                 "run `agents-inc doctor` from a normal terminal to check.")
+    for item in report.items:  # FR-030: a stored value is never printed as current
+        if item.tested == "record":
+            text += f" {item.name}: {item.result} was read from a stored record, not verified now, {format_age(item.age or 0)}."
     for warning in report.warnings:
         # An install made --without-codex reports WB_CLI_NOT_FOUND as a warning; say what it means so a session
         # does not read "CLI not found" as "dispatch is broken" and avoid it.
@@ -146,6 +151,29 @@ _HIDING_HEADS = frozenset({"alias", "source", "."})
 # after it (#152 B7, B8; a `> $D/out.json` target was read as an expanded command head). `<<` takes a delimiter word.
 _REDIRECTS = frozenset({">", ">>", "<", ">|", "&>", "&>>", ">&", "<&", "<>", "<<", "<<-", "<<<"})
 
+# Spec 042 FR-028: what the last _parse calls met that the hook cannot read safely ("ansi" word, "case" in a substitution).
+_FLAGS: set = set()
+_REDIR_TARGETS: list = []  # text of every redirection operand and heredoc delimiter seen by _parse
+_HEREDOC_BODIES: list = []  # (words of the owning command, body text) for every heredoc seen by _parse
+_ANSI_SIMPLE = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v",
+                "\\": "\\", "'": "'", '"': '"', "?": "?"}
+
+def _ansi_decode(body: str) -> str:
+    """Decode the body of an ANSI-C `$'...'` word: \\xHH, \\uHHHH, \\UHHHHHHHH, octal and the single-letter escapes."""
+    out, k = [], 0
+    while k < len(body):
+        c = body[k]
+        if c != "\\" or k + 1 >= len(body): out.append(c); k += 1; continue
+        e = body[k + 1]
+        m = re.compile({"x": r"[0-9a-fA-F]{1,2}", "u": r"[0-9a-fA-F]{1,4}", "U": r"[0-9a-fA-F]{1,8}"}.get(e, r"[0-7]{1,3}")).match(body, k + (2 if e in "xuU" else 1))
+        if m and (e in "xuU" or e in "01234567"):
+            try: out.append(chr(int(m.group(0), 8 if e not in "xuU" else 16)))
+            except (ValueError, OverflowError): pass
+            k = m.end()
+        else:
+            out.append(_ANSI_SIMPLE.get(e, "\\" + e)); k += 2
+    return "".join(out)
+
 def _unquote(text: str) -> str:
     """Drop quote chars and backslashes so a quoted launcher word ('agents-inc') still matches the dispatch regex."""
     return re.sub(r"['\"\\]", "", text)
@@ -177,7 +205,7 @@ def _body_subs(body: str, subs: list) -> None:
 
 def _heredocs(s: str, i: int, pending: list, subs: list) -> int:
     """Skip the bodies of the pending heredocs, from line start `i` to each delimiter line; return the new index."""
-    for delim, strip, quoted in pending:
+    for delim, strip, quoted, owner in pending:
         body = []
         while i < len(s):
             j = s.find("\n", i)
@@ -185,6 +213,7 @@ def _heredocs(s: str, i: int, pending: list, subs: list) -> int:
             line, i = s[i:j], min(j + 1, len(s))
             if (line.lstrip("\t") if strip else line) == delim: break
             body.append(line)
+        _HEREDOC_BODIES.append((owner, "\n".join(body)))
         if not quoted: _body_subs("\n".join(body), subs)
     return i
 
@@ -196,17 +225,20 @@ def _parse(s: str, i: int, mode: str):
     backtick). Raises ValueError on an unterminated quote. A heuristic, not a full shell grammar."""
     cmds, ops, subs, cur = [], [], [], []
     word, depth, pending, delim, target, n = None, 0, [], None, False, len(s)
+    herestr = False
     def end_word():
-        nonlocal word, delim, target
+        nonlocal word, delim, target, herestr
         if word is None: return
         if target:  # a redirection operand or heredoc delimiter: data, not a word of the command
-            target = False
-            if delim is not None: pending.append((word.text, delim, word.quoted)); delim = None
+            target = False; _REDIR_TARGETS.append(word.text)
+            if delim is not None: pending.append((word.text, delim, word.quoted, cur)); delim = None
+            elif herestr: _HEREDOC_BODIES.append((cur, word.text))
         else: cur.append(word)
         word = None
     def end_cmd():
         nonlocal cur, target
         end_word(); target = False
+        if cur and mode == "paren" and cur[0].text == "case": _FLAGS.add("case")
         if cur: cmds.append(cur)
         cur = []
     while i < n:
@@ -233,6 +265,7 @@ def _parse(s: str, i: int, mode: str):
                 if word is not None and word.text.isdigit() and word.prefix == word.text: word = None
                 end_word(); ops.append(op); i = j; target = True
                 if op in ("<<", "<<-"): delim = op == "<<-"
+                herestr = op == "<<<"
                 continue
             end_cmd(); ops.append(op); i = j
         else:
@@ -267,10 +300,51 @@ def _parse(s: str, i: int, mode: str):
                 res, i = _parse(s, i + 2, "paren"); subs.append(res); word.expand("$()")
             elif c == "`":
                 res, i = _parse(s, i + 1, "tick"); subs.append(res); word.expand("$()")
+            elif c == "$" and s[i + 1:i + 2] == "'":  # ANSI-C word: decoded here, and flagged because it can hide a launcher
+                j = i + 2
+                while j < n and s[j] != "'": j += 2 if s[j] == "\\" else 1
+                if j >= n: raise ValueError("unterminated quote")
+                word.lit(_ansi_decode(s[i + 2:j])); _FLAGS.add("ansi"); i = j + 1
             elif c == "$": word.expand(c); i += 1
             else: word.plain(c); i += 1
     end_cmd()
     return (cmds, ops, subs), i
+
+def _squash(text: str) -> str:
+    """Conservative normalization: drop quotes, backticks and backslashes so split launcher names rejoin."""
+    return re.sub(r"[\\'\"`]", "", text)
+
+# Minimal allowlist rule (D88): launch text (the launcher name, not glued to a word, then dispatch, run or luna, found
+# after backslash-newlines are joined and quotes and backslashes removed, outside comments) is allowed only in a lone
+# launcher command or in plain grep/cat/echo style commands joined by pipes, `;`, `&&`, `||` or newlines, with no
+# redirection, substitution, group, keyword, quoted executable or assignment. Everything else is denied as hook-unparsed.
+_LAUNCH_RE = re.compile(r"(?<![A-Za-z0-9_])agents-inc(?!/)[\s,;:()\[\]{}+.]*\b(?:dispatch|run|luna)\b")
+_DATA_ONLY = frozenset({"grep", "egrep", "fgrep", "cat", "head", "tail", "wc", "echo", "printf", "ls"})
+_DATA_OPS = frozenset({"|", ";", "&&", "||"})
+_LAUNCH_DENY = "unparsed: launch text in a call that is not the lone launcher or data-only commands"
+
+def _no_comments(text: str) -> str:
+    return "\n".join(l for l in text.split("\n") if not l.lstrip().startswith("#"))
+
+def _launch_text(text: str) -> bool:
+    """The one launch-text detector: every exception path uses it."""
+    return bool(_LAUNCH_RE.search(_squash(_no_comments(re.sub(r"\\\n", "", text)))))
+
+def _data_only(level, command: str) -> bool:
+    """Every command is plain grep, cat, echo style text handling: unquoted literal executable from the set, no
+    redirection, substitution, group, keyword, ANSI-C word, continuation or control character."""
+    cmds, ops, subs = level
+    if subs or "ansi" in _FLAGS or any(o not in _DATA_OPS for o in ops): return False
+    if "\\\n" in command or re.search(r"[\x00-\x08\x0b-\x1f\x7f]", command): return False
+    for words in cmds:
+        w0 = words[0]
+        if w0.assign or w0.expands or w0.quoted or w0.text not in _DATA_ONLY: return False
+        if w0.text == "printf" and any(w.text.startswith("-v") for w in words[1:]): return False
+    return not _HEREDOC_BODIES
+
+def _lone_launcher(level) -> bool:
+    cmds, ops, subs = level
+    return len(cmds) == 1 and not ops and not subs and os.path.basename(cmds[0][0].text) == "agents-inc"
 
 def _words_dispatch(words: list) -> bool:
     return (len(words) >= 2 and os.path.basename(words[0].text) == "agents-inc"
@@ -323,6 +397,8 @@ def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
                 script = wrapped[c_at + 1]
                 if script.expands and "agents-inc" in "".join(w.text for w in wrapped): return f"{name} -c string", False, False
                 if _script_runs_dispatch(script.text): return f"{name} -c string", False, False
+        if os.path.basename(rest[0].text) == "agents-inc" and not rest[0].expands and len(rest) > 1 and rest[1].expands:
+            return "unparsed: expanded subcommand word", False, False
         if _words_dispatch(rest):
             dispatch = True; env_prefix = env_prefix or bool(skipped)
     for sub in subs:
@@ -331,39 +407,63 @@ def _judge(level, could_hide: bool) -> tuple[str, bool, bool]:
         if ran: return "command substitution", False, False
     return "", dispatch, env_prefix
 
+def _level_words(level) -> list:
+    """Text of every word at this level and in its substitutions (executable words only: no comments, no heredoc data)."""
+    out = [w.text for words in level[0] for w in words]
+    for sub in level[2]: out += _level_words(sub)
+    return out
+
+def _mentions(text: str) -> bool:
+    """`agents-inc` not followed by `/` (a directory in a path is never the launcher name)."""
+    return bool(re.search(r"agents-inc(?!/)", text))
+
 def _dispatch_shape(command: str) -> str:
     """Return the offending element when an executed `agents-inc dispatch|run|luna` shares the call with a shell
     operator, cd, command substitution or an env prefix; else "". Quoted text, comments and heredoc bodies that only
     mention the command never count, but a dispatch inside a `$(...)` or backtick substitution, a `sh -c` string, or
-    behind a wrapper word (env, exec, command, nohup, time, nice, xargs) does. Unbalanced quotes fall back to the
-    raw-substring rule."""
+    behind a wrapper word (env, exec, command, nohup, time, nice, xargs) does. A form the parser cannot read (an
+    unbalanced quote, an ANSI-C word, a `case` in a substitution, an expanded subcommand, a python -c route) while the
+    call names agents-inc returns "unparsed: ..." (FR-028)."""
+    _FLAGS.clear(); _HEREDOC_BODIES.clear(); _REDIR_TARGETS.clear()
     try:
         level, _ = _parse(command, 0, "")
     except ValueError:
-        if not COMPOUND_DISPATCH_RE.search(command): return ""
-        return next((m for m in COMPOUND_MARKERS if m in command), "")
-    # Fail closed on shapes that can hide a launcher, but only when the call could involve agents-inc at all.
+        if not _launch_text(command): return ""
+        found = next((m for m in COMPOUND_MARKERS if COMPOUND_DISPATCH_RE.search(command) and m in command), "")
+        return found or "unparsed: unterminated quote"
     flat = re.sub(r"\\\n", "", command)
-    # A mention followed by `/` is a directory in a path (a cwd, a repo checkout), never the launcher name, so it alone
-    # does not make the call suspect; `agents-inc` at a word end (bin/agents-inc, X=agents-inc;) still does.
-    def mentions(text: str) -> bool: return bool(re.search(r"agents-inc(?!/)", text))
-    could_hide = mentions(flat) or mentions(re.sub(r"\$\{[^}]*\}|[\\'\"`]", "", flat))
+    words = " ".join(_level_words(level))
+    # A comment that mentions agents-inc is not a launcher: could_hide reads executable words, not the raw text.
+    could_hide = _mentions(words) or _mentions(re.sub(r"\$\{[^}]*\}|[\\'\"`]", "", words))
+    if "ansi" in _FLAGS and could_hide: return "unparsed: ANSI-C word"
+    if "case" in _FLAGS and _mentions(flat): return "unparsed: case in a substitution"
     found, dispatch, env_prefix = _judge(level, could_hide)
     if found: return found
-    if not dispatch: return ""
-    if env_prefix: return "env prefix"
-    if level[1]: return level[1][0]
-    if level[2]: return "command substitution"
+    if dispatch:
+        if env_prefix: return "env prefix"
+        if level[1]: return level[1][0]
+        if level[2]: return "command substitution"
+    if _lone_launcher(level): return ""
+    text = "\n".join([" ".join(_level_words(level) + _REDIR_TARGETS)] + [body for _owner, body in _HEREDOC_BODIES])
+    if _launch_text(text) and not _data_only(level, command): return _LAUNCH_DENY
     return ""
 
 def compound_deny(payload: object) -> str:
-    """Deny a Bash call that wraps an agents-inc dispatch in a compound command. Fails open on anything unexpected."""
+    """Deny a Bash call that wraps an agents-inc dispatch in a compound command. Fails open on an unexpected error
+    only when the call does not name agents-inc; when it does, an error or an unreadable form denies as hook-unparsed."""
     try:
         if not isinstance(payload, dict) or payload.get("tool_name") != "Bash": return ""
         command = str(_tool_input(payload).get("command") or "")
-        found = _dispatch_shape(command)
+        try:
+            found = _dispatch_shape(command)
+        except Exception:  # FR-028a: a parser error or a recursion limit fails closed when the call names the launcher
+            found = "unparsed: parser error" if _mentions(command) or _mentions(_squash(command)) else ""
         if not found: return ""
-        reason = f"{COMPOUND_DENY_REASON}{COMPOUND_SAFE_FORM} (found: {found})."
+        if found.startswith("unparsed"):
+            reason = f"{COMPOUND_DENY_REASON}{COMPOUND_SAFE_FORM} (found: {found}). {rules.one_line('hook-unparsed', found)}"
+            return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                      "permissionDecisionReason": reason}})
+        reason = f"{COMPOUND_DENY_REASON}{COMPOUND_SAFE_FORM} (found: {found}). {rules.one_line('hook-compound', found)}"
         return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                   "permissionDecisionReason": reason}})
     except Exception:
@@ -385,8 +485,9 @@ def persona_deny(payload: object) -> str:
         if _is_native(tool_input): return ""
         description = tool_input.get("description")
         if not isinstance(description, str) or not PERSONA_RE.match(description): return ""
+        reason = f"{PERSONA_DENY_REASON} {rules.one_line('hook-persona', description)}"
         return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                  "permissionDecisionReason": PERSONA_DENY_REASON}})
+                                                  "permissionDecisionReason": reason}})
     except Exception:
         return ""
 
@@ -467,6 +568,7 @@ def gate_deny(paths: InstallPaths, payload: object) -> str:
         if _is_native(tool_input): return ""
         reason = GATE_DENY_REASON.format(subagent=subagent if isinstance(subagent, str) else "omitted",
                                          background="yes" if background else "no", allowed=", ".join(sorted(GATE_ALLOW)))
+        reason = f"{reason} {rules.one_line('hook-agent-gate', subagent if isinstance(subagent, str) else 'omitted')}"
         return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                   "permissionDecisionReason": reason}})
     except Exception:

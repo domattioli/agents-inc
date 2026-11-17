@@ -76,7 +76,7 @@ class NestedBase(GrantsBase):
     def _parts(self, **kw) -> dict:
         """One real Claude Lead dispatch; return what a broker needs to check its parent."""
         rc, out, _ = self._lead(**kw)
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         call = self.calls[0]
         lead = Path(call["lead_dir"])
         return {"call": call, "lead": lead, "run_dir": self._run_dir(), "token": call["token"],
@@ -124,7 +124,7 @@ class LeadSetupTest(NestedBase):
             with self.subTest(why=why):
                 self.tearDown(), self.setUp()
                 rc, out, _ = self._dispatch("opus", **slots)
-                self.assertEqual(rc, 0, out)
+                self.assertEqual(rc, 4, out)
                 spec = self._spec()
                 self.assertEqual(spec["lead_skipped"], why)
                 self.assertNotIn("lead_dir", spec)
@@ -136,7 +136,7 @@ class LeadSetupTest(NestedBase):
 
     def test_no_lead_under_bypass_permissions(self):
         rc, out, _ = self._lead(PERMISSION_MODE="bypassPermissions")
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         spec = self._spec()
         self.assertEqual(spec["lead_skipped"], "bypass-permissions")
         self.assertNotIn("lead_dir", spec)
@@ -289,7 +289,7 @@ class CheckParentTest(NestedBase):
     def test_codex_lead_without_parent_fields_unchanged(self):
         self.tearDown(), self.setUp()
         rc, out, _ = self._dispatch("terra", ALLOWLIST="haiku", FAN_OUT=FAN)
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         call, lead = self.calls[0], Path(self.calls[0]["lead_dir"])
         run = json.loads((lead / "run.json").read_text())
         self.assertNotIn("parent_run_id", run)
@@ -481,7 +481,7 @@ class RecordingTest(NestedBase):
         report = GOOD_REPORT.replace("WORKERS SPAWNED: 0", "WORKERS SPAWNED: 1")
         with mock.patch.dict(os.environ, {"AGENTS_INC_HOME_REPO": str(home)}):
             rc, out, _ = self._lead(report=report)
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         want = [{"request_id": "r1", "child_run_id": "c1", "model": "haiku", "status": "unverified", "outcome": "unverified"}]
         spec = self._spec()
         self.assertEqual((spec["children"], spec["broker_workers_spawned"]), (want, 1))
@@ -498,11 +498,11 @@ class RecordingTest(NestedBase):
 
     def test_resume_lead_reattaches_mcp_config(self):
         rc, out, _ = self._lead()
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         spec, first = self._spec(), self.calls[0]
         with mock.patch.object(dispatch, "launch", side_effect=self._fake()):
             rc, out, _ = self._main("--resume", spec["run_id"], "--message", "go on", "--run-dir", str(self.runs))
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         again = self.calls[1]
         self.assertEqual(again["resume"], "sess-1")
         self.assertEqual(again["lead_dir"], Path(spec["lead_dir"]))
@@ -511,7 +511,7 @@ class RecordingTest(NestedBase):
 
     def test_resume_lead_dir_missing_refused(self):
         rc, out, _ = self._lead()
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         spec = self._spec()
         (Path(spec["lead_dir"]) / "lead_mcp.json").unlink()
         with mock.patch.object(dispatch, "launch", side_effect=self._fake()):

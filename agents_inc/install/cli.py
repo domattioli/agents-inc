@@ -394,7 +394,7 @@ def main(argv=None):
     subs = parser.add_subparsers(dest="command", required=True)
     p = subs.add_parser("install"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES); p.add_argument("--role", action="append", metavar="KEY=VALUE", help="store one roles item in the agents-inc settings file (VALUE default removes it); `agents-inc doctor` shows the effective values (D80)");p.add_argument("--legacy-routes", action=argparse.BooleanOptionalAction, default=None, help="keep the relay agent, mcp__agents-inc__run and @alias routes (off by default; the choice persists across repair)")
     p = subs.add_parser("run"); p.add_argument("--model", required=True); p.add_argument("--effort", default="medium"); p.add_argument("--cwd", required=True); p.add_argument("--tools", action="store_true"); p.add_argument("--no-tools", action="store_true"); p.add_argument("--host-tools", action="store_true", help="tools off; the caller's host runs the tools the model names (the agents-inc:luna type)"); p.add_argument("--write", action="store_true"); p.add_argument("--network", action="store_true"); p.add_argument("--run-dir"); p.add_argument("--lead", metavar="RUN_DIR"); p.add_argument("--home-repo"); p.add_argument("--thread", metavar="FILE", help="keep one Codex thread in FILE: start it when missing or empty, resume it otherwise"); p.add_argument("--timeout", type=float, metavar="SECONDS", help="kill Codex after SECONDS and exit 124 (the agents-inc:luna step limit)")
-    p = subs.add_parser("dispatch"); p.add_argument("--slots"); p.add_argument("--model"); p.add_argument("--effort"); p.add_argument("--cwd"); p.add_argument("--tier", choices=("grunt",)); p.add_argument("--run-dir"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--resume"); p.add_argument("--message"); p.add_argument("--home-repo"); p.add_argument("--serve", metavar="RUN_DIR"); p.add_argument("--poll-interval", type=float, default=1.0); p.add_argument("--idle-timeout", type=float, default=600.0); p.add_argument("--cancel", metavar="RUN_DIR"); p.add_argument("--wait", nargs=2, metavar=("RUN_DIR", "REQUEST_ID")); p.add_argument("--timeout", type=float, default=600.0)
+    p = subs.add_parser("dispatch"); p.add_argument("--rules", action="store_true", help="list every refusal rule id and statement"); p.add_argument("--print-template", action="store_true", help="print a worked slots file"); p.add_argument("--slots"); p.add_argument("--model"); p.add_argument("--effort"); p.add_argument("--cwd"); p.add_argument("--tier", choices=("grunt",)); p.add_argument("--run-dir"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--resume"); p.add_argument("--message"); p.add_argument("--home-repo"); p.add_argument("--serve", metavar="RUN_DIR"); p.add_argument("--poll-interval", type=float, default=1.0); p.add_argument("--idle-timeout", type=float, default=600.0); p.add_argument("--cancel", metavar="RUN_DIR"); p.add_argument("--wait", nargs=2, metavar=("RUN_DIR", "REQUEST_ID")); p.add_argument("--timeout", type=float, default=600.0)
     p = subs.add_parser("events", help="follow or redact live delegate events (spec 027)"); p.add_argument("verb", choices=("follow", "redact")); p.add_argument("run_dir", nargs="?")
     p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model"); p.add_argument("--probe", action="store_true", help="also run the tool-use probe for each free guest agent model (one free request each)")
     p = subs.add_parser("repair"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES); p.add_argument("--role", action="append", metavar="KEY=VALUE", help="store one roles item in the agents-inc settings file (VALUE default removes it); `agents-inc doctor` shows the effective values (D80)");p.add_argument("--legacy-routes", action=argparse.BooleanOptionalAction, default=None, help="keep the relay agent, mcp__agents-inc__run and @alias routes (off by default; the choice persists across repair)")
@@ -427,6 +427,9 @@ def main(argv=None):
         if args.command == "narrate":
             from .. import narrate  # works before the receipt check: the flag file and watcher need no install receipt
             return narrate.run_cli(args, paths.home)
+        if args.command == "dispatch" and (args.rules or args.print_template):
+            from . import rules  # reads nothing: works before the receipt check
+            sys.stdout.write(rules.rules_listing() if args.rules else rules.slots_template()); return 0
         if args.command == "dispatch":
             from . import dispatch  # works from a source checkout; Codex launch loads the receipt itself
             if args.cancel: return dispatch.cancel_run(args.cancel)
@@ -436,6 +439,7 @@ def main(argv=None):
                 from .doctor import stale_refusal
                 refusal = stale_refusal(paths)
                 if refusal: print(refusal, file=sys.stderr); return 1
+                dispatch.source_uncommitted_note(paths)  # FR-021a: one warning on stderr, never blocks
             return dispatch.run(args)
         if args.command == "events":
             from .. import live_rows  # works before the receipt check, like dispatch
@@ -467,12 +471,16 @@ def main(argv=None):
             if args.json:
                 print(json.dumps(report.as_dict()))
             else:
-                print(" ".join(report.codes or ("READY",)))
+                if report.codes: print(" ".join(report.codes))
+                elif report.untested: print("NOT READY: not tested now: " + ", ".join(report.untested))  # FR-018: never READY on an untested path
+                else: print("READY")
                 if "WB_REPAIR_FAILED" in report.codes:
                     try: info = json.loads(paths.state.joinpath(REPAIR_MARKER).read_text())
                     except (OSError, ValueError): info = {}
                     print(f"WB_REPAIR_FAILED: last {info.get('command', 'repair')} failed at {info.get('at', '?')}: {info.get('error', '?')}; run agents-inc repair from a normal terminal")
                 print("agent gate: {} ({})".format(*host_hook.agent_gate_mode(paths)))
+                from .doctor import item_lines
+                for il in item_lines(report): print(il)
                 from .. import role_defaults  # D80: effective role items and where each came from
                 roles = role_defaults.load(paths.settings)
                 for rl in role_defaults.show_lines(roles): print(rl)

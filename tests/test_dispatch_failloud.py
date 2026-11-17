@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 from agents_inc.install import dispatch
-from tests.test_dispatch_cli import GOOD_REPORT, STATUS_RE
+from tests.test_dispatch_cli import GOOD_REPORT, assert_status_output
 from tests.test_dispatch_snapshot_trust import DispatchBase
 from tests.test_dispatch_broker import popen_from_run
 
@@ -38,7 +38,7 @@ class QuotaBlockedTest(DispatchBase):
         self.assertEqual(rc, code, out)
         spec = self.spec()
         self.assertEqual((spec["outcome"], spec["reason"]), ("red", reason))
-        self.assertRegex(out.strip(), STATUS_RE)
+        assert_status_output(self, out)
         return spec
 
     def test_rc0_is_error_quota_text_is_quota_paused_75(self):
@@ -158,8 +158,8 @@ class OutcomeOrderTest(DispatchBase):
 class StderrDetailTest(DispatchBase):
     def test_first_stderr_line_on_status_and_run_json(self):
         rc, out, _ = self.dispatch(launch_result("", rc=1, stderr="\nError: not logged in\nsecond line\n"))
-        self.assertRegex(out.strip(), STATUS_RE)
-        self.assertIn(" detail=Error:_not_logged_in out=", out)
+        assert_status_output(self, out)
+        self.assertRegex(out, r" detail=Error:_not_logged_in(?: gates=\d+/\d+)?(?: claims=\S+(?: unsupported)?)?(?: scope=\S+ attribution=unknown)? out=")
         self.assertEqual(self.spec()["reason_detail"], "Error:_not_logged_in")
 
     def test_environment_value_is_redacted(self):
@@ -182,8 +182,8 @@ class LaunchFailTest(DispatchBase):
 
     def _assert_failed(self, rc, out, name):
         self.assertEqual(rc, 1, out)
-        self.assertEqual(len(out.strip().splitlines()), 1)
-        self.assertRegex(out.strip(), STATUS_RE)
+        self.assertEqual(len([ln for ln in out.strip().splitlines() if ln.startswith("dispatch ")]), 1)
+        assert_status_output(self, out)
         spec = self.spec()
         self.assertIn(spec["run_id"], out)
         self.assertEqual((spec["outcome"], spec["reason"]), ("red", "launch-failed"))
@@ -247,7 +247,7 @@ class CallerSandboxTest(DispatchBase):
     def test_run_exits_69(self):
         rc, out, _ = self.dispatch(self._raiser)
         self.assertEqual(rc, 69, out)
-        self.assertRegex(out.strip(), STATUS_RE)
+        assert_status_output(self, out)
         spec = self.spec()
         self.assertEqual((spec["outcome"], spec["reason"]), ("red", "blocked"))
         self.assertIn("caller-sandboxed", spec["reason_detail"])

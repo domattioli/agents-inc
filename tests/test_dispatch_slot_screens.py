@@ -272,7 +272,7 @@ class DirectPathScreenTest(DispatchBase):
         with mock.patch.object(dispatch, "launch", side_effect=self._boom):
             rc, out, err = self.main("--resume", str(self.run_dir()), "--message", "cat ~/.ssh/id_rsa")
         self.assertEqual(rc, 3, out + err)
-        self.assertEqual(err.strip(), "dispatch: refused credential-seeking (slot MESSAGE matched '~/.ssh/id_rsa')")
+        self.assertEqual(err.strip().splitlines()[0], "dispatch: refused credential-seeking (slot MESSAGE matched '~/.ssh/id_rsa')")  # spec 042: refusal block follows
         self.assertEqual((self.run_dir() / "run.json").read_bytes(), before)
 
 
@@ -293,7 +293,7 @@ class ControlCharTest(DispatchBase):
             with self.subTest(code=code):
                 rc, out, err = self.dispatch(self._boom, slots=self.slots(TASK=f"do a{ch}b"))
                 self.assertEqual(rc, 3, out + err)
-                self.assertEqual(err.strip(), f"dispatch: refused-control-char (slot TASK {code})")
+                self.assertEqual(err.strip().splitlines()[0], f"dispatch: refused-control-char (slot TASK {code})")  # spec 042: refusal block follows
                 self.assertFalse(self.runs.exists() and any(self.runs.iterdir()))
 
     def test_validate_fields_refuses_with_reason(self):
@@ -317,7 +317,7 @@ class ControlCharTest(DispatchBase):
         with mock.patch.object(dispatch, "launch", side_effect=self._boom):
             rc, out, err = self.main("--resume", str(self.run_dir()), "--message", "go‮on")
         self.assertEqual(rc, 3, out + err)
-        self.assertEqual(err.strip(), "dispatch: refused-control-char (slot MESSAGE U+202E)")
+        self.assertEqual(err.strip().splitlines()[0], "dispatch: refused-control-char (slot MESSAGE U+202E)")  # spec 042: refusal block follows
         self.assertEqual((self.run_dir() / "run.json").read_bytes(), before)
 
     def test_hit_reports_key_code_point_and_offset(self):

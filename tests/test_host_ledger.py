@@ -323,6 +323,30 @@ class DispatchRunNodeTest(_Home):
         row = host_ledger.dispatch_return_row(spec)
         self.assertEqual([row[k] for k in ("input_tokens", "output_tokens", "cache_read", "cache_write")], [None] * 4)
 
+    # spec 042 contracts/return-row.md: the return row carries the measured fields.
+    MEASURED = {"exit_code": 4, "state": "not-checked",
+                "gate_results": [{"id": "g1", "argv": ["pytest", "-q"], "state": "not-checked", "rc": None,
+                                  "reason": "gate-not-runnable"}],
+                "scope": {"state": "passed", "foreign": [], "in_scope": ["a", "b"]},
+                "claims": {"state": "checked", "unsupported": 1, "omitted": ["g2"], "weak": ["g1"],
+                           "items": [{"kind": "file-changed", "claimed": "out.txt", "observed": "unchanged"}]}}
+
+    def test_return_row_carries_measured_fields(self):
+        row = host_ledger.dispatch_return_row({**self.RET, **self.MEASURED, "outcome": "unverified"})
+        self.assertEqual((row["dispatch_row_id"], row["exit_code"], row["state"]), (self.RET["run_id"], 4, "not-checked"))
+        self.assertEqual(row["gate_results"], [{"id": "g1", "argv0": "pytest", "state": "not-checked", "rc": None,
+                                                "reason": "gate-not-runnable"}])
+        self.assertEqual(row["scope"], {"state": "passed", "foreign_count": 0, "in_scope_count": 2})
+        self.assertEqual(row["claims"], {"state": "checked", "unsupported": 1, "omitted": ["g2"], "weak": ["g1"],
+                                         "items": self.MEASURED["claims"]["items"]})
+
+    def test_return_row_without_measured_fields_still_loads(self):
+        row = host_ledger.dispatch_return_row(self.RET)
+        self.assertEqual(row["dispatch_row_id"], self.RET["run_id"])
+        self.assertEqual((row["gate_results"], row["scope"], row["claims"]), ([], None, None))
+        self.assertTrue(host_ledger.record_dispatch_return(self.paths.state, self.RET))
+        self.assertEqual(ledger.lint(ledger.load(self.host_ws())), [])
+
     def test_return_write_failure_returns_false(self):
         self.paths.state.parent.mkdir(parents=True, exist_ok=True)
         self.paths.state.write_text("not a directory")

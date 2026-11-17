@@ -1,0 +1,34 @@
+{
+ "name": "rt-e-stop-invented",
+ "report": "done.\n```claims\nfiles_changed: none\ngates: g1=0\nstopped: the weather turned\n```\n",
+ "run": {
+  "changed": [],
+  "gate_results": [
+   {
+    "id": "g1",
+    "argv": [
+     "pytest"
+    ],
+    "rc": 0,
+    "expect_rc": 0,
+    "state": "passed",
+    "excerpt": "Ran 42 tests\nOK"
+   }
+  ],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "checked",
+  "items": [
+   {
+    "kind": "stopped",
+    "claimed": "the weather turned",
+    "observed": "declared: stop after 2 failed reads"
+   }
+  ],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": null
+ }
+}

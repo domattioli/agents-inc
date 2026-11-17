@@ -48,6 +48,33 @@ class SessionStartWarningsTest(unittest.TestCase):
     def test_stale_warning_explains_itself(self):
         self.assertIn("installed bundle differs from the source checkout", self._text(("INSTALL_STALE",)))
 
+    def test_stored_state_is_marked_not_verified_now_with_age(self):
+        from agents_inc.install.doctor import DoctorItem
+        item = DoctorItem("install-match", False, "record", "pass", "read from source-git.json", 3 * 3600 + 5)
+        paths = InstallPaths.for_home(Path("/nonexistent-home"))
+        report = DoctorReport(True, (), None, (), (item,))
+        with mock.patch.object(hook, "check_install", return_value=report), \
+                mock.patch("agents_inc.install.update_check.notice", return_value=None):
+            text = json.loads(hook.session_start(paths, "claude"))["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("install-match", text)
+        self.assertIn("not verified now", text)
+        self.assertIn("age 3h", text)
+
+    def test_untested_required_item_is_not_ready_and_names_the_check(self):
+        from agents_inc.install.doctor import DoctorItem
+        item = DoctorItem("dispatch-path", True, "not-tested", "could-not-test", "no route to api.anthropic.com", None)
+        paths = InstallPaths.for_home(Path("/nonexistent-home"))
+        report = DoctorReport(False, (), None, (), (item,))
+        with mock.patch.object(hook, "check_install", return_value=report), \
+                mock.patch("agents_inc.install.update_check.notice", return_value=None):
+            text = json.loads(hook.session_start(paths, "claude"))["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("doctor: READY", text)
+        self.assertIn("dispatch-path", text)
+        self.assertIn("agents-inc doctor", text)
+
+    def test_nothing_stored_adds_no_mark(self):
+        self.assertNotIn("not verified now", self._text(()))
+
     def test_plain_host_gets_the_same_text(self):
         self.assertIn("WARNING: INSTALL_STALE", self._text(("INSTALL_STALE",), host="codex"))
 

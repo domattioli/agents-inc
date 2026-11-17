@@ -23,8 +23,21 @@ REPO = Path(__file__).resolve().parents[1]
 EXAMPLE = REPO / "skills/workerbee/tests/fixtures/example_slots.json"
 STATUS_RE = re.compile(r"^dispatch \S+ \S+ rc=-?\d+ report=(COMPLIANT|NON-COMPLIANT:\[.*\]|none) "
                        r"lint=(checkout|installed) snapshot=(clean|CHANGED:\S+|ERROR:\S+|TAMPERED|none) outcome=(green|red|unverified)"
-                       r"( reason=\S+)?( detail=\S+)? out=\S+stdout(\.\d+)?\.md"
+                       r"( reason=\S+)?( detail=\S+)?"
+                       r"( gates=\d+/\d+( failed:\S+)?( not-checked:\S+)?)?( claims=(not-checked|checked:\d+ unsupported))?( omitted=\S+)?( weak=\S+)?( scope=not-checked:\S+ attribution=unknown)?"
+                       r" out=\S+stdout(\.\d+)?\.md"
                        r"( \(resume with --resume /\S+\))?$")
+EXTRA_LINE_RE = re.compile(r"^(gate |report-fault )")  # 042: gate and report-fault lines follow the one status line
+
+
+def assert_status_output(test, out: str) -> None:
+    """Line 0 is the one status line; every other line is a `gate ` or `report-fault ` line."""
+    lines = out.strip().splitlines()
+    test.assertRegex(lines[0], STATUS_RE)
+    for ln in lines[1:]:
+        test.assertRegex(ln, EXTRA_LINE_RE)
+
+
 GOOD_REPORT = ("caveman ultra confirmed. GRILL: none. [verified] gate rc=0 exit code 0.\n"
                "OUT OF SCOPE / INCOMPLETE: none\nWORKERS SPAWNED: 0\n")
 
@@ -120,7 +133,7 @@ class DispatchCliTest(CliBase):
         proc = subprocess.run([sys.executable, str(REPO / "skills/workerbee/scripts/render_dispatch.py"),
                                "--slots", str(self._slots(TASK=task))], capture_output=True, text=True, timeout=60)
         self.assertEqual(proc.returncode, 2, proc.stderr)
-        self.assertEqual(proc.stderr.strip(), "render: slot TASK has control character U+202E at offset 5")
+        self.assertEqual(proc.stderr.strip().splitlines()[0], "render: slot TASK has control character U+202E at offset 5")  # spec 042: refusal block follows
         self.assertEqual(proc.stdout, "")
 
     def test_lint_refusal_prints_missing(self):
@@ -191,8 +204,8 @@ class DispatchCliTest(CliBase):
         run = self._run_dir()
         for name in ("stdout.md", "run.json", "verify.txt", "stderr.txt"):
             self.assertTrue((run / name).is_file(), name)
-        self.assertRegex(out.strip(), STATUS_RE)
-        self.assertEqual(len(out.strip().splitlines()), 1)
+        assert_status_output(self, out)
+        self.assertEqual(len([ln for ln in out.strip().splitlines() if ln.startswith("dispatch ")]), 1)  # 042: exactly one status line
         self.assertIn("report=COMPLIANT lint=installed snapshot=clean", out)
         self.assertEqual(rc, 0, out)
         return json.loads((run / "run.json").read_text())
@@ -233,13 +246,21 @@ class DispatchCliTest(CliBase):
         self.assertEqual((rows[1]["id"], rows[1]["status"]), (spec["run_id"], spec["outcome"]))
         self.assertNotIn("ledger_return_error", spec)
 
-    def test_dry_run_and_refusals_leave_no_ledger_row(self):
+    def test_dry_run_and_refusals_leave_a_linked_returned_row(self):  # spec 042 FR-015 (was: no ledger row)
         self._main("--slots", str(self._slots()), "--model", "haiku", "--cwd", str(self.repo),
                    "--run-dir", str(self.runs), "--dry-run")
         with mock.patch.object(dispatch, "lint_prompt", return_value=([12], "")):
             self._main("--slots", str(self._slots()), "--model", "haiku", "--cwd", str(self.repo),
                        "--run-dir", str(self.runs))
-        self.assertEqual(self._ledger_rows(), [])
+        rows = self._ledger_rows()
+        self.assertEqual([r["status"] for r in rows], ["dispatched", "dry-run", "dispatched", "refused-lint"])
+        for dispatched, returned in ((rows[0], rows[1]), (rows[2], rows[3])):
+            self.assertEqual(returned["dispatch_row_id"], dispatched["id"])
+            self.assertEqual(returned["state"], "not-checked")
+        # readers that merge rows by id (ledger.load, `ledger pending`) see no open run
+        from agents_inc import ledger
+        ws = self.root / ".local/state/agents-inc/host-ledger"
+        self.assertEqual([n.status for n in ledger.load(ws).nodes.values()], ["dry-run", "refused-lint"])
 
     def test_launch_codex_mocked(self):
         rc, out, calls = self._launch("sol")
@@ -298,7 +319,7 @@ class DispatchCliTest(CliBase):
 
     def test_status_line_green_has_outcome(self):
         rc, out, _ = self._launch("sonnet")
-        self.assertIn(" outcome=green out=", out)
+        self.assertIn(" outcome=green gates=1/1 claims=not-checked out=", out)
         self.assertNotIn("reason=", out)
 
     def test_over_total_status_has_reason(self):
@@ -332,7 +353,7 @@ class DispatchCliTest(CliBase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stderr(err):
             dispatch._mirror({"cwd": "/x/repo", "run_id": "r1"}, self.root, None)
-        self.assertEqual(err.getvalue().strip(), "run spec not mirrored: no home repo")
+        self.assertTrue(err.getvalue().strip().startswith("run spec not mirrored: no home repo"))  # spec 042 FR-031: the note now also says what was skipped
 
     def test_mirror_copies_run_spec_to_home_repo(self):
         home = self.root / "home"
@@ -554,8 +575,11 @@ class DispatchCliTest(CliBase):
         self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 1, None), ("red", "rc-nonzero"))
         # format-only lint failure: green when gates ran and passed, red when nothing vouches for the work
         self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, None, True, snap="clean"), ("green", "report-format-advisory"))
-        self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, None, False, snap="clean"), ("red", "report-noncompliant"))
-        self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, "gate-failed", True, snap="clean"), ("red", "report-noncompliant"))
+        self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, None, False, snap="clean"), ("unverified", "no-gates"))  # 042: no gates is checked before the report fault
+        self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, "gate-failed", True, snap="clean"), ("red", "gate-failed"))
+        # operator ruling 2026-11-15: missing or empty report is red `no-report` with or without gates; malformed is not
+        self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, None, False, snap="clean", no_report=True), ("red", "no-report"))
+        self.assertEqual(dispatch._outcome({}, "NON-COMPLIANT", 0, 0, None, None, True, snap="clean", no_report=True), ("red", "no-report"))
         self.assertTrue(dispatch.QUOTA_RE.search("You've hit your session limit \u00b7 resets 2:50pm"))
 
     def test_kind_routing_free_codex_claude(self):
@@ -737,7 +761,7 @@ class RunDirIgnoreTest(CliBase):
                        cwd=self.repo, check=True, capture_output=True)
         rc, out, err = self._go(self.repo / "runs")
         self.assertEqual(rc, 0, out + err)
-        self.assertRegex(out.strip(), STATUS_RE)
+        assert_status_output(self, out)
 
     def test_run_dir_outside_repo_launches(self):
         rc, out, err = self._go(self.runs)
@@ -752,7 +776,7 @@ class RunDirIgnoreTest(CliBase):
 
 
 class GateWroteTest(CliBase):
-    """025 US5 (#107): a gate that writes into the repo turns the outcome red."""
+    """025 US5 (#107), amended by spec 042: a gate that writes into the repo is unverified `scope-foreign-change` (a failing writing gate stays red `gate-failed`)."""
 
     def _go(self, gates):
         slots = self._slots(GATES=gates)
@@ -760,18 +784,18 @@ class GateWroteTest(CliBase):
             return self._main("--slots", str(slots), "--model", "haiku", "--cwd", str(self.repo),
                               "--run-dir", str(self.runs))
 
-    def test_writing_gate_is_red(self):
+    def test_writing_gate_is_unverified_scope_foreign_change(self):
         rc, out, err = self._go([{"argv": ["sh", "-c", "echo pwned > gate_wrote.txt"]}])
-        self.assertIn("snapshot=CHANGED:gate_wrote.txt outcome=red reason=gate-wrote", out)
-        self.assertRegex(out.strip(), STATUS_RE)
-        self.assertEqual(rc, 1, out + err)
+        self.assertIn("snapshot=CHANGED:gate_wrote.txt outcome=unverified reason=scope-foreign-change", out)
+        assert_status_output(self, out)
+        self.assertEqual(rc, 4, out + err)
         verify = (self._run_dir() / "verify.txt").read_text()
         self.assertIn("\nafter gates:\nsnapshot rc=", verify)
         self.assertIn("gate_wrote.txt", verify.split("after gates:")[1])
 
-    def test_writing_failing_gate_reports_gate_wrote(self):
+    def test_writing_failing_gate_is_red_gate_failed(self):
         rc, out, err = self._go([{"argv": ["sh", "-c", "echo pwned > gate_wrote.txt; exit 1"]}])
-        self.assertIn("outcome=red reason=gate-wrote", out)
+        self.assertIn("outcome=red reason=gate-failed", out)
         self.assertEqual(rc, 1, out + err)
 
     def test_read_only_gate_stays_green(self):
@@ -819,7 +843,7 @@ class ScriptsSourceTest(CliBase):
             with (cwd / PROBES[1]).open("a") as fh:
                 fh.write("\n\ndef check_report(text):\n    return []\n")
         rc, out, err = self._go(self.co, during=edit_judge)
-        self.assertRegex(out.strip(), STATUS_RE)
+        assert_status_output(self, out)
         self.assertIn("report=NON-COMPLIANT:['sentinel-025'] lint=checkout ", out)
         spec = json.loads((self._run_dir() / "run.json").read_text())
         trusted = Path(spec["scripts_dir"])
@@ -858,7 +882,7 @@ class ScriptsSourceTest(CliBase):
             path = dispatch._trust_path(run_id) / "workerbee" / "scripts" / "check_dispatch_prompt.py"
             path.write_text(path.read_text() + "\n# changed\n")
         rc, out, err = self._go(self.co, during=tamper)
-        self.assertRegex(out.strip(), STATUS_RE)
+        assert_status_output(self, out)
         self.assertIn("snapshot=TAMPERED outcome=red reason=snapshot-tampered", out)
         self.assertEqual(rc, 1, out + err)
 

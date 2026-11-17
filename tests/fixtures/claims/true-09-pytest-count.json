@@ -1,0 +1,30 @@
+{
+ "name": "true-09-pytest-count",
+ "report": "done.\n```claims\nfiles_changed: a.py\ngates: g1=0\ntests: g1=5\nstopped: none\n```\n",
+ "run": {
+  "changed": [
+   "a.py"
+  ],
+  "gate_results": [
+   {
+    "id": "g1",
+    "argv": [
+     "pytest"
+    ],
+    "rc": 0,
+    "expect_rc": 0,
+    "state": "passed",
+    "excerpt": "==== 5 passed in 0.1s ===="
+   }
+  ],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "checked",
+  "items": [],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": null
+ }
+}

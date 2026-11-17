@@ -29,7 +29,7 @@ from pathlib import Path
 
 from agents_inc.datafiles import repo_file, repo_root
 
-from . import free_launch, live_events
+from . import free_launch, live_events, rules
 from .live_events import EventSink, _stream_run
 from .runtime import QUOTA_PATTERN, kill_and_reap
 
@@ -55,6 +55,16 @@ FREE_SLUGS = ("gemini", "mistral", "openrouter")
 DEFAULT_PERMISSION_MODE = "acceptEdits"
 EXIT_OK, EXIT_RED, EXIT_USAGE, EXIT_REFUSED = 0, 1, 2, 3
 EXIT_BLOCKED, EXIT_QUOTA = 69, 75  # sysexits EX_UNAVAILABLE; the Codex usage-limit code of runtime.run_codex
+EXIT_UNVERIFIED = 4  # spec 042 FR-001a: the run measured nothing it could pass or fail (no gates, scope unchecked, gate unrunnable)
+
+
+def _outcome_state(outcome: str | None) -> str:
+    """Spec 042 FR-001: the three-valued verdict of an outcome word: passed, failed or not-checked."""
+    if outcome == "green":
+        return "passed"
+    if outcome in ("red", "snapshot-failed"):
+        return "failed"
+    return "not-checked"
 
 
 def _load(name: str, scripts: Path = SCRIPTS):
@@ -69,7 +79,7 @@ def _load(name: str, scripts: Path = SCRIPTS):
 
 # 025 (#104): a dispatch from an agents-inc checkout is judged by the checkout's workerbee scripts, pinned at launch.
 PINNED_SCRIPTS = ("check_dispatch_prompt.py", "render_dispatch.py", "dispatch_rungs.py", "pre_dispatch_snapshot.py",
-                  "dispatch_schema.py")
+                  "dispatch_schema.py", "check_claims.py")
 PINNED_TEMPLATES = ("header.md", "slots.md")  # render_dispatch.py reads these from the directory above its own
 
 
@@ -246,9 +256,28 @@ def inject_snapshot(prompt: str, snapshot_path: str) -> str:
     return prompt.rstrip("\n") + f"\nSNAPSHOT: {snapshot_path}\n"
 
 
+_CLAIMS_OPEN_RE = re.compile(r"^```claims[ \t]*$")
+_CLAIMS_CLOSE_RE = re.compile(r"^```[ \t]*$")
+
+
+def strip_claims_fences(text: str) -> str:
+    """Spec 042 (sol review F1): text inside a claims fence is data for the claim check, never a report control line
+    (WORKERS SPAWNED, verdict, gates). One pass; an unclosed fence is dropped to the end of the text."""
+    out, inside = [], False
+    for line in (text or "").split("\n"):
+        if not inside:
+            if _CLAIMS_OPEN_RE.match(line):
+                inside = True
+            else:
+                out.append(line)
+        elif _CLAIMS_CLOSE_RE.match(line):
+            inside = False
+    return "\n".join(out)
+
+
 def lint_report(path: Path, scripts: Path = SCRIPTS) -> tuple[list, str]:
     module = _load("check_dispatch_prompt", scripts)
-    missing = module.check_report(path.read_text(encoding="utf-8"))
+    missing = module.check_report(strip_claims_fences(path.read_text(encoding="utf-8")))
     rc, log = _handoff_lint(module, path, "report")
     if rc:
         log = f"handoff-lint advisory (rc={rc}, not a refusal)\n" + log
@@ -1211,8 +1240,53 @@ def _verify(spec: dict, run_dir: Path, out_path: Path, name: str = "verify.txt")
     missing, log = lint_report(out_path, scripts=scripts)
     report = "COMPLIANT" if not missing else f"NON-COMPLIANT:{missing}"
     src, slog, snap = _snapshot_verify(spec, run_dir)
+    spec["_verify_evidence"] = _verify_evidence(spec, src, slog)  # transient: _finish pops it
     _wtext(run_dir / name, f"lint source: {scripts}\nreport: {report}\n{log}\nsnapshot rc={src}\n{slog}")
     return report, snap, src
+
+
+def _capture_snapshot(spec: dict, cwd: Path, scripts: Path) -> tuple[int, str]:
+    """Capture the baseline. Declared scope paths ride along (`--allow`) so git-ignored deliverables get a baseline (F5);
+    an older pinned script that predates `declared` is called without them and their claims stay not-checked."""
+    args = ["capture", spec["snapshot"]]
+    allow = list((spec.get("gates") or {}).get("allow") or [])
+    try:
+        newer = "declared" in (Path(scripts) / "pre_dispatch_snapshot.py").read_text(encoding="utf-8")
+    except OSError:
+        newer = False
+    if allow and newer:
+        args += ["--allow", *allow]
+    return snapshot(*args, cwd=cwd, scripts=scripts)
+
+
+def _snapshot_aware(spec: dict) -> bool:
+    """True when the pinned snapshot script knows --scope-aware (042); an older one answers usage + exit 2."""
+    try:
+        return "--scope-aware" in (Path(_scripts(spec)) / "pre_dispatch_snapshot.py").read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def _verify_evidence(spec: dict, src: int, slog: str) -> dict:
+    """Spec 042 (sol review F2, F3, F5, F12): the structured result of one verify, kept as lists end to end. in_scope are
+    changed paths inside the allow list, outside the changed paths beyond it, unreadable the allowed paths whose bytes
+    could not be compared, unbaselined the declared git-ignored paths that had no baseline. The status token that joins
+    paths with commas is rendering only."""
+    lines = slog.splitlines()
+    changed = [ln[8:] for ln in lines if ln.startswith("CHANGED ")]
+    outside = [ln[8:] for ln in lines if ln.startswith("OUTSIDE ")]
+    if outside:
+        in_scope = changed
+    elif src != 0:  # an older verify prints outside paths as CHANGED
+        outside, in_scope = changed, []
+    else:
+        in_scope = changed
+    aware = _snapshot_aware(spec)
+    declared = {a.rstrip("/") for a in (spec.get("gates") or {}).get("allow") or []}
+    unreadable = [ln[11:] for ln in lines if ln.startswith("UNREADABLE ")] if aware else []
+    unbaselined = [ln[12:] for ln in lines if ln.startswith("UNBASELINED ")] if aware else []
+    return {"in_scope": sorted(set(in_scope)), "outside": sorted(set(outside)), "unreadable": sorted(set(unreadable)),
+            "unbaselined": sorted(p for p in set(unbaselined) if p.rstrip("/") in declared)}
 
 
 def _snapshot_verify(spec: dict, run_dir: Path) -> tuple[int, str, str]:
@@ -1245,14 +1319,17 @@ def _snapshot_verify(spec: dict, run_dir: Path) -> tuple[int, str, str]:
     if verdict is not None:
         src, slog, snap = verdict
     else:
-        args = ["verify", snap_file, "--repo", str(cwd)]  # #92: never depend on the subprocess cwd
+        aware = _snapshot_aware(spec)  # an older checkout or pinned trust copy may predate the flag
+        args = ["verify", snap_file] + (["--scope-aware"] if aware else []) + ["--repo", str(cwd)]  # #92: never depend on the subprocess cwd
         for a in allow:
             args += ["--allow", a]
         try:
             src, slog = snapshot(*args, cwd=cwd, scripts=_scripts(spec))
         except ScriptsTampered as exc:
             return 1, f"{exc}\n", "TAMPERED"
-        changed =[ln[8:] for ln in slog.splitlines() if ln.startswith("CHANGED ")]
+        # 042: OUTSIDE lines are paths outside the allow list; a verify without them but with CHANGED lines is the old format
+        changed = [ln[8:] for ln in slog.splitlines() if ln.startswith("OUTSIDE ")]
+        changed = changed or ([ln[8:] for ln in slog.splitlines() if ln.startswith("CHANGED ")] if src != 0 else [])
         snap = "clean" if src == 0 else ("CHANGED:" + ",".join(changed) if changed else f"ERROR:rc={src}")
     return src, slog, snap
 
@@ -1262,7 +1339,7 @@ WORKERS_SPAWNED_RE = re.compile(r"^\W*(?:\[(?:verified|inferred|assumed)\]\s*)?w
 
 def parse_workers_spawned(text: str) -> int | None:
     """Return n from the last `WORKERS SPAWNED: <integer>` report line (D48), else None."""
-    hits = WORKERS_SPAWNED_RE.findall(text or "")
+    hits = WORKERS_SPAWNED_RE.findall(strip_claims_fences(text or ""))
     return int(hits[-1]) if hits else None
 
 
@@ -1301,32 +1378,34 @@ def gate_sandbox_profile(cwd: Path, home: Path, tmpdir: str, network: bool = Fal
 
 
 def _run_gates(spec: dict, report_path: Path | None = None) -> tuple[list, str | None]:
-    """D58: run each structured gate with no shell after the delegate exits. Return (results, red reason):
-    gate-missing when a gate could not run, else gate-failed when an exit code differs, else None.
+    """D58: run each structured gate with no shell after the delegate exits. Return (results, reason). Each row carries
+    state (passed, failed, not-checked), reason and last_line (spec 042). The reason is the first that applies of
+    gate-refused, gate-timeout, gate-failed, gate-not-runnable (a gate that could not start), else None.
     report_path (free runs only): `{report}` in a gate argv expands to it, after the screens in _grants_from_slots."""
     danger, results = _load("render_dispatch", _scripts(spec)).DANGER_RE, []
     # G (2026-11-11): `agents-inc *` runs outside the Claude Code sandbox, so each gate gets its own sandbox-exec
     # profile. Without a working sandbox-exec (non-macOS, nested sandbox) gates run as before and run.json says so.
     sandboxed = sandbox_available()
     spec["gate_sandbox"] = "sandbox-exec" if sandboxed else "unavailable"
-    for g in spec["gate_commands"]:
-        row = {"argv": g["argv"], "cwd": g["cwd"], "expect_rc": g["expect_rc"], "rc": None, "excerpt": "",
-               "network": bool(g.get("network"))}
+    for n, g in enumerate(spec["gate_commands"], 1):
+        row = {"id": f"g{n}", "argv": g["argv"], "cwd": g["cwd"], "expect_rc": g["expect_rc"], "rc": None, "excerpt": "",
+               "network": bool(g.get("network")), "state": "not-checked", "reason": None, "last_line": ""}
         argv = [a.replace(REPORT_TOKEN, str(report_path)) for a in g["argv"]] if report_path is not None else g["argv"]
         joined = " ".join(argv)
         wd = (Path(spec["cwd"]) / g["cwd"]).resolve()  # re-checked here: the delegate may have planted a link
         if (danger.search(joined) or GATE_CREDENTIAL_RE.search(joined) or GATE_CREDENTIAL_RE.search(g["cwd"])
                 or names_credential(argv)):
-            row["error"] = "refused"
+            row["error"], row["state"], row["reason"] = "refused", "failed", "gate-refused"
         elif not wd.is_relative_to(Path(spec["cwd"]).resolve()):
-            row["error"] = "cwd-outside"
+            row["error"], row["state"], row["reason"] = "cwd-outside", "failed", "gate-refused"
         else:
-            tmp = tempfile.mkdtemp(prefix="agents-inc-gate-") if sandboxed else None
+            tmp = None
             try:
+                tmp = tempfile.mkdtemp(prefix="agents-inc-gate-") if sandboxed else None
                 run_argv, env = argv, None
                 if tmp is not None:
                     # sandbox-exec starts even when the gate binary is absent and exits non-zero, which would read as
-                    # gate-failed; resolve first so a missing binary stays FileNotFoundError (gate-missing).
+                    # gate-failed; resolve first so a missing binary stays FileNotFoundError (gate-not-runnable).
                     exe = str(wd / argv[0]) if os.sep in argv[0] else argv[0]
                     if shutil.which(exe) is None:
                         raise FileNotFoundError(argv[0])
@@ -1340,19 +1419,27 @@ def _run_gates(spec: dict, report_path: Path | None = None) -> tuple[list, str |
                                      timeout=g["timeout_s"])
                 tail = ((res.stdout or "") + (res.stderr or "")).encode()[-2048:].decode("utf-8", "ignore")
                 row.update(rc=res.returncode, excerpt=screen_text(tail, 2048))
+                row["last_line"] = _last_line(row["excerpt"])
+                row["state"] = "passed" if res.returncode == g["expect_rc"] else "failed"
+                row["reason"] = None if row["state"] == "passed" else "gate-failed"
             except subprocess.TimeoutExpired:
-                row["error"] = "timeout"
-            except OSError as exc:
-                row["error"] = type(exc).__name__
+                row["error"], row["state"], row["reason"] = "timeout", "failed", "gate-timeout"
+            except OSError as exc:  # could not start: the gate measured nothing
+                row["error"], row["reason"] = type(exc).__name__, "gate-not-runnable"
             finally:
                 if tmp is not None:
                     shutil.rmtree(tmp, ignore_errors=True)
         results.append(row)
-    if any(r["rc"] is None for r in results):
-        return results, "gate-missing"
-    if any(r["rc"] != r["expect_rc"] for r in results):
-        return results, "gate-failed"
+    for reason in ("gate-refused", "gate-timeout", "gate-failed", "gate-not-runnable"):
+        if any(r["reason"] == reason for r in results):
+            return results, reason
     return results, None
+
+
+def _last_line(text: str) -> str:
+    """Last non-empty line of a gate's output, one line, at most 200 characters."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    return lines[-1][:200] if lines else ""
 
 
 # The Claude phrases plus run_codex's own pattern (429, too many requests, usage/rate limit), shared from runtime.py.
@@ -1370,10 +1457,12 @@ DETAIL_REASONS = frozenset({"rc-nonzero", "quota-paused", "blocked", "timeout", 
 
 def _outcome(spec: dict, report: str, vrc: int, rc: int, fan_reason: str | None, gate_reason: str | None = None,
              gated: bool = False, quota: bool = False, snap: str = "", blocked: bool = False, is_error: bool = False,
-             timed_out: bool = False) -> tuple[str, str | None]:
-    """Return (outcome, reason). Order: quota pause, blocked, timeout, rc-nonzero, fan-out, report, snapshot (tampered,
-    error, not clean), gate; green only when gates ran and passed. The caller scopes quota and blocked to the text
-    it may trust (see _finish)."""
+             timed_out: bool = False, no_report: bool = False, stopped: bool = False,
+             broker_skipped: bool = False, scope_unreadable: bool = False) -> tuple[str, str | None]:
+    """Return (outcome, reason), first match wins (spec 042, data-model.md "Run outcome"): launch-level reds (quota
+    pause, blocked, timeout, rc-nonzero, fan-out, no report, snapshot tampered or error); a failed gate; a declared stop; a
+    change outside the scope (unverified); a skipped snapshot; an unreadable allowed path (scope-unreadable); a broker child; no gates; a gate that could not start (unverified); a report fault with no gate evidence;
+    green only when gates ran and passed. The caller scopes quota and blocked to the text it may trust (see _finish)."""
     if quota:
         return "red", "quota-paused"
     if blocked:
@@ -1382,25 +1471,47 @@ def _outcome(spec: dict, report: str, vrc: int, rc: int, fan_reason: str | None,
         return "red", "timeout"
     if rc != 0 or is_error:
         return "red", "rc-nonzero"
-    if fan_reason:
+    if fan_reason:  # an empty reply of a Claude or Codex run already ends here as `workers-spawned-missing`
         return "red", fan_reason
+    if no_report:  # operator ruling 2026-11-15: a missing or empty report is failed; a malformed one never is by itself
+        return "red", "no-report"
     if report == "none" and snap == "TAMPERED":  # 025 (#104): the trusted script copy changed, nothing was judged
         return "red", "snapshot-tampered"
     advisory = report != "COMPLIANT"  # report wording alone never turns verified work red (see end of function)
-    if advisory and not (gated and not gate_reason and vrc == 0 and snap not in ("TAMPERED",) and not snap.startswith("ERROR:")
-                         and not snap.startswith("CHANGED")):
-        return "red", "report-noncompliant"  # nothing deterministic vouches for the work, so the format failure stands
     if snap == "TAMPERED":
         return "red", "snapshot-tampered"
     if snap.startswith("ERROR:"):
         return "red", "snapshot-error"
-    if vrc != 0:
-        return "red", "snapshot-not-clean"
-    if gate_reason:
+    if gate_reason in ("gate-refused", "gate-timeout", "gate-failed"):  # a failed gate beats every unverified reason
         return "red", gate_reason
-    if gated:
-        return "green", "report-format-advisory" if advisory else None
-    return "unverified", "no-gates"
+    if stopped:  # 042 FR-008: the delegate declared a stop in its claims block; a failed gate above outranks it
+        return "unverified", "delegate-stopped"
+    if snap.startswith("CHANGED:") or vrc != 0:  # 042: a change outside the scope is not checked work, never red
+        return "unverified", "scope-foreign-change"
+    if snap == SNAPSHOT_SKIPPED:  # never a pass: no write check ran
+        return "unverified", "snapshot-skipped"
+    if scope_unreadable:  # 042 G6: an allowed path could not be read, so the scope check is incomplete; never green
+        return "unverified", "scope-unreadable"
+    if broker_skipped:  # a broker child never runs commands for its Lead
+        return "unverified", "gates-skipped-broker"
+    if not gated:
+        return "unverified", "no-gates"
+    if gate_reason == "gate-not-runnable":
+        return "unverified", "gate-not-runnable"
+    return "green", "report-format-advisory" if advisory else None
+
+
+def _report_empty(out_path: Path) -> bool:
+    """True when the delegate's report file is missing, unreadable or only whitespace."""
+    try:
+        return not out_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return True
+
+
+def gate_has_run(spec: dict) -> bool:
+    """True when at least one gate of the run measured something (its state is passed or failed)."""
+    return any(r.get("state") in ("passed", "failed") for r in spec.get("gate_results") or [])
 
 
 def _stderr_detail(stderr: str | None) -> str:
@@ -1411,13 +1522,124 @@ def _stderr_detail(stderr: str | None) -> str:
     return ""
 
 
+def _scope_record(source, snap: str) -> dict:
+    """Spec 042: the scope check as measured by the FINAL verify. `source` is that verify's evidence dict (_verify_evidence)
+    or, for a caller with only the log file, its path (the last verify section is read). in_scope are changed paths inside
+    the allow list, foreign the paths outside it, unreadable the allowed paths no bytes could be compared for (the state is
+    then not-checked, never passed), unbaselined the declared ignored paths with no baseline. Attribution is always unknown."""
+    if isinstance(source, dict):
+        ev = source
+    else:
+        try:
+            text = Path(source).read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        last = text.rpartition("\nsnapshot rc=")[2] if "\nsnapshot rc=" in text else ""
+        if text.rstrip().endswith("after gates: clean"):
+            last = ""
+        lines = last.splitlines()
+        ch = [ln[8:] for ln in lines if ln.startswith("CHANGED ")]
+        ev = {"in_scope": ch, "outside": [], "unreadable": [], "unbaselined": []}
+        if snap.startswith("CHANGED:"):
+            ev["outside"] = [p for p in snap[len("CHANGED:"):].split(",") if p]
+    foreign, unreadable = sorted(ev["outside"]), sorted(ev.get("unreadable") or [])
+    state = ("not-checked" if snap == SNAPSHOT_SKIPPED or foreign or unreadable else
+             "failed" if snap == "TAMPERED" or snap.startswith("ERROR") else "passed")
+    return {"state": state,
+            "in_scope": [{"path": p, "attribution": "unknown"} for p in sorted(ev["in_scope"])],
+            "foreign": [{"path": p, "attribution": "unknown"} for p in foreign],
+            "unreadable": unreadable, "unbaselined": sorted(ev.get("unbaselined") or [])}
+
+
+def _gate_block(spec: dict) -> list[str]:
+    """One `gate <state> rc=<rc|none> cmd=<argv> last=<last line>` line per gate: not passed first, then passed, in run order."""
+    rows = spec.get("gate_results") or []
+    lines = [(r.get("state") == "passed",
+              f"gate {r.get('state')} rc={'none' if r.get('rc') is None else r['rc']} cmd={shlex.join(r['argv'])} "
+              f"last={r.get('last_line') or ''}") for r in rows]
+    return [ln for passed, ln in lines if not passed] + [ln for passed, ln in lines if passed]
+
+
+def _gates_token(spec: dict) -> str:
+    """`gates=<passed>/<total>` plus the not passed gates grouped by state, each `<program>:rc=<rc|none>`."""
+    rows = spec.get("gate_results")
+    if not rows:
+        return ""
+    groups = {"failed": [], "not-checked": []}
+    for r in rows:
+        if r.get("state") != "passed":
+            groups.setdefault(r.get("state"), []).append(f"{Path(r['argv'][0]).name}:rc={'none' if r.get('rc') is None else r['rc']}")
+    groups = {k: v for k, v in groups.items() if v}
+    token = f" gates={sum(1 for r in rows if r.get('state') == 'passed')}/{len(rows)}"
+    return token + "".join(f" {state}:{','.join(items)}" for state, items in groups.items())
+
+
+def _claim_check(spec: dict, run_dir: Path, out_path: Path, free: bool) -> dict:
+    """Spec 042 phase 2 (FR-012 to FR-016): compare the claims block of the report with the run. Advisory: the result goes to
+    claims.json and run.json['claims'] and never changes the outcome. Returns the result plus `stopped`."""
+    try:
+        if free:  # a free reply is data, not a delegate report
+            result = {"state": "not-checked", "reason": "free-run", "unsupported": 0, "items": [], "omitted": [],
+                      "weak": [], "unclaimed": [], "stopped": False, "not_checked": []}
+        else:
+            scope = spec.get("scope") or {}
+            changed = [f["path"] for f in (scope.get("in_scope") or []) + (scope.get("foreign") or [])]
+            run = {"changed": changed, "gate_results": spec.get("gate_results") or [], "stop_rule": spec.get("stop_rule") or "",
+                   "unreadable": scope.get("unreadable") or [], "unbaselined": scope.get("unbaselined") or []}
+            result = _load("check_claims", _scripts(spec)).check(out_path.read_text(encoding="utf-8", errors="replace"), run)
+    except (OSError, ScriptsTampered, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result = {"state": "not-checked", "reason": f"claim-check-error:{type(exc).__name__}", "unsupported": 0,
+                  "items": [], "omitted": [], "weak": [], "unclaimed": [], "stopped": False, "not_checked": []}
+    stored = {k: v for k, v in result.items() if k != "stopped"}
+    spec["claims"] = stored
+    with contextlib.suppress(OSError):
+        _write_json(run_dir / "claims.json", stored)
+    return result
+
+
+def _claims_token(spec: dict) -> str:
+    c = spec.get("claims")
+    if not c:
+        return ""
+    token = f" claims=checked:{c['unsupported']} unsupported" if c.get("state") == "checked" else " claims=not-checked"
+    if c.get("omitted"):
+        token += " omitted=" + ",".join(c["omitted"])
+    if c.get("weak"):
+        token += " weak=" + ",".join(c["weak"])
+    return token
+
+
 def _status(spec: dict, report: str, snap: str, out_path: Path) -> str:
     reason = f" reason={spec['reason']}" if spec.get("reason") else ""
     detail = f" detail={spec['reason_detail']}" if spec.get("reason_detail") else ""
+    foreign = (spec.get("scope") or {}).get("foreign") or []
+    scope = f" scope=not-checked:{','.join(f['path'] for f in foreign)} attribution=unknown" if foreign else ""
     return (f"dispatch {spec['run_id']} {spec['model']} rc={spec['rc']} report={report} "
             f"lint={spec.get('scripts_source') or 'installed'} snapshot={snap} "
-            f"outcome={spec['outcome']}{reason}{detail} out={out_path} "
+            f"outcome={spec['outcome']}{reason}{detail}{_gates_token(spec)}{_claims_token(spec)}{scope} out={out_path} "
             f"(resume with --resume {out_path.parent.resolve()})")
+
+
+_MIRROR_FACTS = "skipped: the copy of run.json and prompt.md in the home repo; no record lost, run.json stays in {run_dir}; no action needed"
+
+
+def source_uncommitted_note(paths) -> None:
+    """Spec 042 FR-021a: once on stderr when the source checkout has uncommitted edits under installed paths; never blocks.
+    FR-030: when the stale check read the stored install record instead of comparing now, say so with its age."""
+    from . import doctor
+    source = doctor.source_uncommitted(paths)
+    if source is None:
+        return
+    text = (f"WB_SOURCE_UNCOMMITTED: {source} has uncommitted edits under installed paths; the install was not compared "
+            "against them (D82: only commits count). Dispatch continues.")
+    try:
+        receipt = doctor.InstallReceipt.load(paths.receipt)
+        item = doctor.install_match_item(paths, receipt.release_hash)
+    except (OSError, ValueError, AttributeError):
+        item = None
+    if item is not None and item.tested == "record":
+        text += f" install-match was read from a stored record: not verified now, {doctor.format_age(item.age or 0)}."
+    print(text, file=sys.stderr)
 
 
 def _mirror(spec: dict, run_dir: Path, home_repo: str | None, prompt: str | None = None) -> str | None:
@@ -1427,7 +1649,7 @@ def _mirror(spec: dict, run_dir: Path, home_repo: str | None, prompt: str | None
     repo. Return an error string (also for an OSError), else None."""
     home = resolve_home_repo(home_repo, Path(spec["cwd"]) if spec.get("cwd") else None)
     if not home:
-        print("run spec not mirrored: no home repo", file=sys.stderr)
+        print(f"run spec not mirrored: no home repo ({_MIRROR_FACTS.format(run_dir=run_dir)})", file=sys.stderr)
         return None
     if not Path(home).is_dir():
         return "home-repo-missing"
@@ -1459,11 +1681,13 @@ def _mirror_and_note(spec: dict, run_dir: Path, home_repo: str | None, prompt: s
     if err:
         spec["mirror_error"] = err
         _write_json(run_dir / "run.json", spec)
-        print(f"run spec not mirrored: {err}", file=sys.stderr)
+        print(f"run spec not mirrored: {err} ({_MIRROR_FACTS.format(run_dir=run_dir)})", file=sys.stderr)
 
 
 def _exit_code(outcome: str | None, reason: str | None, rc) -> int:
-    """022 exit map: 0 green or unverified; 75 quota-paused; 69 blocked; 2 child usage error; 1 any other red."""
+    """Exit map: 0 green; 4 unverified (spec 042); 75 quota-paused; 69 blocked; 2 child usage error; 1 any other red."""
+    if outcome == "unverified":
+        return EXIT_UNVERIFIED
     if outcome != "red":
         return EXIT_OK
     if reason == "quota-paused":
@@ -1476,6 +1700,7 @@ def _exit_code(outcome: str | None, reason: str | None, rc) -> int:
 def _finish(spec: dict, run_dir: Path, out_path: Path, result: dict, home_repo: str | None,
             verify_name: str = "verify.txt", prompt: str | None = None) -> int:
     report, snap, vrc = _verify(spec, run_dir, out_path, verify_name)
+    evidence = spec.pop("_verify_evidence", None) or {"in_scope": [], "outside": [], "unreadable": [], "unbaselined": []}
     free = spec.get("kind") == "free"
     if free:  # spec 037: a free run spawns no Worker and its reply carries no WORKERS SPAWNED line
         fan_reason, spec["workers_spawned"] = None, 0
@@ -1485,7 +1710,10 @@ def _finish(spec: dict, run_dir: Path, out_path: Path, result: dict, home_repo: 
     if gated and _BROKER_SAFE_WRITES:
         gated, skipped, spec["gate_results"] = False, True, None  # a broker child never runs commands for its Lead
     elif gated and report == "none":  # tampered scripts: run no gate with them
-        spec["gate_results"], gate_reason = None, "gate-missing"
+        gate_reason = None  # the run is red snapshot-tampered; the rows say why no gate was checked
+        spec["gate_results"] = [{"id": f"g{n}", "argv": g["argv"], "cwd": g["cwd"], "expect_rc": g["expect_rc"], "rc": None,
+                                 "state": "not-checked", "reason": "gates-not-run-tampered", "last_line": ""}
+                                for n, g in enumerate(spec["gate_commands"], 1)]
     elif gated:  # after _verify; a second verify then catches a gate that writes into the repo (025 #107)
         spec["gate_results"], gate_reason = _run_gates(spec, out_path.resolve() if free else None)
         if spec.get("resumes"):
@@ -1493,10 +1721,11 @@ def _finish(spec: dict, run_dir: Path, out_path: Path, result: dict, home_repo: 
         src2, slog2, snap2 = _snapshot_verify(spec, run_dir)
         with open(run_dir / verify_name, "a", encoding="utf-8") as fh:
             fh.write("after gates: clean\n" if src2 == 0 else f"after gates:\nsnapshot rc={src2}\n{slog2}")
-        if snap == "clean" and snap2 != "clean":
-            snap = snap2  # TAMPERED and ERROR: keep their own reasons through _outcome
-            if snap2.startswith("CHANGED:"):
-                gate_reason = "gate-wrote"  # outranks gate-failed and gate-missing
+        if snap in ("clean", SNAPSHOT_SKIPPED) or snap.startswith("CHANGED:"):
+            # 042 (sol review F2): the final verify is the evidence, even when it is clean. TAMPERED and ERROR keep their own
+            # reasons through _outcome; an outside change seen now is scope-foreign-change (timing cannot say who wrote it)
+            snap, vrc = snap2, src2
+            evidence = _verify_evidence(spec, src2, slog2)
     stdout, stderr = result.get("stdout") or "", result.get("stderr") or ""
     is_error = bool(result.get("is_error"))
     spec["is_error"] = is_error
@@ -1516,29 +1745,44 @@ def _finish(spec: dict, run_dir: Path, out_path: Path, result: dict, home_repo: 
     blocked = bool(BLOCKED_RE.search(text)) or cls.reason == "blocked"
     timed_out = result["rc"] == 124 and TIMEOUT_MARK in stderr
     # A free reply is not a delegate report: the format check never decides it. Gates green, no gates unverified (FR-008).
+    spec["scope"] = _scope_record(evidence, snap)
+    claims = _claim_check(spec, run_dir, out_path, free)
     outcome, reason = _outcome(spec, "COMPLIANT" if free and report != "none" else report, vrc, result["rc"], fan_reason,
-                               gate_reason, gated, quota, snap, blocked, is_error, timed_out)
+                               gate_reason, gated, quota, snap, blocked, is_error, timed_out,
+                               no_report=_report_empty(out_path), stopped=bool(claims.pop("stopped", False)),
+                               broker_skipped=skipped,
+                               scope_unreadable=bool(spec["scope"].get("unreadable")))
     if free and cls.reason in FREE_WRAPPER_REASONS:  # spec 037 R6: the wrapper's own refusal names the reason
         outcome, reason = "red", cls.reason
-    if skipped and outcome == "unverified":
-        reason = "gates-skipped-broker"
     spec["outcome"] = outcome
     spec["reason"] = reason
+    spec["state"] = _outcome_state(outcome)
     detail = _stderr_detail(stderr) if outcome == "red" and (reason in DETAIL_REASONS or not stdout.strip()) else ""
     if free and outcome == "red" and reason == "blocked" and cls.reason == "blocked":  # the host is named (R6)
         detail = re.sub(r"\s+", "_", screen_text(cls.detail, 200).strip())
-    if snap == SNAPSHOT_SKIPPED and outcome == "unverified":  # never a pass: no write check ran
-        reason, detail = "snapshot-skipped", re.sub(r"\s+", "_", SNAPSHOT_SKIP_REASON)
-        spec["reason"] = reason
+    if reason == "snapshot-skipped":  # ranked inside _outcome; this only names why
+        detail = re.sub(r"\s+", "_", SNAPSHOT_SKIP_REASON)
     if detail:
         spec["reason_detail"] = detail
     else:
         spec.pop("reason_detail", None)
-    _record_ledger_return(spec)
+    code = _exit_code(outcome, reason, result["rc"])
+    _record_ledger_return(spec, code)
     _write_json(run_dir / "run.json", spec)
+    block = _gate_block(spec)
+    if block:
+        _wtext(run_dir / "gates.txt", "\n".join(block) + "\n")
     print(_status(spec, report, snap, out_path))
+    for line in block:
+        print(line)
+    for item in (spec.get("claims") or {}).get("items") or []:
+        print(f"unsupported {item['kind']} claimed={item['claimed']} observed={item['observed']}")
+    for path in (spec.get("claims") or {}).get("unclaimed") or []:
+        print(f"unclaimed-change {path}")
+    if report.startswith("NON-COMPLIANT:") and not free:
+        print(f"report-fault {report[len('NON-COMPLIANT:'):]}")
     _mirror_and_note(spec, run_dir, home_repo, prompt)
-    return _exit_code(outcome, reason, result["rc"])
+    return code
 
 
 def _red_before_run(spec: dict, run_dir: Path, reason: str, detail: str, home_repo: str | None,
@@ -1546,13 +1790,41 @@ def _red_before_run(spec: dict, run_dir: Path, reason: str, detail: str, home_re
     """No child ran. Record red/<reason>, print one status line, return code (default 1)."""
     out_path = run_dir / out_name
     _wtext(out_path, "")
-    spec.update(rc=-1, outcome="red", reason=reason,
+    spec.update(rc=-1, outcome="red", state="failed", reason=reason,
                 reason_detail=re.sub(r"\s+", "_", screen_text(detail, 200).strip()))
-    _record_ledger_return(spec)
+    _record_ledger_return(spec, code)
     _write_json(run_dir / "run.json", spec)
     print(_status(spec, "none", snap, out_path))
     _mirror_and_note(spec, run_dir, home_repo, None)
     return code
+
+
+def _emit_refusal(rule_id: str, value) -> None:
+    """Spec 042 FR-022: the rule, the value and one fix, on stderr, after the existing status line. Reporting only."""
+    print(rules.refuse(rule_id, value), file=sys.stderr)
+
+
+def _grants_rule(code: str, why: str) -> str:
+    """Rule id for a `_grants_from_slots` refusal; the text of `why` is the offending value."""
+    if code == "refused-bash-allow":
+        return "bash-allow-credential" if why.startswith("credential-seeking prefix") else "bash-allow-invalid"
+    if why.startswith("GATES must be a JSON list") or why in ("not valid JSON", "must be a list"):
+        return "gates-not-json-list"
+    if why.startswith("credential-seeking gate"):
+        return "gate-credential-path"
+    if "resolves outside --cwd" in why or "cwd must be a relative path" in why:
+        return "gate-cwd-outside"
+    return "gate-danger" if "danger list" in why else "gates-invalid"
+
+
+def _forward_render_refusal(err: str, why: str) -> None:
+    """Print the first refusal block the renderer wrote; a render failure without one gets `render-refused`."""
+    lines = (err or "").splitlines()
+    for n, ln in enumerate(lines):
+        if ln.startswith("refused: ") and n + 2 < len(lines) and lines[n + 1].startswith("value: ") and lines[n + 2].startswith("fix: "):
+            print("\n".join(lines[n:n + 3]), file=sys.stderr)
+            return
+    _emit_refusal("render-refused", why)
 
 
 def _refuse_non_git(spec: dict, run_dir: Path, lint: Path, cwd: Path, why: str, msg: str | None = None) -> int:
@@ -1560,8 +1832,10 @@ def _refuse_non_git(spec: dict, run_dir: Path, lint: Path, cwd: Path, why: str, 
     msg = msg or non_git_refusal(cwd, why)
     _wtext(lint, msg + "\n")
     spec["outcome"], spec["reason_detail"] = "refused-non-git", msg
+    spec["state"] = _outcome_state(spec["outcome"])
     _write_json(run_dir / "run.json", spec)
     print(f"dispatch {spec['run_id']} {spec['model']} refused refused-non-git: {msg} lint={lint}")
+    _emit_refusal("non-git-refused", msg)
     return EXIT_REFUSED
 
 
@@ -1574,7 +1848,11 @@ def _launch_failed(spec: dict, run_dir: Path, exc: Exception, home_repo: str | N
 
 
 def _record_ledger_node(spec: dict, slots: dict) -> None:
-    """Add a `dispatched` ledger node for this run (id = run id). A failure goes to run.json, never the outcome."""
+    """Add a `dispatched` ledger node for this run (id = run id), once: spec 042 FR-015 writes it before the first refusal
+    exit, so a later call is a no-op. A failure goes to run.json, never the outcome."""
+    if spec.get("ledger_node"):
+        return
+    spec["ledger_node"] = True
     try:
         from .. import host_ledger  # lazy, like cli.py
         from .cli import _paths
@@ -1585,13 +1863,43 @@ def _record_ledger_node(spec: dict, slots: dict) -> None:
         spec["ledger_error"] = f"{type(exc).__name__}: {exc}"
 
 
-def _record_ledger_return(spec: dict) -> None:
-    """Add a `returned` ledger row for this run. A failure goes to run.json, never the outcome."""
+def _row_exit_code(spec: dict) -> int:
+    """The dispatch exit code of a finished run, read back from its outcome word (contracts/verdict-reason-codes.md)."""
+    outcome = str(spec.get("outcome") or "")
+    if outcome in ("green", "red", "unverified"):
+        return _exit_code(outcome, spec.get("reason"), spec.get("rc"))
+    if outcome == "cancelled":
+        return EXIT_CANCELLED
+    if outcome == "dry-run":
+        return EXIT_OK
+    return EXIT_REFUSED if outcome.startswith("refused") or outcome == "credential-seeking" else EXIT_RED
+
+
+def _ensure_return_row(run_dir: Path, slots: dict, code: int | None = None) -> None:
+    """Spec 042 FR-015: a run that ended without _finish (refused, cancelled, dry-run, snapshot-failed) still writes one
+    return row, linked to its dispatched row. Does nothing when the run already wrote its row."""
+    spec = _read_run_json(run_dir)
+    if not spec.get("run_id") or not spec.get("outcome") or spec.get("ledger_returned"):
+        return
+    _record_ledger_node(spec, slots)
+    _record_ledger_return(spec, code)
+    with contextlib.suppress(OSError):
+        _write_json(run_dir / "run.json", spec)
+
+
+def _record_ledger_return(spec: dict, exit_code: int | None = None) -> None:
+    """Add a `returned` ledger row for this run. exit_code is the code the process returns (F9); a caller that does not
+    know it gets it read back from the outcome word. spec["ledger_returns"] counts the rows of this run (a resume turn
+    adds one each). A failure goes to run.json, never the outcome."""
     if not spec.get("run_id") or not spec.get("outcome"):
         return
     try:
         from .. import host_ledger  # lazy, like cli.py
         from .cli import _paths
+        spec["ledger_returned"] = True
+        spec["ledger_returns"] = int(spec.get("ledger_returns") or 0) + 1
+        spec["exit_code"] = exit_code if exit_code is not None else _row_exit_code(spec)
+        spec["state"] = spec.get("state") or _outcome_state(spec.get("outcome"))
         if not host_ledger.record_dispatch_return(_paths().state, spec):
             spec["ledger_return_error"] = "ledger write failed"
     except Exception as exc:
@@ -1612,6 +1920,8 @@ def _grants_from_slots(slots: dict, cwd: Path, scripts: Path = SCRIPTS) -> tuple
     gates, why = rd.parse_gates(raw)
     if why:
         return None, [], ("refused-gates", why)
+    for warning in getattr(rd, "weak_gate_warnings", lambda *_: [])(gates, cwd):  # 042 FR-010: never a refusal
+        print(warning, file=sys.stderr)
     for g in gates or []:
         joined = " ".join(g["argv"])
         if GATE_CREDENTIAL_RE.search(joined) or GATE_CREDENTIAL_RE.search(g["cwd"]) or names_credential(g["argv"]):
@@ -1710,10 +2020,12 @@ def run(args) -> int:
     hit = credential_hit(slots, args.cwd or os.getcwd())  # 025 (#105): the broker's request text screen, before anything is written
     if hit:
         print(f"dispatch: refused credential-seeking ({hit})", file=sys.stderr)
+        _emit_refusal(credential_rule_id(hit), hit)
         return EXIT_REFUSED
     control = control_char_hit(slots)  # 026 (#109): C0, DEL and bidi controls, before anything is written
     if control:
         print(f"dispatch: refused-control-char (slot {control[0]} {control[1]})", file=sys.stderr)
+        _emit_refusal("control-char", f"slot {control[0]} {control[1]}")
         return EXIT_REFUSED
     cwd = Path(args.cwd or os.getcwd()).resolve()
     if not cwd.is_dir():
@@ -1737,12 +2049,15 @@ def run(args) -> int:
     code, outcome = EXIT_RED, "red"
     saved_handlers = _install_cancel_handlers()
     try:
+        _start_run_record(run_dir, run_id, kind, model, effort, slots, slots_path, cwd)
         code = _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, run_dir)
+        _ensure_return_row(run_dir, slots, code)
         outcome = _run_end_outcome(run_dir, code)
         return code
     except Cancelled:  # launch() already killed and reaped the delegate's group
         outcome, code = "cancelled", EXIT_CANCELLED
         _mark_cancelled(run_dir, run_id, model)
+        _ensure_return_row(run_dir, slots, code)
         return code
     except BaseException:
         outcome = "cancelled"  # KeyboardInterrupt and anything else that escapes: launch() reaped the child
@@ -1760,6 +2075,24 @@ def run(args) -> int:
                 spec["events_error"] = sink.error
                 with contextlib.suppress(OSError):
                     _write_json(run_dir / "run.json", spec)
+
+
+def _start_run_record(run_dir: Path, run_id: str, kind: str, model: str, effort, slots: dict, slots_path: Path,
+                      cwd: Path) -> None:
+    """Spec 042 FR-015 (sol review F4): write minimal complete run metadata and the `dispatched` row before pinning or any
+    cancellable preparation, so a cancel or an early failure still has a spec a return row can be built from. Best effort:
+    an OSError here leaves the later phase to write the spec as before."""
+    try:
+        if not _BROKER_SAFE_WRITES:  # a broker child's writes are create-only: _run_dir_phase writes its copy once
+            shutil.copyfile(slots_path, run_dir / "slots.json")
+        spec = {"run_id": run_id, "kind": kind, "slots": str(slots_path), "model": model, "effort": effort,
+                "schema_version": 1, "slots_sha256": _sha256_bytes(slots_path.read_bytes()),
+                "slots_path": str(run_dir / "slots.json"), "cwd": str(cwd),
+                "rc": None, "outcome": None, "session_id": None}
+        _record_ledger_node(spec, slots)
+        _write_json(run_dir / "run.json", spec)
+    except OSError:
+        pass
 
 
 def _on_cancel_signal(signum, frame) -> None:
@@ -1799,8 +2132,8 @@ def _record_child(spec: dict, run_dir: Path, pid: int) -> None:
 
 
 def _mark_cancelled(run_dir: Path, run_id: str, model: str) -> None:
-    spec = _read_run_json(run_dir) or {"run_id": run_id, "model": model}
-    spec.update(outcome="cancelled", reason="cancelled", rc=EXIT_CANCELLED)
+    spec = _read_run_json(run_dir) or {"run_id": run_id, "model": model, "kind": _kind(model) or "unknown"}
+    spec.update(outcome="cancelled", state="not-checked", reason="cancelled", rc=EXIT_CANCELLED)
     with contextlib.suppress(OSError):
         _write_json(run_dir / "run.json", spec)
     print(f"dispatch {run_id} {model} cancelled")
@@ -1851,7 +2184,7 @@ def _run_end_outcome(run_dir: Path, code: int) -> str:
         return "launch-failed"
     if outcome == "red" and reason == "timeout":
         return "timeout"
-    if outcome in ("green", "unverified"):
+    if outcome in ("green", "unverified") or code == EXIT_UNVERIFIED:
         return "done"
     return "red"
 
@@ -1867,7 +2200,11 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
                 sdir = _pin_scripts(sdir, run_id)
             except OSError as exc:
                 print(f"dispatch: cannot pin checkout scripts: {exc}", file=sys.stderr)
-                return EXIT_RED
+                early = _read_run_json(run_dir) or {"run_id": run_id, "kind": kind, "model": model, "effort": effort,
+                                                    "schema_version": 1, "cwd": str(cwd), "rc": None, "outcome": None,
+                                                    "session_id": None}
+                return _red_before_run(early, run_dir, "snapshot-error", f"cannot pin checkout scripts: {exc}",
+                                       getattr(args, "home_repo", None))
     if _BROKER_SAFE_WRITES:
         _wtext(run_dir / "slots.json", slots_path.read_text(encoding="utf-8"))
     else:
@@ -1880,9 +2217,13 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
             "permission_mode": slots.get("PERMISSION_MODE") or DEFAULT_PERMISSION_MODE,
             "codex_write": codex_write(slots),
             "codex_network": codex_network(slots),
+            "stop_rule": _slot_str("STOP_RULE", slots.get("STOP_RULE", "")),
             "scripts_dir": str(sdir), "scripts_source": ssrc,
             "rc": None, "outcome": None, "session_id": None}
+    prior = _read_run_json(run_dir)  # the dispatched row is written once, by _start_run_record
+    spec.update({k: prior[k] for k in ("ledger_node", "ledger_error") if k in prior})
     lint = run_dir / "lint.txt"
+    _record_ledger_node(spec, slots)  # spec 042 FR-015: before the first refusal exit; the later call is a no-op
     input_section = ""
     if kind == "free":  # spec 037 FR-003..FR-006: refuse before render and before any provider call; exit 2
         refusal = free_launch.pre_checks(slots, args, free_launch.load_routing(), cwd, model=model)
@@ -1894,9 +2235,10 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
                 refusal = free_launch.Refusal(exc.name, str(exc))
         if refusal:
             _wtext(lint, f"{refusal}: {refusal.detail}\n")
-            spec["outcome"] = str(refusal); spec["reason_detail"] = refusal.detail
+            spec["outcome"] = str(refusal); spec["state"] = _outcome_state(spec["outcome"]); spec["reason_detail"] = refusal.detail
             _write_json(run_dir / "run.json", spec)
             print(f"dispatch {run_id} {model} refused {refusal}: {refusal.detail} lint={lint}")
+            _emit_refusal("free-run-precheck", f"{refusal}: {refusal.detail}")
             return EXIT_USAGE
     globs = scope_globs(_slot_str("FILES_IN_SCOPE", slots.get("FILES_IN_SCOPE", "")))
     if kind == "codex":  # #167: the Codex sandbox reads only inside cwd; warn, never refuse
@@ -1910,8 +2252,12 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         why = ("refused-scope", f"FILES_IN_SCOPE has glob patterns the scope gate cannot match: {' '.join(globs)}; list exact paths")
     if why:
         _wtext(lint, why[1] + "\n")
-        spec["outcome"] = why[0]; _write_json(run_dir / "run.json", spec)
+        spec["outcome"] = why[0]; spec["state"] = _outcome_state(spec["outcome"]); _write_json(run_dir / "run.json", spec)
         print(f"dispatch {run_id} {model} refused {why[0]}: {why[1]} lint={lint}")
+        if why[0] == "refused-scope":
+            _emit_refusal("scope-glob", " ".join(globs))
+        else:
+            _emit_refusal(_grants_rule(why[0], why[1]), why[1])
         return EXIT_REFUSED
     misses = [] if kind == "free" else capability_preflight(
         None if _GRANT_CEILING is not None else gates, bash_allow, cwd,
@@ -1920,8 +2266,9 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
     if misses:
         detail = "; ".join(misses)
         _wtext(lint, detail + "\n")
-        spec["outcome"] = "refused-capability"; spec["reason_detail"] = detail; _write_json(run_dir / "run.json", spec)
+        spec["outcome"] = "refused-capability"; spec["state"] = _outcome_state(spec["outcome"]); spec["reason_detail"] = detail; _write_json(run_dir / "run.json", spec)
         print(f"dispatch {run_id} {model} refused refused-capability: {detail} lint={lint}")
+        _emit_refusal("capability-missing", detail)
         return EXIT_REFUSED
     spec["gate_commands"] = gates or []
     skip = in_git_work_tree(cwd) is False  # git cwd, subdirectory, or unclear answer: capture and verify unchanged
@@ -1942,19 +2289,21 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         if bad:
             why = f"grant-exceeds-parent: {bad} is not granted to the parent run"
             _wtext(lint, why + "\n")
-            spec["outcome"] = "refused-grants"; _write_json(run_dir / "run.json", spec)
+            spec["outcome"] = "refused-grants"; spec["state"] = _outcome_state(spec["outcome"]); _write_json(run_dir / "run.json", spec)
             print(f"dispatch {run_id} {model} refused refused-grants: {why} lint={lint}")
+            _emit_refusal("grant-exceeds-parent", why)
             return EXIT_REFUSED
     rc, prompt, err = render(slots_path, model, sdir)
     if rc != 0:
         _wtext(lint, f"render rc={rc}\n{err}")
         why = " | ".join([ln.strip() for ln in (err or "").splitlines() if ln.strip()][:3])[:400]  # nested Leads cannot read lint
-        spec["outcome"] = "refused-render"; spec["reason_detail"] = why; _write_json(run_dir / "run.json", spec)
+        spec["outcome"] = "refused-render"; spec["state"] = _outcome_state(spec["outcome"]); spec["reason_detail"] = why; _write_json(run_dir / "run.json", spec)
         print(f"dispatch {run_id} {model} refused render rc={rc}: {why} lint={lint}")
+        _forward_render_refusal(err, why)
         return EXIT_REFUSED
     if _BROKER_SAFE_WRITES and SCOPE_LINE not in prompt:
         _wtext(lint, "rendered prompt lacks the SCOPE BOILERPLATE line\n")
-        spec["outcome"] = "refused-scope"; _write_json(run_dir / "run.json", spec)
+        spec["outcome"] = "refused-scope"; spec["state"] = _outcome_state(spec["outcome"]); _write_json(run_dir / "run.json", spec)
         print(f"dispatch {run_id} {model} refused scope-boilerplate-missing lint={lint}")
         return EXIT_REFUSED
     if kind == "free":  # spec 037: the snapshot is captured after the wrapper call (_run_free_phase); the provider never sees it
@@ -1965,9 +2314,9 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         prompt = strip_snapshot_skipped(prompt)
     else:
         # Capture first so the real snapshot path reaches the prompt; lint after injection.
-        src, slog = snapshot("capture", spec["snapshot"], cwd=cwd, scripts=sdir)
+        src, slog = _capture_snapshot(spec, cwd, sdir)
         if src != 0:
-            spec["outcome"] = "snapshot-failed"; _write_json(run_dir / "run.json", spec)
+            spec["outcome"] = "snapshot-failed"; spec["state"] = _outcome_state(spec["outcome"]); _write_json(run_dir / "run.json", spec)
             print(f"dispatch {run_id} {model} snapshot failed rc={src}: {slog.strip()}")
             return EXIT_RED
         prompt = inject_snapshot(prompt, spec["snapshot"])
@@ -1988,8 +2337,10 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
     named_text = "[" + ", ".join(str(m) for m in named) + "]"
     _wtext(lint, ("COMPLIANT\n" if not missing else f"NON-COMPLIANT missing: {named_text}\n") + log)
     if missing:
-        spec["outcome"] = "refused-lint"; _write_json(run_dir / "run.json", spec)
+        spec["outcome"] = "refused-lint"; spec["state"] = _outcome_state(spec["outcome"]); _write_json(run_dir / "run.json", spec)
         print(f"dispatch {run_id} {model} refused NON-COMPLIANT:{named_text} lint={lint}")
+        for item, label in zip(missing, named):
+            _emit_refusal(rules.lint_rule_id(item), label)
         return EXIT_REFUSED
     roster = [] if _BROKER_SAFE_WRITES or kind == "free" else lead_roster(model, slots, spec["fan_out"], sdir)
     if kind == "claude" and model in LEAD_RUNGS and not _BROKER_SAFE_WRITES:
@@ -2003,7 +2354,7 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         if spec["codex_network"]:
             spec["codex_network_ignored"] = "lead"  # D51: a Lead has no network; its Workers may
     if args.dry_run:
-        spec["outcome"] = "dry-run"; _write_json(run_dir / "run.json", spec)
+        spec["outcome"] = "dry-run"; spec["state"] = _outcome_state(spec["outcome"]); _write_json(run_dir / "run.json", spec)
         print(f"dispatch {run_id} {model} dry-run prompt={prompt_path}")
         return EXIT_OK
     lead_dir, token = None, None
@@ -2057,8 +2408,8 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
 
 def _run_free_phase(args, spec, slots, cwd, run_dir, prompt, sdir) -> int:
     """Spec 037: launch a free model through its wrapper, then snapshot, trust, gate and finish like any other run.
-    The snapshot is captured after the wrapper call and before the gates, so a gate that writes into the repo is red
-    `gate-wrote` (the verify after the gates sees the change). Cost and Workers spawned are 0."""
+    The snapshot is captured after the wrapper call and before the gates, so a gate that writes into the repo is
+    `unverified scope-foreign-change` (the verify after the gates sees the change). Cost and Workers spawned are 0."""
     home = getattr(args, "home_repo", None)
     entry = free_launch.FREE_MODELS[spec["model"]]
     task_kind = slots.get("TASK_KIND") if isinstance(slots.get("TASK_KIND"), str) else None
@@ -2079,9 +2430,9 @@ def _run_free_phase(args, spec, slots, cwd, run_dir, prompt, sdir) -> int:
     spec.update(rc=result["rc"], session_id=None, argv=result["argv"], wrapper=result["wrapper"],
                 wrapper_sha256=result["wrapper_sha256"],
                 usage=free_launch.parse_usage(result["stdout"], result["stderr"]))
-    src, slog = (0, "") if spec["snapshot"] == SNAPSHOT_SKIPPED else snapshot("capture", spec["snapshot"], cwd=cwd, scripts=sdir)
+    src, slog = (0, "") if spec["snapshot"] == SNAPSHOT_SKIPPED else _capture_snapshot(spec, cwd, sdir)
     if src != 0:
-        spec["outcome"] = "snapshot-failed"; _write_json(run_dir / "run.json", spec)
+        spec["outcome"] = "snapshot-failed"; spec["state"] = _outcome_state(spec["outcome"]); _write_json(run_dir / "run.json", spec)
         print(f"dispatch {spec['run_id']} {spec['model']} snapshot failed rc={src}: {slog.strip()}")
         return EXIT_RED
     if not _record_trust(spec, run_dir, prompt):
@@ -2108,7 +2459,40 @@ def _resume_candidates(cwd: Path, run_id: str, run_dir_arg) -> list[Path]:
 
 
 def resume(args) -> int:
-    """Send one more turn to a finished delegate: Claude via its session id, Codex via its thread id (D54)."""
+    """Spec 042 FR-015 (sol review F11): one resume turn under the same end-state coverage as a first run. Every attempted
+    turn with an established run id ends with one `returned` row that never erases an older row: _finish and
+    _red_before_run write their own, a refusal or a cancellation gets a not-checked row here. A cancel signal during the
+    turn kills the delegate group (launch) and ends the turn `cancelled`, exit 130."""
+    holder: dict = {}
+    saved = _install_cancel_handlers()
+    code, cancelled = EXIT_RED, False
+    try:
+        code = _resume_turn(args, holder)
+    except Cancelled:  # launch() already killed and reaped the delegate's group
+        code, cancelled = EXIT_CANCELLED, True
+    finally:
+        _restore_handlers(saved)
+    spec = holder.get("spec")
+    if spec is not None and int(spec.get("ledger_returns") or 0) == holder.get("before", 0):
+        row = dict(spec)  # a refusal records a row, not a new outcome: run.json keeps the older turn's result
+        row.update(outcome="cancelled" if cancelled else holder.get("refusal") or "refused-resume", state="not-checked",
+                   reason="cancelled" if cancelled else None, rc=EXIT_CANCELLED if cancelled else spec.get("rc"))
+        row.setdefault("model", "unknown")
+        row.setdefault("kind", "unknown")
+        _record_ledger_return(row, code)
+        if cancelled:
+            print(f"dispatch {spec.get('run_id')} {row['model']} cancelled")
+            with contextlib.suppress(OSError):
+                _write_json(holder["run_dir"] / "run.json", {**spec, "outcome": "cancelled", "state": "not-checked",
+                                                               "reason": "cancelled", "rc": EXIT_CANCELLED})
+    if cancelled and spec is None:
+        print("dispatch: resume cancelled")
+    return code
+
+
+def _resume_turn(args, holder: dict) -> int:
+    """Send one more turn to a finished delegate: Claude via its session id, Codex via its thread id (D54). `holder` gets
+    the spec, run dir, the count of return rows before the turn and the refusal word, for resume()'s return row."""
     cwd = Path(getattr(args, "cwd", None) or os.getcwd()).resolve()
     given = Path(args.resume)  # a run id under --run-dir, or a path to the run directory itself
     if (given.is_absolute() or len(given.parts) > 1) and (given / "run.json").is_file():
@@ -2126,23 +2510,34 @@ def resume(args) -> int:
     except (OSError, ValueError):
         print(f"dispatch: no run.json for {args.resume}", file=sys.stderr)
         return EXIT_USAGE
+    holder.update(spec=spec, run_dir=run_dir, before=int(spec.get("ledger_returns") or 0))
     kind = spec.get("kind")
     if kind == "free":  # spec 037 FR-005: a free run has no session
         print(f"dispatch: refused-resume: a free run cannot be resumed ({args.resume})", file=sys.stderr)
+        _emit_refusal("resume-refused", f"a free run cannot be resumed: {args.resume}")
+        holder["refusal"] = "refused-resume"
         return EXIT_USAGE
     if kind not in ("claude", "codex") or not spec.get("session_id"):
         print(f"dispatch: no session id recorded for {args.resume}; cannot resume", file=sys.stderr)
+        _emit_refusal("resume-refused", f"no session id recorded for {args.resume}")
+        holder["refusal"] = "refused-resume"
         return EXIT_USAGE
     if not args.message:
         print("dispatch: --resume needs --message", file=sys.stderr)
+        _emit_refusal("resume-refused", "--resume without --message")
+        holder["refusal"] = "refused-resume"
         return EXIT_USAGE
     control = control_char_hit({"MESSAGE": args.message})
     if control:
         print(f"dispatch: refused-control-char (slot {control[0]} {control[1]})", file=sys.stderr)
+        _emit_refusal("control-char", f"slot {control[0]} {control[1]}")
+        holder["refusal"] = "refused-control-char"
         return EXIT_REFUSED
     hit = credential_hit({"MESSAGE": args.message})  # 025 (#105): same screen as the broker's resume message
     if hit:
         print(f"dispatch: refused credential-seeking ({hit})", file=sys.stderr)
+        _emit_refusal(credential_rule_id(hit), hit)
+        holder["refusal"] = "credential-seeking"
         return EXIT_REFUSED
     home = getattr(args, "home_repo", None)
     n = len(spec.get("resumes", [])) + 1
@@ -2193,6 +2588,8 @@ def resume(args) -> int:
     if skipped and git_state is not False:
         print(f"dispatch: refused-non-git: the first turn skipped its snapshot and cwd {spec['cwd']} is now (or may be) "
               "a git work tree, so no write check can run; start a new dispatch", file=sys.stderr)
+        _emit_refusal("non-git-refused", f"cwd {spec['cwd']} may now be a git work tree")
+        holder["refusal"] = "refused-non-git"
         return EXIT_REFUSED
     if git_state is False:  # same rule as a first turn; a git cwd keeps the verify unchanged
         broad = broad_cwd(spec["cwd"])
@@ -2202,6 +2599,8 @@ def resume(args) -> int:
         if broad or writes:
             msg = broad_cwd_refusal(broad) if broad else non_git_refusal(spec["cwd"], writes)
             print(f"dispatch: refused-non-git: {msg}", file=sys.stderr)
+            _emit_refusal("non-git-refused", msg)
+            holder["refusal"] = "refused-non-git"
             return EXIT_REFUSED
         read_only = True  # a recorded skip never reaches launch without this: any other git answer refused above
     lead_dir = Path(spec["lead_dir"]) if kind == "claude" and spec.get("lead_dir") else None
@@ -2212,6 +2611,7 @@ def resume(args) -> int:
                   file=sys.stderr)
             return EXIT_USAGE
     try:
+        holder["refusal"] = "refused-resume"
         result = launch(kind, spec["model"], spec["effort"], Path(spec["cwd"]), args.message, run_dir,
                         spec.get("permission_mode", DEFAULT_PERMISSION_MODE), resume=spec["session_id"],
                         **({"lead_dir": lead_dir} if lead_dir is not None else {}),
@@ -2307,16 +2707,218 @@ def in_source_checkout(cwd) -> bool:
     return any(all((d / m).exists() for m in _CHECKOUT_MARKERS) for d in (here, *here.parents))
 
 
-def _screen_text(key: str, value: str, settings_dir_ok: bool = False):
-    """First credential match in one slot value, skipping prohibition clauses of a deny-list slot (#87)."""
+# Spec 042 Phase 5 (FR-025a, FR-026). The screen reads prompt text only; the tool deny list and the OS sandbox are
+# the controls that block the actual reads. A bare `.env` and a bare `~/.ssh` name a secret-bearing target.
+_HOME_ALT = r"(?:~|\$HOME|\$\{HOME\}|/Users/[^/\s]+|/home/[^/\s]+|/root)"
+_BARE_SECRET_RE = re.compile(r"(?<![\w./~$-])\.env(?:\.[\w.-]+)?\b|" + _HOME_ALT + r"/\.(?:ssh|aws|gnupg)(?!/[^\s'\"`,;)]|[\w-]|\.\w)")
+# Review 042 G8: a glob under a secret directory is a request for its secrets (screened with an access request, like a bare name).
+_SECRET_GLOB_RE = re.compile(_HOME_ALT + r"/\.(?:claude(?!/skills/)|codex|ssh|aws|gnupg|netrc|config|codex-bridge|local(?!/(?:bin|share/agents-inc|state/agents-inc)/(?!\S*\.\.)))(?![\w-])/[^\s'\"`,;)]*[*?\[]")
+# R8: a single secret file is refused on any mention outside a prohibition clause, like a full credential path (no access gate).
+_SECRET_FILE_RE = re.compile(_HOME_ALT + r"/\.netrc(?![\w/-]|\.\w)")
+# R2 (re-check 042): an access request is any of these words in the target's OWN clause. A bare target or glob in a
+# clause with none of them is a mention. Inflected forms are generated; irregular ones are listed.
+_ACCESS_BASE = ("read cat open print show display dump list ls find search grep retrieve fetch get obtain grab load copy send upload "
+                "output extract inspect summarise summarize use source export include paste share view access echo edit write modify "
+                "reveal cd tail head less touch append delete remove overwrite change update expose").split()
+
+
+def _access_forms(words):
+    out = {"wrote", "written", "got", "gotten", "sent", "shown", "found"}
+    for w in words:
+        out.add(w)
+        if w.endswith("e"):
+            out |= {w + "s", w + "d", w[:-1] + "ing"}
+        elif w.endswith("y"):
+            out |= {w[:-1] + "ies", w[:-1] + "ied", w + "ing", w + "s"}
+        else:
+            out |= {w + "s", w + "es", w + "ed", w + "ing", w + w[-1] + "ing", w + w[-1] + "ed"}
+    return out
+
+
+_ACCESS_FORMS = frozenset(_access_forms(_ACCESS_BASE))
+_LIST_NOUN_RE = re.compile(r"\b(?:deny|allow|block|black|white|ignore|exclude|skip)[- ]?lists?\b", re.IGNORECASE)  # "the deny list" names no access
+_ACCESS_REQ_RE = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, _ACCESS_FORMS), key=len, reverse=True)) + r")\b|\bcheck\s+the\s+contents\b"
+                            r"|\bwhat(?:'s|\s+is|\s+are)\s+in\b|\bwhat\s+(?:does|do)\b[^.;\n]*\bcontain|\bcontents?\s+of\b|\btell\s+me\b|\bgive\s+me\b", re.IGNORECASE)
+_ACCESS_BASE_RE = re.compile(r"\b(?:" + "|".join(_ACCESS_BASE) + r"|before|until|first|then|please|must|should|ensure|need|needs|also)\b|\bcheck\s+the\s+contents\b"
+                              r"|\bwhat(?:'s|\s+is|\s+are)\s+in\b|\bwhat\s+(?:does|do)\b[^.;\n]*\bcontain|\bcontents?\s+of\b|\btell\s+me\b|\bgive\s+me\b", re.IGNORECASE)
+# R1: a clause splits at ; : newline, sentence end, and at a comma or then/but/do (with optional "and") that is followed by a new
+# imperative or modal. "/then/" and "/print/" are not split: a slash token with a verb in it fails the prohibition form instead.
+_NEW_IMPERATIVE = r"(?:do|don't|must|should|please|also|then|first|never|will|can|may|shall|" + "|".join(_ACCESS_BASE) + r")\b"
+_CLAUSE_SPLIT2_RE = re.compile(r";|\n|:(?=\s|$)|(?<=[.!?])\s+|,\s*(?:and\s+|but\s+|then\s+)?(?=" + _NEW_IMPERATIVE + r")"
+                               r"|(?<=[\w'\"`)])\s+(?:and\s+)?(?:then|but|do)\s+(?=(?:not\b|" + _NEW_IMPERATIVE + r"))", re.IGNORECASE)
+# R3: a quoted settings path is a diagnostic only when the quote itself reports an error.
+_SETTINGS_PATH_RE = re.compile(_HOME_ALT + r"/(?:\.claude/settings(?:\.local)?\.json|\.config/agents-inc/settings\.json)(?![\w./-])")
+_QUOTED_RE = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"|`[^`\n]*`")
+_ERROR_MARKER_RE = re.compile(r"error|denied|refused|not permitted|permission|blocked|failed|cannot|could not|no such file|EACCES|EPERM", re.IGNORECASE)
+_FOLLOW_RE = re.compile(r"\b(?:follow|follows|following|run|runs|running|do|does|apply|applies|obey|obeys|execute|executes|perform|carry|comply|implement|act|heed)\b", re.IGNORECASE)
+# A shell expansion next to a secret name: the final path is not known when the screen runs (FR-026).
+_SECRET_NAME_RE = re.compile(r"auth\.json|(?<=/)tokens?\b|(?<![\w])\.(?:aws|gnupg)\b|(?<![\w])\.env\b|id_rsa|id_ed25519|\.pem\b|\.key\b|(?<![\w])\.ssh\b|\.netrc\b"
+                             r"|credentials?\b|hosts\.yml|keyrings?\b|\.git-credentials", re.IGNORECASE)
+_EXPANSION_SUB_RE = re.compile(r"\$\([^()]*\)|`[^`\n]*`|\$\{[^}\n]*\}")
+# R1: a clause that names a secret target is exempt only in this form: (and|also|please)* then do not, don't, never, no, must not,
+# may not, cannot, can't, without or avoid; then optional access words (read, reads, print or copy ...); then only targets, the nouns
+# below, or/and/of/to/the/any and path-like tokens. A second verb, "do", a double negation (skip, neglect, forget, fail) fails the form.
+_PROHIB_HEAD_RE = re.compile(r"\A[\s\-*•>\d.)]*(?:(?:and|also|please)\s+)*(?:do\s+not|don't|never|no|must\s+not|may\s+not|cannot|can't|without|avoid)\b", re.IGNORECASE)
+_PROHIB_WORDS = frozenset(
+    "or and nor of to the a an any all every from in on under inside within into at other anywhere ever even it them its their this that "
+    "these those either too again file files dir directory directories folder folders content contents path paths value values secret secrets credential "
+    "credentials key keys token tokens env environment variable variables text bearing sensitive private hidden config configs setting "
+    "settings home ssh aws gnupg netrc repo repos repository repositories name names anything everything dotfile dotfiles store stores".split())
+_PROHIB_CONNECTORS = frozenset("or and nor of to the a an any all every from in on under inside within into at other anywhere ever even".split())
+_BACKREF_RE = re.compile(r"\b(?:it|its|them|they|those|these|that\s+files?|the\s+(?:file|files|contents|same|above|former|latter)|same|above|former|latter)\b", re.IGNORECASE)
+_HEAD_DOUBLE_NEG = frozenset("skip avoid neglect forget fail hesitate omit miss need necessary".split())
+_PATHISH_RE = re.compile(r"[/~.]")
+_DOUBLE_NEG_RE = re.compile(r"\b(?:skip|skipping|neglect|neglecting|forget|forgetting|fail|failing|ignore|omit|without)\b", re.IGNORECASE)
+
+
+class _Hit:
+    """A screen match: `.group(0)` is the text; `undecidable` is set when the screen could not decide (FR-026)."""
+    def __init__(self, text: str, start: int, end: int, undecidable: bool = False):
+        self.text, self._span, self.undecidable = text, (start, end), undecidable
+    def group(self, _n: int = 0) -> str: return self.text
+    def start(self) -> int: return self._span[0]
+    def end(self) -> int: return self._span[1]
+
+
+def _blank_diagnostic_paths(value: str) -> str:
+    """R3: blank a quoted settings path when the quote itself is an error report (a marker word that comes before any
+    access word in the quote) and nothing outside the quotes asks for access or tells the reader to act on it."""
+    outside = _QUOTED_RE.sub(" ", value)
+    if _ACCESS_REQ_RE.search(outside) or _FOLLOW_RE.search(outside):
+        return value
+
+    def quote(q):
+        text = q.group(0)
+        marker = _ERROR_MARKER_RE.search(text)
+        if not marker:
+            return text
+        access = _ACCESS_REQ_RE.search(text)
+        if access and access.start() < marker.start():
+            return text
+        return _SETTINGS_PATH_RE.sub(lambda m: " " * len(m.group(0)), text)
+    return _QUOTED_RE.sub(quote, value)
+
+
+def _undecidable_token(clause: str):
+    """FR-026: first whitespace token with a variable, command substitution, backtick or leading glob next to a secret name."""
+    text = _EXPANSION_SUB_RE.sub(lambda m: "$" + "X" * (len(m.group(0)) - 1), clause)
+    pos = 0
+    for tok in text.split():
+        pos = text.find(tok, pos)
+        name = _SECRET_NAME_RE.search(tok)
+        if name:
+            glob = re.search(r"[*?\[]", tok)
+            if "$" in tok or (glob and glob.start() < name.start()):
+                return _Hit(clause[pos:pos + len(tok)].strip("'\",;()"), pos, pos + len(tok), True)
+        pos += len(tok)
+    return None
+
+
+def _blank_targets(clause: str, matches: list) -> str:
+    """The clause with each match widened to its whole whitespace-delimited token and replaced by ` X `."""
+    spans = []
+    for m in matches:
+        a, b = m.start(), m.end()
+        while a > 0 and not clause[a - 1].isspace(): a -= 1
+        while b < len(clause) and not clause[b].isspace(): b += 1
+        spans.append((a, b))
+    text, last = [], 0
+    for a, b in sorted(spans):
+        if a < last: continue
+        text.append(clause[last:a] + " X "); last = b
+    return "".join(text) + clause[last:]
+
+
+def _is_prohibition(text: str) -> bool:
+    """R1: `text` (targets already blanked to X) is an allowed prohibition form."""
+    head = _PROHIB_HEAD_RE.match(text)
+    if not head or _TURN_RE.search(text):
+        return False
+    toks = text[head.end():].split()
+    if any(t.strip(",.()'\"`").lower() in _HEAD_DOUBLE_NEG for t in toks[:2]):  # R7: "no need to", "must not skip", "do not hesitate"
+        return False
+    i = 0
+    while i < len(toks) and toks[i].strip(",.()'\"`").lower() in _ACCESS_FORMS:  # access words, optionally joined by or/nor
+        i += 1
+        if i + 1 < len(toks) and toks[i].lower() in ("or", "nor") and toks[i + 1].strip(",.()'\"`").lower() in _ACCESS_FORMS:
+            i += 1
+    prev = "start"
+    for tok in toks[i:]:
+        tok = tok.strip(",.()'\"`;:")
+        if not tok or not re.search(r"\w", tok):
+            continue
+        if tok == "X":
+            prev = "noun"
+            continue
+        if _PATHISH_RE.search(tok):  # a path-like token is judged by its parts: a verb or glue verb inside it fails the form
+            if any(p.lower() in _ACCESS_FORMS or p.lower() in ("then", "do", "but") for p in re.split(r"[/.~]", tok) if p):
+                return False
+            prev = "noun"
+            continue
+        if tok.lower() in _ACCESS_FORMS and tok.lower().endswith("s") and prev == "noun":  # ".env reads": a plural access word after a noun
+            continue
+        if not all(w.lower() in _PROHIB_WORDS for w in tok.split("-") if w):
+            return False
+        prev = "conn" if tok.lower() in _PROHIB_CONNECTORS else "noun"
+    return True
+
+
+def _clause_allowed(key: str, clause: str, matches: list) -> bool:
+    """R1: every match in this clause is exempt. A clause that turns around (except, unless, instead, however) never is."""
+    if _TURN_RE.search(clause):
+        return False
+    text = _blank_targets(clause, matches)
+    if _is_prohibition(text):
+        return True
+    if _PROHIB_HEAD_RE.match(text) or _DOUBLE_NEG_RE.search(text):  # a failed prohibition form is never rescued by the slot
+        return False
+    return key == "OUT_OF_SCOPE" and not _ACCESS_BASE_RE.search(text)  # OUT_OF_SCOPE lists what is excluded; a verb in it is a request
+
+
+def _screen_text(key: str, value: str, settings_dir_ok: bool = False, requests: bool = True):
+    """First credential match in one slot value, skipping prohibition clauses (R1, #87).
+    requests=False (a file's content) keeps the older path screen: no bare `.env`, no undecidable path, no quoted-diagnostic rule."""
     if settings_dir_ok:
         value = _SETTINGS_DIR_OK_RE.sub(lambda m: " " * len(m.group(0)), value)
-    clauses = _CLAUSE_SPLIT_RE.split(value) if key in DENY_LIST_SLOTS else [value]
-    for clause in clauses:
-        if key in DENY_LIST_SLOTS and not _TURN_RE.search(clause) and (key == "OUT_OF_SCOPE" or _NEGATION_RE.match(clause)):
+    if not requests:
+        for clause in (_CLAUSE_SPLIT_RE.split(value) if key in DENY_LIST_SLOTS else [value]):
+            matches = [m for rx in (CREDENTIAL_RE, SECRET_VAR_PRINT_RE) for m in rx.finditer(clause)]
+            if not matches:
+                continue
+            if key in DENY_LIST_SLOTS and not _TURN_RE.search(clause) and (key == "OUT_OF_SCOPE" or _NEGATION_RE.match(clause)):
+                continue
+            return min(matches, key=lambda m: m.start())
+        return None
+    value = _blank_diagnostic_paths(value)
+    target_idx, backref_clauses, n = [], [], -1  # R6
+    prev_access = False  # the previous clause asked for access: a bare list item after it inherits the request (`Read:` / `- .env`)
+    for clause in _CLAUSE_SPLIT2_RE.split(value):
+        if not clause.strip():
             continue
-        match = CREDENTIAL_RE.search(clause) or SECRET_VAR_PRINT_RE.search(clause)
-        if match: return match
+        n += 1
+        matches = [m for rx in (CREDENTIAL_RE, SECRET_VAR_PRINT_RE, _SECRET_FILE_RE) for m in rx.finditer(clause)]
+        access = bool(_ACCESS_REQ_RE.search(_LIST_NOUN_RE.sub(" ", clause)))
+        bare = [m for rx in (_BARE_SECRET_RE, _SECRET_GLOB_RE) for m in rx.finditer(clause)]
+        if matches or bare:
+            target_idx.append(n)
+        if access and _BACKREF_RE.search(clause) and not _is_prohibition(clause):
+            backref_clauses.append((n, clause))
+        if bare and not access and prev_access:  # list item: only targets, nouns and punctuation in the clause
+            rest = _blank_targets(clause, bare).split()
+            access = all(t == "X" or not re.search(r"\w", t) or t.strip(",.").lower() in _PROHIB_WORDS for t in rest)
+        if access:
+            matches += bare
+        undecided = _undecidable_token(clause)
+        if undecided is not None:
+            matches.append(undecided)
+        allowed = bool(matches) and _clause_allowed(key, clause, matches)
+        prev_access = access and not allowed
+        if matches and not allowed:
+            return min(matches, key=lambda m: m.start())
+    for i, clause in backref_clauses:  # R6: a clause next to a target clause asks for it by pronoun
+        if any(abs(i - j) == 1 for j in target_idx):
+            c = clause.strip()
+            return _Hit(c, 0, len(c))
     return None
 # Gate and BASH_ALLOW screen: names a credential path, not a word. test_token_refresh.py and check_credentials_schema.py pass.
 GATE_CREDENTIAL_RE = re.compile(
@@ -2357,7 +2959,9 @@ def names_credential(tokens) -> bool:
 BROKER_OK, BROKER_FATAL, BROKER_USAGE = 0, 1, 2
 BROKER_LOCK = "broker.lock"  # flock target in the run directory; never unlinked, never in a sandbox grant
 REQ_GREEN, REQ_RED, REQ_USAGE, REQ_REFUSED = 0, 1, 2, 3
-REQ_STATUS = {REQ_GREEN: "green", REQ_RED: "red", REQ_USAGE: "usage-error", REQ_REFUSED: "refused"}
+REQ_UNVERIFIED = EXIT_UNVERIFIED
+REQ_STATUS = {REQ_GREEN: "green", REQ_RED: "red", REQ_USAGE: "usage-error", REQ_REFUSED: "refused",
+              REQ_UNVERIFIED: "unverified"}
 
 
 def _req_status(code: int, outcome) -> str:
@@ -2533,15 +3137,30 @@ def control_char_hit(slots) -> tuple[str, str, int] | None:
     return None
 
 
-def credential_hit(slots, cwd=None) -> str | None:
+_OWN_SCREEN_SLOTS = frozenset({"GATES", "BASH_ALLOW"})
+
+
+def credential_hit(slots, cwd=None, requests: bool = True) -> str | None:
     """#95: `slot <KEY> matched '<text>'` for the first slot value the D51 screen refuses, else None.
-    D81: a cwd inside an agents-inc source checkout lets a slot name ~/.config/agents-inc or its settings.json."""
+    D81: a cwd inside an agents-inc source checkout lets a slot name ~/.config/agents-inc or its settings.json.
+    042 FR-025a: every string in every slot is read, nested lists and objects included. FR-026: a path it cannot
+    decide gives `slot <KEY> could not decide '<text>'` (see credential_rule_id)."""
     ok = cwd is not None and in_source_checkout(cwd)
     for key, value in (slots.items() if isinstance(slots, dict) else ()):
-        match = _screen_text(key, value, ok) if isinstance(value, str) else None
-        if match:
+        if key in _OWN_SCREEN_SLOTS and not isinstance(value, str): continue  # GATES/BASH_ALLOW lists have their own path screens
+        for text in _nested_strings(value):
+            match = _screen_text(key, text, ok, requests)
+            if match is None:
+                continue
+            if getattr(match, "undecidable", False):
+                return f"slot {key} could not decide {match.group(0)!r}: a shell expansion sits next to a secret name"
             return f"slot {key} matched {match.group(0)!r}"
     return None
+
+
+def credential_rule_id(hit: str) -> str:
+    """Registry id for a `credential_hit` result (spec 042 FR-026)."""
+    return "credential-undecidable" if " could not decide " in hit else "credential-slot-text"
 
 
 def _reject_credential_seeking(slots: dict) -> bool:
@@ -2573,6 +3192,9 @@ def _write_request_result(run_dir: Path, rid: str, result: dict, report_text: st
     report = run_dir / f"{rid}.report.md"
     _write_new(report, report_text)
     result = dict(result, schema_version=1, request_id=rid, report_path=str(report))
+    if result.get("status") == "refused" and "refusal" not in result:  # spec 042 FR-022: additive, the reason code keeps its name
+        result["refusal"] = rules.refuse(rules.broker_rule_id(str(result.get("reason"))),
+                                         result.get("reason_detail") or result.get("reason"))
     _atomic_write_json(run_dir / f"{rid}.result.json", result)
 
 

@@ -211,7 +211,7 @@ def build_input_section(slots: dict, cwd: Path, max_chars: int) -> tuple[str, li
             content = data.decode("utf-8")
         except UnicodeDecodeError:
             raise InputsRefused(f"{rel}: not a text file") from None
-        if credential_hit({"path": rel, "content": content}):
+        if credential_hit({"path": rel, "content": content}, requests=False):
             raise InputsRefused(f"{rel}: credential-shaped content")
         total += len(content)
         if total > max_chars:

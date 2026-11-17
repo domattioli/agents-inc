@@ -22,7 +22,7 @@ from agents_inc.install.transaction import TransactionJournal
 ALIASES = ("haiku", "sonnet", "opus", "fable", "astra", "sol", "terra", "luna", "gemini", "mistral", "openrouter")
 HOOK_TEXT = "#!/usr/bin/env bash\n# at_route.sh - UserPromptSubmit hook. Routes \"@<alias> <question>\" to a cheap model.\nexit 0\n"
 LEGACY_COMMAND = "bash ~/.claude/scripts/at_route.sh"
-HOST = {"which": lambda *a, **k: "/usr/bin/claude", "sandbox_probe": lambda: True}  # results must not depend on the host
+HOST = {"which": lambda *a, **k: "/usr/bin/claude", "sandbox_probe": lambda: True, "net_probe": lambda: True}  # results must not depend on the host
 
 
 class AtRouteInstallTest(unittest.TestCase):
