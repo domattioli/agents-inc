@@ -178,7 +178,7 @@ class SnapshotTest(unittest.TestCase):
     def test_round_trip(self):
         self.assertEqual(self.snapcmd("capture", self.snap).returncode, 0)
         data = json.loads(self.snap.read_text())
-        self.assertEqual(set(data), {"time", "head", "repo", "porcelain", "sha256", "ignored"})
+        self.assertEqual(set(data), {"time", "head", "repo", "porcelain", "sha256", "ignored", "declared"})
         self.assertEqual(sorted(data["sha256"]), ["a.txt", "u/deep.txt"])
         self.assertEqual(data["sha256"]["a.txt"], hashlib.sha256(b"a dirty\n").hexdigest())
         self.assertEqual(self.snapcmd("verify", self.snap).returncode, 0)
