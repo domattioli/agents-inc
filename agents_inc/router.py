@@ -105,7 +105,8 @@ def _provider_routes(provider: str, task: str, tier: str, overlay: dict | None =
 def pick_model_chain(task: str, tier: str, available: set[str], workspace_authorized: bool,
                      exclude_provider: str | None = None,
                      prefer_provider: str | None = None, local_authorized: bool = False,
-                     local_only: bool = False) -> tuple[Route, ...]:
+                     local_only: bool = False, *, benchlm_snapshot: str | Path | None = None,
+                     benchlm_job: str | None = None) -> tuple[Route, ...]:
     """Return bounded candidates in retry order. OpenRouter auto:free is always last."""
     if tier not in _TABLE["tiers"]:
         return ()
@@ -143,12 +144,15 @@ def pick_model_chain(task: str, tier: str, available: set[str], workspace_author
             if _in_cooldown(provider, tier, health, now) or _at_cap(provider, now):
                 continue
         routes.extend(_provider_routes(provider, task, tier, overlay=overlay))
-    return tuple(routes)
+    from .benchlm import advise
+    return advise(tuple(routes), benchlm_snapshot, benchlm_job)
 
 def pick_model(task: str, tier: str, available: set[str], workspace_authorized: bool,
                exclude_provider: str | None = None, prefer_provider: str | None = None,
-               local_authorized: bool = False, local_only: bool = False) -> Route | None:
+               local_authorized: bool = False, local_only: bool = False, *,
+               benchlm_snapshot: str | Path | None = None, benchlm_job: str | None = None) -> Route | None:
     chain = pick_model_chain(task, tier, available, workspace_authorized,
                              exclude_provider, prefer_provider, local_authorized=local_authorized,
-                             local_only=local_only)
+                             local_only=local_only, benchlm_snapshot=benchlm_snapshot,
+                             benchlm_job=benchlm_job)
     return chain[0] if chain else None

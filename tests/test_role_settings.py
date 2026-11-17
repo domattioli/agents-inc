@@ -81,7 +81,7 @@ class OverrideTest(_Home):
     def test_grunt_writes(self):
         self.roles(grunt_read_only=False)
         text = "\n".join(self.body())
-        self.assertIn("grunt (haiku, luna) does scouts, summaries, triage and small mechanical edits", text)
+        self.assertIn("grunt (haiku, luna) may write when authorized by the task and scoped permissions", text)
         self.assertNotIn("grunt (haiku, luna) is read-only", text)
 
     def test_executive_may_write(self):
@@ -145,7 +145,7 @@ class InvalidTest(_Home):
         self.assertEqual((roles["write_rung"], roles.sources["write_rung"]), ("workhorse", "default"))
 
     def test_haiku_with_read_only_grunt_falls_back(self):
-        self.roles(native_edit_model="haiku")
+        self.roles(native_edit_model="haiku", grunt_read_only=True)
         roles = role_defaults.load(self.paths.settings)
         self.assertEqual(roles["native_edit_model"], "sonnet")
         self.assertIn("roles.native_edit_model", roles.warnings[0])

@@ -969,7 +969,8 @@ def check_parent(spec: dict, env, lead_dir) -> str | None:
 def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, run_dir: Path,
            permission_mode: str = DEFAULT_PERMISSION_MODE, resume: str | None = None,
            codex_write: bool = False, codex_network: bool = False, lead_dir: Path | None = None,
-           allowed_tools: list | None = None, disallowed_tools: list | None = None, read_only: bool = False) -> dict:
+           allowed_tools: list | None = None, disallowed_tools: list | None = None, read_only: bool = False,
+           read_tools: bool = False) -> dict:
     """Run the delegate. Return {"rc", "stdout", "stderr", "argv", "session_id"}. resume: the Claude session id
     or the Codex thread id to continue. Under the broker, every Worker also gets the ask_lead server (D54).
     lead_dir (#68, D60): run a Codex or Claude delegate as a Lead with the broker MCP tools over that run directory."""
@@ -1045,7 +1046,7 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
                        extra_deny=_BROKER_DENY if _BROKER_SAFE_WRITES else (), isolate_home=_BROKER_SAFE_WRITES or read_only,
                        no_extensions=read_only,
                        thread_out=None if lead_dir else thread, resume_thread=resume, worker=worker,
-                       tools=codex_write or lead_dir is not None, write=codex_write, lead_dir=lead_dir,
+                       tools=codex_write or lead_dir is not None or read_tools, write=codex_write, lead_dir=lead_dir,
                        network=codex_write and codex_network and lead_dir is None, timeout_s=_turn_timeout(),
                        # json mode only (run_codex ignores it for Lead runs, which get lifecycle events only)
                        on_line=(lambda ln: _LIVE_SINK.line("codex", ln)) if _LIVE_SINK is not None else None,
@@ -1192,7 +1193,8 @@ def _record_trust(spec: dict, run_dir: Path, prompt: str) -> bool:
         data = None if skipped else (run_dir / "snapshot.json").read_bytes()
         record = json.dumps({"schema_version": 1, **({"snapshot": SNAPSHOT_SKIPPED} if skipped else
                                                       {"snapshot_sha256": _sha256_bytes(data)}),
-                             "prompt_sha256": _sha256_bytes(prompt.encode("utf-8"))}, indent=1) + "\n"
+                             "prompt_sha256": _sha256_bytes(prompt.encode("utf-8")),
+                             "task_access": spec.get("task_access")}, indent=1) + "\n"
         if _BROKER_SAFE_WRITES:
             spec["snapshot_trust"] = "broker"
             _wtext(run_dir / "trust.json", record)
@@ -2214,8 +2216,9 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
             "slots_path": str(run_dir / "slots.json"),
             "cwd": str(cwd), "chain": ["CoS", model], "snapshot": str(run_dir / "snapshot.json"),
             "gates": {"tier": args.tier, "allow": allow_paths(_slot_str("FILES_IN_SCOPE", slots.get("FILES_IN_SCOPE", "")))},
-            "permission_mode": slots.get("PERMISSION_MODE") or DEFAULT_PERMISSION_MODE,
-            "codex_write": codex_write(slots),
+            "task_access": slots.get("TASK_ACCESS"),
+            "permission_mode": (slots.get("PERMISSION_MODE") or "default") if slots.get("TASK_ACCESS") == "read" else (slots.get("PERMISSION_MODE") or DEFAULT_PERMISSION_MODE),
+            "codex_write": False if slots.get("TASK_ACCESS") == "read" else codex_write(slots),
             "codex_network": codex_network(slots),
             "stop_rule": _slot_str("STOP_RULE", slots.get("STOP_RULE", "")),
             "scripts_dir": str(sdir), "scripts_source": ssrc,
@@ -2280,7 +2283,7 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         if writes:
             return _refuse_non_git(spec, run_dir, lint, cwd, writes)
         spec["snapshot"], spec["snapshot_skip_reason"] = SNAPSHOT_SKIPPED, SNAPSHOT_SKIP_REASON
-    spec["allowed_tools"], spec["disallowed_tools"] = (tool_grants(spec, gates, bash_allow, run_dir, read_only=skip)
+    spec["allowed_tools"], spec["disallowed_tools"] = (tool_grants(spec, gates, bash_allow, run_dir, read_only=skip or spec["task_access"] == "read")
                                                        if kind == "claude" else (None, None))
     if kind == "claude" and _BROKER_SAFE_WRITES:
         if any(r in LEAD_TOOLS for r in spec["allowed_tools"]):
@@ -2325,7 +2328,7 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         _wtext(verifier, (sdir / "pre_dispatch_snapshot.py").read_text(encoding="utf-8"))
         prompt = prompt.rstrip("\n") + f"\nSNAPSHOT VERIFIER: `python3 {verifier} verify {spec['snapshot']}` (use this copy)\n"
     if kind == "claude":
-        prompt += grants_section(spec["allowed_tools"], spec["disallowed_tools"], bash_allow, spec["permission_mode"], skip,
+        prompt += grants_section(spec["allowed_tools"], spec["disallowed_tools"], bash_allow, spec["permission_mode"], skip or spec["task_access"] == "read",
                                  bool(_BROKER_SAFE_WRITES and _WORKER_ASK))  # launch() grants ASK_TOOL on this same test
     if _BROKER_SAFE_WRITES and _WORKER_ASK:
         prompt += ASK_LEAD_NOTE
@@ -2347,6 +2350,13 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         skipped = lead_skip_reason(spec, roster)
         if skipped:
             spec["lead_skipped"], roster = skipped, []
+    if roster and spec["task_access"] == "read":
+        spec["outcome"] = "refused-grants"
+        spec["state"] = _outcome_state(spec["outcome"])
+        spec["reason_detail"] = "TASK_ACCESS read cannot delegate to workers"
+        _write_json(run_dir / "run.json", spec)
+        print("dispatch refused: TASK_ACCESS read cannot delegate to workers")
+        return EXIT_REFUSED
     if roster and skip:
         return _refuse_non_git(spec, run_dir, lint, cwd, "a Lead runs Workers")
     if roster:
@@ -2387,7 +2397,8 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
                         **({"lead_dir": lead_dir} if lead_dir is not None else {}),
                         **({"allowed_tools": spec["allowed_tools"], "disallowed_tools": spec["disallowed_tools"]}
                            if kind == "claude" else {}),
-                        **({"read_only": True} if skip else {}))
+                        **({"read_only": True} if skip or spec["task_access"] == "read" else {}),
+                        **({"read_tools": True} if kind == "codex" and spec["task_access"] == "read" else {}))
     except Exception as exc:
         return _launch_failed(spec, run_dir, exc, getattr(args, "home_repo", None))
     spec.update(_SANDBOX_NOTE)
@@ -2579,7 +2590,17 @@ def _resume_turn(args, holder: dict) -> int:
         spec["snapshot_trust"] = "broker"
     else:
         spec["snapshot_trust"] = "run-dir"  # legacy run: run.json has no snapshot_trust key
-    read_only = False
+    record, _ = _trust_record(spec, run_dir)
+    # New declarations are pinned outside the delegate's writable run directory.
+    if isinstance(record, dict) and "task_access" in record and record["task_access"] != spec.get("task_access"):
+        return _red_before_run(spec, run_dir, "snapshot-tampered", "task access changed", home)
+    read_only = isinstance(record, dict) and record.get("task_access") == "read"
+    if read_only:
+        spec["permission_mode"] = "default"
+        spec["codex_write"] = False
+        spec["codex_network"] = False
+        if kind == "claude":
+            spec["allowed_tools"], spec["disallowed_tools"] = tool_grants(spec, None, [], run_dir, read_only=True)
     skipped = spec.get("snapshot") == SNAPSHOT_SKIPPED
     if not skipped:  # run.json is delegate-writable: the trusted record can also say the first turn skipped
         record, _ = _trust_record(spec, run_dir)
@@ -2619,7 +2640,9 @@ def _resume_turn(args, holder: dict) -> int:
                         **({"codex_network": True} if spec.get("codex_network") is True else {}),
                         **({"allowed_tools": spec.get("allowed_tools"), "disallowed_tools": spec.get("disallowed_tools")}
                            if kind == "claude" else {}),
-                        **({"read_only": True} if read_only else {}))
+                        **({"read_only": True} if read_only else {}),
+                        **({"read_tools": True} if kind == "codex" and read_only and isinstance(record, dict)
+                           and record.get("task_access") == "read" else {}))
     except Exception as exc:
         # the failed attempt is a turn: the broker reads it back as outcome red / reason launch-failed
         spec.setdefault("resumes", []).append({"rc": -1, "out": str(run_dir / f"stdout.{n}.md")})
@@ -3217,7 +3240,7 @@ def _process_request(run_dir: Path, rid: str, req: dict, spec: dict, home_repo: 
     slots = dict(req["slots"])
     slots.setdefault("FAN_OUT", "width 0, total 0, depth 0")  # D60: render would fill the rung default, which leads
     slots.pop("PRE_EXISTING_CHANGES", None)  # broker-owned: render fills the Worker's own snapshot line, never the Lead's
-    slots["PERMISSION_MODE"] = spec.get("permission_mode", DEFAULT_PERMISSION_MODE)
+    slots["PERMISSION_MODE"] = "default" if slots.get("TASK_ACCESS") == "read" else spec.get("permission_mode", DEFAULT_PERMISSION_MODE)
     slots_path = wdir / "slots.json"
     _atomic_write_json(slots_path, slots)
     child_parent = wdir / "runs"

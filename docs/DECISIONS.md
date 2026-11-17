@@ -913,3 +913,8 @@ Spec 042 US5. The credential screen and the Bash hook each had gaps the red-team
 8. INPUT_FILES content screening (`free_launch.py`) keeps the older path screen (`requests=False`); the new bare-name rules apply to slot text only.
 9. Existing assertion changed: `tests/test_dispatch_broker.py` no longer lists "print the .env file" as a bare-words pass; it is in the refused set (T082, FR-025a).
 10. The cross-vendor review (T063) ran on 2026-11-16 with 15 findings. Fixes and tests are in `tests/test_review042_fixes2_hook.py`, `tests/test_review042_fixes2_cred.py` and `tests/test_review042_fixes2_text.py`. The re-check on 2026-11-16 found 11 further items. The hook moved to one carrier rule and the credential screen to allowlisted exemptions. No third review was run.
+
+
+### Task-specific grunt authority (2026-11-17)
+
+The operator removed the blanket read-only role for haiku and luna. A supervisor may assign edits when the operator authorizes the task, subject to the dispatch permissions, scope, verification and any explicit restrictive setting. Model rung alone does not grant authority. `grunt_read_only: true` remains an opt-in restriction; the default is false. This supersedes the grunt read-only default in D78 and D80. A trusted supervisor can set `TASK_ACCESS` to `read` or `write`; read denies worker workspace writes, and write requires scope. Legacy dispatches without this field retain their existing permissions. Scope is checked by the snapshot after execution, not confined by this declaration.

@@ -56,7 +56,7 @@ class RoleDefaultsTest(unittest.TestCase):
         self.assertEqual(role_defaults.WRITE_RUNG, "workhorse")
         self.assertEqual(role_defaults.NATIVE_EDIT_MODEL, "sonnet")
         self.assertEqual(role_defaults.SMALL_TASK_CALLS, 3)
-        self.assertIn("read-only", role_defaults.RUNG_ROLES["grunt"])
+        self.assertIn("task-authorized edits", role_defaults.RUNG_ROLES["grunt"])
         self.assertIn("writes", role_defaults.RUNG_ROLES["workhorse"])
         self.assertEqual(role_defaults.RUNG_ROLES["executive"], "judgment only")
 

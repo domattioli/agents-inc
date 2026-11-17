@@ -46,7 +46,7 @@ class DispatchGateD78Test(unittest.TestCase):
         self.assertNotIn("Three or fewer: do it yourself", quick)
         self.assertIn("Three or fewer that write nothing: do it yourself", quick)
         self.assertIn("Three or fewer that edit files: a native workhorse subagent", quick)
-        self.assertIn("| grunt | haiku | luna | read-only", quick)
+        self.assertIn("| grunt | haiku | luna | scouts, summaries, triage and task-authorized edits", quick)
         self.assertIn("| workhorse | sonnet | terra | default for anything that writes", quick)
 
     def test_skill_step0_and_grunt_rule(self):

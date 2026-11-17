@@ -19,48 +19,15 @@ the installed `codex-bridge` skill. For Astra, Sol, Terra, or Luna, invoke the
 absolute installed `agents-inc` launcher recorded by installation; Claude's
 `Agent` cannot select those Codex aliases.
 
-## Metadata
-
-- **Category**: Fleet Orchestration / Delegation
-- **Use Case**: Supervising codex/gemini/mistral/OpenRouter delegates in budget mode; deciding tier placement; deciding whether a delegate's reported gate can be believed
-- **Dependencies**: `codex-bridge` skill for actual dispatch (`agent.sh`, `gask.sh`, `mask.sh`, `oask.sh`). No scripts of its own
-- **Scope**: Supervision discipline only. Transport, routing, retries, timeouts and job state belong to `codex-bridge`
-
-
 ## Free models (D75)
 
 Free slugs (see `agents_inc/install/free_launch.py`) are dispatchable. Add `TASK_KIND` (extract, summarize, classify) and an explicit public or internal `CLASSIFICATION`. Judge the reply with a `{report}` gate. A free reply is never self-accepted.
-
-## When to Use
-
-- Orchestrating work across non-Claude delegate models in budget mode
-- A delegate reports a gate GREEN and you must decide whether to accept it
-- Choosing which capability tier a task belongs to, or whether to escalate
-- Building a dispatch prompt for a delegate or a review agent
-- Computing or displaying cost/savings across a mixed free-and-paid fleet
-
-## When NOT to Use
-
-- Single-model work with no delegation — there is no fleet to supervise
-- Wiring up transport, provider routing, retries or job state — that is
-  `codex-bridge`, and duplicating it here is how the fleet ended up with
-  two parallel dispatch paths in the first place
-- Domain logic of any kind. This skill has opinions about process, none
-  about your problem
-
-## Failure Mode This Solves
-
-Load `references/history.md` when you need the incident that motivated this skill.
 
 ## Protocol
 
 ### Step 0: Dispatch-worthiness gate — run before writing any prompt
 
-A correctly-written dispatch prompt (Step 11: role, reporting chain, verified
-state, constraints, gates, output shape) costs roughly 600-1,200 tokens to
-write plus the delegate's own floor (measured: 3,181 tokens for a one-word
-Executive-rung reply). For a small task that fixed cost exceeds doing the work
-directly. Answer both questions below before writing the prompt.
+Estimate the work and required capabilities before writing the brief.
 
 **Q1 — Volume (D78).** Estimate the direct tool calls this task would take you
 (read / grep / glob / single edit / one command). Count the calls, do not
@@ -151,7 +118,7 @@ vendor column you may use** — the ladder tells you the rung, not the vendor.
 | executive | fable | astra | judgment only: operator dialogue, decisions, briefs, verification, final acceptance (D78) |
 | orchestrator | opus | sol | briefs that need design or scope judgment, adversarial review, gates |
 | workhorse | sonnet | terra | default for anything that writes: code, docs, git and PR mechanics; supervising a pair |
-| grunt | haiku | luna | read-only: scouts, summaries, triage; writes no code (D78) |
+| grunt | haiku | luna | scouts, summaries, triage and task-authorized edits |
 | grunt | — | oss / free | one-shot text, drafts, sounding boards, well-scoped small coding (high volume of small diffs, never a large or architecturally significant change) |
 
 Rung names follow D27/D36: executive, orchestrator, workhorse, grunt. Older
@@ -206,7 +173,7 @@ the other four are L1. No mechanical check alone is not L3: low-stakes prose
 without a check stays L1-L2. File count is not a dimension. Code writing or
 editing goes to workhorse unless the operator directs another rung; a code
 task that needs design or scope judgment goes to orchestrator. The Claude and
-Codex grunts (haiku, luna) are read-only and write no code (D78).
+Haiku and luna may write when the operator authorizes the task and the dispatch grants the necessary scope. The supervisor sets `TASK_ACCESS` to `read` or `write` from that authority and supplies `FILES_IN_SCOPE` for writes. Legacy slots without this field keep their existing permissions.
 Ported from DomI `subagent-dispatch-policy` v1.4.0 (#27).
 
 Coding by free bottom-rung models (not haiku or luna) is scope-gated, not banned: small, narrow, high-volume jobs only. A task needing scope/design judgment is workhorse+, dispatch it there.
@@ -268,11 +235,11 @@ Route (D79, proposed). Claude Code with the agents-inc mod: native agent types a
 | astra | OpenAI (Codex) | `gpt-6-astra` | `@AGENTS_INC_LAUNCHER@ run --model astra --cwd <dir>` | executive | hardest reasoning |
 | sol | OpenAI (Codex) | `gpt-5.6-sol` | `@AGENTS_INC_LAUNCHER@ run --model sol --cwd <dir>` | orchestrator | orchestration, review |
 | terra | OpenAI (Codex) | `gpt-6.1-terra` | `@AGENTS_INC_LAUNCHER@ run --model terra --cwd <dir>` | workhorse | implementation |
-| luna | OpenAI (Codex) | `gpt-6-luna` | `@AGENTS_INC_LAUNCHER@ run --model luna --cwd <dir>` | grunt | read-only triage, scouts, summaries |
+| luna | OpenAI (Codex) | `gpt-6-luna` | `@AGENTS_INC_LAUNCHER@ run --model luna --cwd <dir>` | grunt | triage, scouts, summaries and task-authorized edits |
 | fable | Anthropic | n/a — `Agent` tool | `Agent(model="fable", ...)` | executive | Claude-side hardest reasoning, last resort |
 | opus | Anthropic | n/a — `Agent` tool | `Agent(model="opus", ...)` | orchestrator | Claude-side orchestration, adversarial review, gates |
 | sonnet | Anthropic | n/a — `Agent` tool | `Agent(model="sonnet", ...)` | workhorse | Claude-side implementation |
-| haiku | Anthropic | n/a — `Agent` tool | `Agent(model="haiku", ...)` | grunt | Claude-side read-only triage, scouts, summaries |
+| haiku | Anthropic | n/a — `Agent` tool | `Agent(model="haiku", ...)` | grunt | triage, scouts, summaries and task-authorized edits |
 | gemini digest | Google Gemini, free tier | `gemini-3.8-flash` | `skills/codex-bridge/scripts/gask.sh --tier digest "<prompt>"` | grunt | 1M-context bulk digest of one large blob (logs, transcripts) |
 | gemini cheap | Google Gemini, free tier | `gemini-flash-lite-latest` | `skills/codex-bridge/scripts/gask.sh --tier cheap "<prompt>"` | grunt | high-volume shallow triage |
 | gemini deep | Google Gemini, free tier | `gemini-3.1-pro-preview` | `skills/codex-bridge/scripts/gask.sh --tier deep "<prompt>"` | — | not free-tier usable as of 2026-11-09 (free-tier quota 0) |
