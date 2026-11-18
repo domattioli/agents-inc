@@ -402,6 +402,44 @@ def uninstall(paths: InstallPaths, receipt: InstallReceipt) -> set[Path]:
             try: empty.rmdir()
             except OSError: break
         return retained
+def _handles(args) -> int:
+    """Spec 048: list or retire the persisted delegate handles of one session. Never contacts a delegate."""
+    root = Path(args.cwd) / ".scratch"
+    agents = sorted(d for d in root.glob("agents-inc-*") if d.is_dir() and (not args.agent or d.name == f"agents-inc-{args.agent}"))
+    session = args.session
+    if not session:
+        dirs = [s for a in agents for s in a.iterdir() if s.is_dir()]
+        if not dirs:
+            print(f"agents-inc handles: no session directory under {root}/agents-inc-*/", file=sys.stderr); return 1
+        session = max(dirs, key=lambda d: d.stat().st_mtime).name
+    files = [a / session / "handles.json" for a in agents if (a / session / "handles.json").is_file()]
+    if not files:
+        print(f"agents-inc handles: no handles.json for session {session} under {root}", file=sys.stderr); return 1
+    stores = []
+    for f in files:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            handles = data["handles"]
+            if data.get("version") != 1 or not isinstance(handles, dict): raise ValueError("unrecognised layout")
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            print(f"agents-inc handles: cannot read {f}: {e}", file=sys.stderr); return 1
+        stores.append((f, data))
+    if args.verb == "retire":
+        if not args.id: print("agents-inc handles: retire needs a handle id", file=sys.stderr); return 1
+        for f, data in stores:
+            if args.id in data["handles"]:
+                data["handles"][args.id]["state"] = "retired"
+                tmp = f.with_name(f.name + ".tmp")
+                tmp.write_text(json.dumps(data, indent=2), encoding="utf-8"); os.replace(tmp, f)
+                print(f"handle {args.id} retired. Ask it for a handoff note first if you have not, then start a new Agent and paste the note into its prompt. Nothing was sent to the delegate.")
+                return 0
+        print(f"agents-inc handles: no handle {args.id} in session {session}", file=sys.stderr); return 1
+    rows = [h for _, data in stores for h in data["handles"].values() if isinstance(h, dict)]
+    if args.json:
+        print(json.dumps({"session": session, "handles": rows})); return 0
+    for h in rows:
+        print(f"{h.get('id')}  {h.get('provider')}/{h.get('nickname')}  {h.get('state')}  chars {h.get('charsSent')}/{h.get('ceiling')}  restarts {h.get('restarts')} ({h.get('lastRestartReason') or 'none'})  thread {h.get('thread')}")
+    return 0
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="agents-inc")
     subs = parser.add_subparsers(dest="command", required=True)
@@ -419,10 +457,12 @@ def main(argv=None):
     p = subs.add_parser("report", help="draft a bug report or feature request for agents-inc; --submit files it"); p.add_argument("kind", choices=("bug", "feature")); p.add_argument("--title", required=True); p.add_argument("--body", required=True, help="text, or - to read stdin"); p.add_argument("--submit", action="store_true")
     p = subs.add_parser("luna", help="the native agents-inc:luna subagent type (spec 028)"); p.add_argument("verb", choices=("status", "on", "off", "begin", "end")); p.add_argument("--json", action="store_true"); p.add_argument("--session"); p.add_argument("--agent"); p.add_argument("--cwd", default="."); p.add_argument("--outcome", choices=("done", "failed", "quota-paused", "aborted")); p.add_argument("--usage", help="JSON object of step usage sums (end)"); p.add_argument("--task", help="the Agent description (begin)"); p.add_argument("--all", action="store_true", help="status of every native type (the mod reads this once at session start)")
     p = subs.add_parser("native", help="guest agent types: native subagent types answered by a non-Claude model (spec 038)"); p.add_argument("verb", choices=("status", "on", "off", "allow", "begin", "end", "step")); p.add_argument("target", nargs="?", help="nickname or all (on|off); provider (allow)"); p.add_argument("--model"); p.add_argument("--provider"); p.add_argument("--workspace"); p.add_argument("--write-dir", action="append", help="a directory the free model may write (allow; repeatable; default .scratch)"); p.add_argument("--json", action="store_true"); p.add_argument("--session"); p.add_argument("--agent"); p.add_argument("--cwd", default="."); p.add_argument("--outcome", choices=("done", "failed", "quota-paused", "aborted")); p.add_argument("--usage"); p.add_argument("--task"); p.add_argument("--timeout", type=float, metavar="SECONDS", help="step: give up on the provider after SECONDS (exit 124)"); p.add_argument("--thread", metavar="FILE", help="step: accepted and ignored; stateless models resend the whole conversation")
+    p = subs.add_parser("handles", help="list or retire persisted delegate handles (spec 048)"); p.add_argument("verb", choices=("list", "retire")); p.add_argument("id", nargs="?"); p.add_argument("--agent"); p.add_argument("--session"); p.add_argument("--cwd", default="."); p.add_argument("--json", action="store_true")
     p = subs.add_parser("narrate", help="speak a short digest of each new Claude Code assistant message (prototype)"); p.add_argument("verb", choices=("on", "off", "status", "run")); p.add_argument("--summarizer", choices=("luna", "local"), default="luna"); p.add_argument("--voice", default="Samantha"); p.add_argument("--transcript"); p.add_argument("--decide-only", action="store_true"); p.add_argument("--once", action="store_true"); p.add_argument("--dry-run", action="store_true")
     subs.add_parser("rollback"); p = subs.add_parser("uninstall"); p.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv); paths = _paths()
     try:
+        if args.command == "handles": return _handles(args)
         if args.command == "mcp":
             from . import public_mcp
             return public_mcp.serve(Path(args.cwd), args.allow_writes, sys.stdin, sys.stdout)
