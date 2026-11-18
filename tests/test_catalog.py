@@ -63,3 +63,34 @@ class CatalogTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CatalogTrustTest(unittest.TestCase):
+    """Spec 047 FR-002, FR-003: client_version trust and pin status."""
+
+    def _cache(self, body):
+        import json
+        d = tempfile.mkdtemp()
+        p = Path(d) / "models_cache.json"
+        p.write_text(json.dumps(body))
+        return p
+
+    def test_client_version(self):
+        self.assertEqual(catalog.client_version(self._cache({"client_version": "0.170.0", "models": []})), "0.170.0")
+        self.assertIsNone(catalog.client_version(self._cache({"models": []})))
+        self.assertIsNone(catalog.client_version(Path(tempfile.mkdtemp()) / "none.json"))
+
+    def test_trust(self):
+        p = self._cache({"client_version": "0.170.0", "models": []})
+        self.assertEqual(catalog.trust(p, "0.170.0"), "match")
+        self.assertEqual(catalog.trust(p, "0.159.2"), "foreign")
+        self.assertEqual(catalog.trust(p, None), "unknown")
+        self.assertEqual(catalog.trust(self._cache({"models": []}), "0.170.0"), "unknown")
+
+    def test_pin_status(self):
+        models = catalog.load(FIXTURE)
+        self.assertEqual(catalog.pin_status("gpt-6.1-sol", models), "ok")
+        self.assertEqual(catalog.pin_status("gpt-6-sol", models), "drift")
+        self.assertEqual(catalog.pin_status("gpt-6.2-astra", models), "missing")  # absent
+        self.assertEqual(catalog.pin_status("gpt-7-astra", models), "missing")  # not API-supported
+        self.assertEqual(catalog.pin_status("gpt-9-terra", models), "missing")  # hidden

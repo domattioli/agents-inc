@@ -32,6 +32,11 @@ def _run(codex_path, prepare=None, mod=False):
             return (report, doctor.luna_line(paths)) if mod else report
 
 
+# Spec 047 L3: Codex installed (the receipt names an executable codex), session-start path (check_install's default,
+# no live probe) and no host CLI record: doctor says the catalog was not checked. Absent Codex gives no such line.
+UNCHECKED = "CODEX_CATALOG_UNCHECKED: catalog not checked, no host CLI record; run agents-inc doctor"
+
+
 class DoctorCodexOptionalTest(unittest.TestCase):
     def test_none_codex_is_warning_not_failure(self):
         r = _run(None)
@@ -47,7 +52,7 @@ class DoctorCodexOptionalTest(unittest.TestCase):
             c = Path(d) / "codex"; c.write_text("#!/bin/sh\n"); c.chmod(0o755)
             with mock.patch.object(doctor, "is_temp_or_shim_path", return_value=False):
                 r = _run(c)
-        self.assertTrue(r.ready); self.assertEqual(r.warnings, ())
+        self.assertTrue(r.ready); self.assertEqual(r.warnings, (UNCHECKED,))
 
     def test_non_executable_codex_is_failure(self):
         with tempfile.TemporaryDirectory() as d:
@@ -80,21 +85,21 @@ class DoctorLunaTypeTest(unittest.TestCase):
 
     def test_ready_has_no_luna_warning(self):
         r, line = self.run_luna()
-        self.assertTrue(r.ready); self.assertEqual(r.warnings, ()); self.assertEqual(line, "luna type: ready")
+        self.assertTrue(r.ready); self.assertEqual(r.warnings, (UNCHECKED,)); self.assertEqual(line, "luna type: ready")
 
     def test_off_is_a_warning_and_ready_stays_true(self):
         r, line = self.run_luna(switch="off")
-        self.assertTrue(r.ready); self.assertEqual(r.codes, ()); self.assertEqual(r.warnings, ("LUNA_OFF",))
+        self.assertTrue(r.ready); self.assertEqual(r.codes, ()); self.assertEqual(r.warnings, (UNCHECKED, "LUNA_OFF"))
         self.assertEqual(line, "luna type: off")
 
     def test_logged_out_codex_is_a_warning(self):
         r, line = self.run_luna(auth=False)
-        self.assertTrue(r.ready); self.assertEqual(r.warnings, ("LUNA_CODEX_NOT_READY",))
+        self.assertTrue(r.ready); self.assertEqual(r.warnings, (UNCHECKED, "LUNA_CODEX_NOT_READY"))
         self.assertEqual(line, "luna type: unavailable (LUNA_CODEX_NOT_READY)")
 
     def test_missing_catalog_entry_is_a_warning(self):
         r, line = self.run_luna(cache=False)
-        self.assertTrue(r.ready); self.assertEqual(r.warnings, ("LUNA_CATALOG_MISSING",))
+        self.assertTrue(r.ready); self.assertEqual(r.warnings, (UNCHECKED, "LUNA_CATALOG_MISSING"))
         self.assertEqual(line, "luna type: unavailable (LUNA_CATALOG_MISSING)")
 
     def test_missing_codex_adds_the_not_ready_warning_beside_the_existing_one(self):
@@ -109,4 +114,4 @@ class DoctorLunaTypeTest(unittest.TestCase):
 
     def test_as_dict_lists_the_luna_warning(self):
         r, _ = self.run_luna(switch="off")
-        self.assertEqual(r.as_dict()["warnings"], ["LUNA_OFF"])
+        self.assertEqual(r.as_dict()["warnings"], [UNCHECKED, "LUNA_OFF"])

@@ -130,10 +130,15 @@ class GateDenyTest(_Gate):
         self.assertEqual(result["hookSpecificOutput"]["hookEventName"], "PreToolUse")
         reason = self.reason(result)
         for needle in ("agents-inc agent gate", "general-purpose", "background: yes", ", ".join(FIRST_ALLOWED),
-                       "agents-inc dispatch --slots <json> --model <opus|sonnet|haiku|fable>",
-                       "Naming a model picks the rung, not the route.", "AGENTS_INC_AGENT_GATE=off claude",
-                       "agents-inc repair --agent-gate advisory"):
+                       "Respect this denial and continue independent authorized work."):
             with self.subTest(needle=needle): self.assertIn(needle, reason)
+        self.assertNotIn("agents-inc dispatch", reason)
+        self.assertNotIn("AGENTS_INC_AGENT_GATE", reason)
+
+    def test_deny_a_description_naming_the_wrong_guest_model(self):
+        result = self.run_hook(payload("agents-inc:luna", description="astra: count lines"))
+        self.assertEqual(self.decision(result), "deny")
+        self.assertIn("FR-002", self.reason(result))
 
     def test_deny_returns_before_claiming_an_inflight_entry(self):
         self.run_hook(payload("general-purpose"))
@@ -243,12 +248,12 @@ class GateCliTest(_Gate):
     def test_install_notice_text_names_unwire_env_bypass_and_settings_json(self):
         text = hook.gate_notice(self.paths)
         self.assertLessEqual(len(text.splitlines()), 8)
-        for needle in ("agents-inc unwire", "AGENTS_INC_AGENT_GATE=off", "settings.json", "agents-inc repair --agent-gate enforce"):
+        for needle in ("agents-inc unwire", "AGENTS_INC_AGENT_GATE=off", "settings.json", "agents-inc repair --agent-gate advisory|off|enforce"):
             with self.subTest(needle=needle): self.assertIn(needle, text)
 
     def test_install_notice_omits_advisory_warning_under_enforce(self):
         self.set_env("enforce")
-        self.assertNotIn("skip agents-inc routing", hook.gate_notice(self.paths))
+        self.assertNotIn("Advisory:", hook.gate_notice(self.paths))
 
     def test_cli_install_and_repair_accept_agent_gate_flag(self):
         for command in ("install", "repair"):

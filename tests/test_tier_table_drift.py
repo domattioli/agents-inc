@@ -137,24 +137,23 @@ class HandTableTest(unittest.TestCase):
         for row in rows:
             self.assertIn(row[0], RUNGS | {"—"}, row)
 
-    def test_roster_tier_cells_are_rung_names(self):
-        header, rows = first_table_after(SKILL.read_text(), "#### Step 1a: MODEL ROSTER")
-        col = header.index("tier")
-        for row in rows:
-            self.assertIn(row[col], RUNGS | {"—"}, row)
-
-    def test_roster_rows_in_config_carry_config_rung(self):
-        header, rows = first_table_after(SKILL.read_text(), "#### Step 1a: MODEL ROSTER")
-        col, cfg = header.index("tier"), models()
-        checked = 0
-        for row in rows:
-            nick, slug = row[0], row[2].strip("`")
-            model_id = nick if nick in cfg else slug if slug in cfg else None
-            if model_id is None or row[col] == "—":
+    # The hand-written MODEL ROSTER was removed on this branch; the generated table is the only per-id rung source.
+    def test_no_hand_roster_table_can_drift(self):
+        text = SKILL.read_text()
+        self.assertNotIn("MODEL ROSTER", text)
+        outside = text.split(BEGIN, 1)[0] + text.split(END, 1)[1]
+        cfg = models()
+        for line in outside.splitlines():
+            if not line.startswith("|"):
                 continue
-            checked += 1
-            self.assertEqual(row[col], cfg[model_id]["tier"], row)
-        self.assertGreaterEqual(checked, 10)
+            cells = [c.strip().strip("`") for c in line.strip().strip("|").split("|")]
+            self.assertFalse(any(c in cfg and "-" in c for c in cells), line)  # no hand row names a config model id
+
+    def test_generated_table_covers_every_config_rung(self):
+        text = SKILL.read_text()
+        block = text.split(BEGIN, 1)[1].split(END, 1)[0]
+        for model_id, spec in models().items():
+            self.assertRegex(block, rf"\| {spec['tier']} \|[^\n]*`{re.escape(model_id)}`", model_id)
 
 
 if __name__ == "__main__":

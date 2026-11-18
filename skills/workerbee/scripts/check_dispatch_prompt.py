@@ -59,8 +59,8 @@ KEYWORDS: dict[int, list[str]] = {
     7: ["no git commit", "repo-scoped", "commit/push authority"],
     8: ["classification", "confidential", "internal"],
     9: ["effort"],
-    10: ["second-opinion", "second opinion"],
-    11: ["plan contract"],
+    10: ["second-opinion", "second opinion", "second_opinion"],  # QUICKREF slot spelling SECOND_OPINION
+    11: ["plan contract", "plan_contract"],  # QUICKREF slot spelling PLAN_CONTRACT
     12: ["out of scope", "out-of-scope"],
     13: ["edit hygiene", "surgical"],
     14: ["lesson-candidate", "lesson candidate"],

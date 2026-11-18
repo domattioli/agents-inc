@@ -27,6 +27,15 @@ makes it read-only.
 Workers without seeing any credentials (D51). The installer does not manage the
 HTTP bridge or any daemon.
 
+### Choose a delegate
+
+Use the current host's native subagent tool when it offers the requested model
+and permits the task. The host handles approval. Claude Code's agent gate still
+applies, and the mod lists available guest types with `agents-inc native status`.
+In Codex, use agents-inc dispatch only for authorized Claude integration tests.
+See [native delegation](HOW-IT-WORKS.md#native-delegation) for verification and
+ledger details.
+
 ### Develop on a machine that runs the install
 
 Install from a release worktree, not from the checkout you edit:
@@ -125,8 +134,8 @@ and runs commands. The final answer is the same report you get without the mod.
 ## What this is
 
 - **Delegation system**
-  - **Purpose:** Gets several AI models to do work cheaply without trusting any model blindly.
-  - **Division of labor:** A capable model supervises while cheaper models handle narrow jobs such as reading a long document, extracting every date from files, or writing a first draft.
+  - **Purpose:** Gets several AI models to do work without trusting any model blindly.
+  - **Division of labor:** A Lead model supervises while Workers handle narrow jobs such as reading a long document, extracting every date from files, or writing a first draft.
   - **Core problem:** Deciding whether returned work is correct.
 
 ## The two pieces

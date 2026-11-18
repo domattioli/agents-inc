@@ -8,35 +8,20 @@ from .doctor import check_install, format_age
 from . import rules
 from .paths import InstallPaths
 
-# The rung is the model; the route is always `agents-inc dispatch` (D59, QUICKREF step 2). The earlier wording
-# ("keep this Agent call only if routing selects a Claude rung") approved every Agent call on a Claude-only
-# install, since sonnet and haiku are Claude rungs (token bench dry run, 2026-10-22).
-# D78 R3 (2026-11-11): a small edit (role_defaults.SMALL_TASK_CALLS tool calls or fewer) may go to a native workhorse
-# subagent; the supervisor then runs one check itself. Read-only scouts are unchanged. gate_deny is not changed:
-# enforce mode still denies that native edit route (D61).
-# D80: the edit clause renders from the `roles` settings on every call; NUDGE and ROUTE_RULE keep the default text.
-def nudge_text(roles: dict | None = None) -> str:
-    edit = role_defaults.native_edit(roles)
-    allowed = (f"a read-only foreground scout (Explore, Plan) or for {edit}; after that edit, run one check yourself, "
-               "because no harness ran gates." if edit else "a read-only foreground scout (Explore, Plan).")
-    return ("agents-inc reminder: this Agent call bypasses agents-inc routing, the ledger and verification. Use Agent "
-            f"only for {allowed} Any other delegation, including to a Claude rung "
-            "such as sonnet or haiku, goes through `agents-inc dispatch --slots <json> --model <rung>`: naming a model "
-            "picks the rung, not the route.")
+def nudge_text(roles: dict | None = None, *, enforce: bool = False) -> str:
+    if enforce:
+        return "agents-inc agent gate is enforced. Verify permitted delegate results yourself."
+    return f"agents-inc reminder: {role_defaults.gate_line(roles)} Use Claude Code for any required approvals."
 
-def route_rule(roles: dict | None = None) -> str:
-    edit = role_defaults.native_edit(roles)
-    allowed = (f"read-only foreground scouts (Explore, Plan) and for {edit}, then run one check yourself." if edit
-               else "read-only foreground scouts (Explore, Plan); every edit goes through `agents-inc dispatch`.")
-    return ("Naming a model (opus, sonnet, haiku) picks the rung, not the route: delegate through "
-            f"`agents-inc dispatch`. Use the Agent tool only for {allowed}")
+def route_rule(roles: dict | None = None, *, enforce: bool = False) -> str:
+    return f"{role_defaults.ROUTE_LINE} {nudge_text(roles, enforce=enforce)}"
 
 NUDGE = nudge_text()
 ROUTE_RULE = route_rule()
 # Spec 015 FR-002: a Codex persona name at the start of a Claude subagent description mislabels the model.
 PERSONA_RE = re.compile(r"(?i)\A(?:astra|sol|terra|luna)(?=\s|:|/|\Z)")
-PERSONA_DENY_REASON = ("FR-002: Agent/Task descriptions cannot begin with a Codex persona name. For Codex execution, "
-                       "dispatch through agents-inc; Agent/Task creates Claude subagents. If this names a product, "
+PERSONA_DENY_REASON = ("FR-002: Agent/Task descriptions must identify the actual delegate. For Codex execution, "
+                       "use the matching registered guest type or a separately authorized route. If this names a product, "
                        "repository, person, or supervised worker, put the actual Claude rung first and mention that "
                        "name later. Renaming does not change the execution model.")
 AGENT_TOOLS = {"Agent", "Task"}
@@ -52,10 +37,8 @@ GATE_ALLOW = frozenset({"Explore", "Plan", "claude-code-guide", "statusline-setu
 # reads (agents_inc/native_names.py), plus the relay type; no hand-kept literal.
 NATIVE_TYPES = native_names.guest_types() | {native_names.RELAY_TYPE}
 GATE_DENY_REASON = ("agents-inc agent gate: this Agent/Task call is blocked (subagent_type: {subagent}; background: {background}). "
-                    "Agent/Task spawns Claude subagents outside agents-inc routing, ledger, and verification. Allowed here: {allowed} "
-                    "(foreground only). For every other delegation run: agents-inc dispatch --slots <json> --model <opus|sonnet|haiku|fable>. "
-                    "Naming a model picks the rung, not the route. Per-session bypass: start the session with "
-                    "AGENTS_INC_AGENT_GATE=off claude. Switch to advisory: agents-inc repair --agent-gate advisory.")
+                    "Enforce mode allows {allowed} in the foreground and registered agents-inc types. "
+                    "Respect this denial and continue independent authorized work.")
 FAN_OUT = "agents-inc: fan-out"
 INFLIGHT_TTL_S = 7200  # a spawn that never reports done stops warning after 2 h
 DISPATCH_RE = re.compile(r"agents-inc\s+dispatch|\b(?:gask|mask|oask|agent)\.sh\b|\bcodex\s+exec\b")
@@ -66,13 +49,15 @@ def session_start(paths: InstallPaths, host: str) -> str:
     report = check_install(paths)
     status = "READY" if report.ready else (" ".join(report.codes) or "NOT READY (not tested now: " + ", ".join(report.untested) + ")")
     skill = paths.current / "skills/workerbee/QUICKREF.md"
-    # D78 R4: on Claude the PreToolUse hook injects QUICKREF on the first Agent, Task, DelegateAgent or Bash dispatch
-    # (D53), so the read instruction stays only for the route it does not cover (a direct mcp__agents-inc__run call).
-    # Codex has no PreToolUse hook, so its session keeps the read instruction.
-    read = (f"the first Agent, Task or Bash dispatch loads the quick reference; read {skill} yourself only before a "
+    # Native Agent calls need a short reminder. Only governed dispatch gets the full reference.
+    read = (f"the first Bash dispatch or DelegateAgent call loads the quick reference; read {skill} yourself only before a "
             "direct mcp__agents-inc__run call" if host == "claude" else f"read {skill} before the first dispatch")
-    text = (f"agents-inc is installed (doctor: {status}). Every delegation in this session routes through agents-inc; "
-            f"{read}. {route_rule(role_defaults.load(paths.settings))} Launcher: {paths.launcher}.")
+    routing = (route_rule(role_defaults.load(paths.settings), enforce=agent_gate_mode(paths)[0] == "enforce")
+               if host == "claude" else role_defaults.host_route(host))
+    authority = (" Respect host denials. Continue independent work if a delegate is unavailable and report any unmet review. "
+                 "No paid API fallback." if host == "codex" else "")
+    text = (f"agents-inc is installed (doctor: {status}). {routing}{authority} "
+            f"Before using agents-inc, follow this guidance: {read}. Launcher: {paths.launcher}.")
     if not report.ready and report.codes: text += " Tell the operator doctor is not READY and suggest `agents-inc repair --source <agents-inc checkout>`."
     elif not report.ready:  # FR-018: nothing failed, but a required path was not tested now
         text += (" Tell the operator doctor could not test " + ", ".join(report.untested) + ", so it did not print READY; "
@@ -83,13 +68,17 @@ def session_start(paths: InstallPaths, host: str) -> str:
     for warning in report.warnings:
         # An install made --without-codex reports WB_CLI_NOT_FOUND as a warning; say what it means so a session
         # does not read "CLI not found" as "dispatch is broken" and avoid it.
-        text += (" Codex is not installed (WB_CLI_NOT_FOUND): Codex rungs are unavailable; Claude rungs dispatch normally."
+        text += (" The Codex CLI is missing (WB_CLI_NOT_FOUND). This affects the CLI route; check native availability in the host."
                  if warning == "WB_CLI_NOT_FOUND" else f" WARNING: {warning}.")
+    if host == "claude" and "WB_CLI_NOT_FOUND" not in report.warnings:
+        text += (" Codex rungs astra, sol, terra and luna run through the DelegateAgent MCP tool (deferred: load it with"
+                 " ToolSearch \"DelegateAgent\"), not as agent types; it is read-only (no file writes, no network, no"
+                 " `agents-inc dispatch`), so use `agents-inc dispatch` for Codex write work.")
     if "INSTALL_STALE" in report.warnings:
         text += (" INSTALL_STALE means the installed bundle differs from the source checkout (after a clean git install:"
                  " HEAD moved to a commit with different bundle files; uncommitted edits do not count), so launcher and docs may"
                  " disagree. Run `agents-inc repair --source <agents-inc checkout>`.")
-    if "WB_SANDBOX_EXCLUDE_MISSING" in report.warnings:
+    if host == "claude" and "WB_SANDBOX_EXCLUDE_MISSING" in report.warnings:
         text += (' WB_SANDBOX_EXCLUDE_MISSING: a sandboxed Bash cannot start a dispatch. Ask the operator once, before the'
                  ' first dispatch, to run `agents-inc repair --yes`, which adds "agents-inc dispatch *" and the other narrow entries to'
                  ' sandbox.excludedCommands in ~/.claude/settings.json.')
@@ -115,7 +104,7 @@ def _nudge_text(paths: InstallPaths, payload: dict) -> str:
     marker = paths.state / "nudged" / _session(payload)
     if marker.exists(): return ""
     marker.parent.mkdir(parents=True, exist_ok=True); marker.touch()
-    return nudge_text(role_defaults.load(paths.settings))
+    return nudge_text(role_defaults.load(paths.settings), enforce=agent_gate_mode(paths)[0] == "enforce")
 
 def _is_dispatch(payload: dict) -> bool:
     tool = str(payload.get("tool_name") or "")
@@ -478,13 +467,14 @@ def _is_native(tool_input: object) -> bool:
     return isinstance(subagent, str) and subagent in NATIVE_TYPES
 
 def persona_deny(payload: object) -> str:
-    """The only blocking path. Anything unexpected fails open (empty string)."""
+    """Prevent a description from labeling a Claude or guest run with the wrong Codex alias."""
     try:
         if not isinstance(payload, dict) or payload.get("tool_name") not in AGENT_TOOLS: return ""
         tool_input = _tool_input(payload)
-        if _is_native(tool_input): return ""
         description = tool_input.get("description")
-        if not isinstance(description, str) or not PERSONA_RE.match(description): return ""
+        persona = PERSONA_RE.match(description) if isinstance(description, str) else None
+        if persona is None: return ""
+        if tool_input.get("subagent_type") in (f"agents-inc:{persona[0].lower()}", native_names.RELAY_TYPE): return ""
         reason = f"{PERSONA_DENY_REASON} {rules.one_line('hook-persona', description)}"
         return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                   "permissionDecisionReason": reason}})
@@ -580,11 +570,10 @@ def gate_notice(paths: InstallPaths) -> str:
              "(Agent|Task, dispatch-shaped Bash, DelegateAgent); PostToolUse agent-done; UserPromptSubmit at_route; "
              'sandbox.excludedCommands "agents-inc dispatch|run|repair|install *" (these run outside the Bash sandbox; each delegate still gets '
              "its own sandbox-exec, #94).",
-             f"agent gate: {mode} ({source}). enforce blocks Agent/Task calls except foreground "
-             f"{', '.join(sorted(GATE_ALLOW))}."]
+             f"agent gate: {mode} ({source}). enforce allows foreground "
+             f"{', '.join(sorted(GATE_ALLOW))} and registered agents-inc types."]
     if mode == "advisory":
-        lines.append("Advisory: Agent/Task delegations skip agents-inc routing, ledger and verification; "
-                     "`agents-inc repair --agent-gate enforce` blocks them.")
+        lines.append("Advisory: Claude Code handles Agent/Task permissions. The supervisor verifies the result.")
     lines += [f"Disable for one session: {AGENT_GATE_ENV}=off claude",
               "Switch mode: agents-inc repair --agent-gate advisory|off|enforce (stored in " + str(paths.settings) + ")",
               "Remove the hooks: agents-inc unwire"]
@@ -656,9 +645,16 @@ def run(paths: InstallPaths, event: str, host: str | None, stdin=sys.stdin) -> i
             payload = _payload(stdin)
             out = compound_deny(payload)
             if not out and _is_dispatch(payload):  # the Bash matcher sees every command; only dispatch-shaped calls get context
-                nudge = _nudge_text(paths, payload) if payload.get("tool_name") in AGENT_TOOLS else ""  # NUDGE wording is Agent-only
-                out = persona_deny(payload) or gate_deny(paths, payload) or _context(nudge, _quickref_text(paths, payload), duplicate_check(paths, payload))
+                out = persona_deny(payload) or gate_deny(paths, payload)
+                if not out:
+                    is_agent = payload.get("tool_name") in AGENT_TOOLS
+                    guidance = _nudge_text(paths, payload) if is_agent else _quickref_text(paths, payload)
+                    out = _context(guidance, duplicate_check(paths, payload))
         elif event == "agent-done": agent_done(paths, _payload(stdin))
+        elif event == "native-observed" and host == "codex":
+            from .. import host_ledger
+            host_ledger.record_codex_subagent(paths.state, _payload(stdin))
+            out = "{}"
         if out: print(out)
     except Exception as exc:  # a broken hook must never break the host session
         print(f"agents-inc hook {event}: {exc}", file=sys.stderr)

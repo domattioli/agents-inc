@@ -14,6 +14,7 @@ export const RUNGS: Record<string, string> = {
   'gpt-5.6-terra': 'workhorse',
   'gpt-5.6-sol': 'orchestrator',
   'gpt-6-astra': 'executive',
+  'gpt-6.2-astra': 'executive',
   'gemini-2.5-flash': 'grunt',
   'gemini-flash-lite': 'grunt',
   'gemini-flash-lite-latest': 'grunt',
@@ -37,6 +38,7 @@ export const RUNGS: Record<string, string> = {
   'qwen3:8b': 'grunt',
   'gpt-6-luna': 'grunt',
   'gpt-6.1-sol': 'orchestrator',
+  'gpt-6.2-sol': 'orchestrator',
   'gpt-6.1-terra': 'workhorse',
   // models.json nicknames
   'gemini-flash': 'grunt',

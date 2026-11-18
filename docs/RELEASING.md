@@ -68,7 +68,9 @@ Before cleaning the local `.scratch` directory, inspect unpushed commits with `g
 4. On `main`, create the tag: `git tag -a v0.6.4 -m "agents-inc 0.6.4"`.
 5. Push the tag: `git push origin v0.6.4`.
 6. Watch the `release` workflow in the Actions tab. The `publish` job waits for the `pypi` environment approval if a reviewer was set.
-7. Confirm that https://pypi.org/project/agents-inc/0.6.4/ exists and that the GitHub release lists the wheel and the sdist.
+7. Confirm that https://pypi.org/project/agents-inc/0.6.4/ exists and that the GitHub release lists the wheel and the sdist. The release notes must open with the tagline as one italic line followed by a blank line; the workflow adds it. If you write notes by hand, paste this first:
+
+   `*Run your AI subscriptions like a small company you direct: a Lead splits each request among Workers, a script checks every result, and a reviewer must accept it.*`
 8. Zenodo. The workflow's `zenodo-concept` job runs `tools/zenodo_deposit.py`: it publishes the built wheel and sdist as a new version of the newest record under the concept, with metadata from `.zenodo.json` at the tag, then `tools/check_zenodo_concept.py` confirms the record. It needs the repository secret `ZENODO_TOKEN` (a Zenodo personal access token with `deposit:write` and `deposit:actions`; Zenodo account settings, Applications). Without the secret the job goes red and the deposit falls back to hand: from a DomI checkout, `python3 skills/zenodo-publish/scripts/zenodo_publish.py --new-version-of <latest record id> --draft`, then review and publish the draft, then rerun the job with `gh run rerun <id> --failed`. Description edits made after the tag happen in the Zenodo editor; the next release carries them in `.zenodo.json`.
 9. Confirm that the `README.md` DOI badge still shows the concept DOI `10.5281/zenodo.22670100`. Version DOIs never go in the README.
 

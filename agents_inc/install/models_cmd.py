@@ -13,14 +13,34 @@ MODELS = AGENTS_DIR / "models.json"
 ORDER = ("luna", "terra", "sol", "astra")
 
 
-def listing(models: list[dict] | None = None, aliases: dict[str, str] | None = None) -> list[str]:
+def _trust() -> tuple[str, str | None, str | None]:
+    """Spec 047 FR-002: (trust, cache client_version, installed codex version)."""
+    from . import host_cli
+    installed = host_cli.installed_version("codex")
+    return catalog.trust(catalog.cache_path(), installed), catalog.client_version(), installed
+
+
+def listing(models: list[dict] | None = None, aliases: dict[str, str] | None = None,
+            trust: tuple[str, str | None, str | None] | None = None) -> list[str]:
+    """Spec 047 (D52.1): verdicts (ok, DRIFT, NOT-IN-CATALOG) only from a catalog matching the installed codex and
+    holding a readable model list; a well-formed empty list means every pin is NOT-IN-CATALOG. Otherwise each pin is
+    `unchecked` and a note line says why."""
     aliases = MODEL_ALIASES if aliases is None else aliases
-    models = catalog.load() if models is None else models
+    models = catalog.load() if models is None else models  # None: missing or unreadable
+    state = trust[0] if trust else None
+    checked = state == "match" and models is not None
     lines = []
     for alias in sorted(aliases, key=lambda a: ORDER.index(a) if a in ORDER else len(ORDER)):
         pin = aliases[alias]
-        top = catalog.newest(catalog.family(pin), models)
-        lines.append(f"{alias} pinned {pin} newest {top or 'unknown'} {'DRIFT' if catalog.drift(pin, models) else 'ok'}")
+        top = catalog.newest(catalog.family(pin), models or [])
+        label = {"drift": "DRIFT", "ok": "ok"}.get(catalog.pin_status(pin, models), "NOT-IN-CATALOG") if checked else "unchecked"
+        lines.append(f"{alias} pinned {pin} newest {top or 'unknown'} {label}")
+    if state == "foreign":
+        lines.append(f"note: catalog written by codex {trust[1]}, installed {trust[2]}; not checked. Update the CLI first, then `codex debug models` refreshes the catalog")
+    elif state == "unknown":
+        lines.append("note: catalog version unknown; not checked")
+    elif state == "match" and models is None:
+        lines.append("note: no readable model list in models_cache.json; not checked")
     return lines
 
 
@@ -40,7 +60,8 @@ def _refuse(message: str) -> int:
 
 def bump(alias: str | None, slug: str | None, routing: Path = ROUTING, models_json: Path = MODELS,
          models: list[dict] | None = None, aliases: dict[str, str] | None = None,
-         settings: Path | None = None, unpin: bool = False) -> int:
+         settings: Path | None = None, unpin: bool = False,
+         trust: tuple[str, str | None, str | None] | None = None) -> int:
     """An explicit slug also records a manual pin (settings "pinned") so model_sync never auto-promotes it;
     unpin=True only removes the pin. A bump to the catalog's newest (no slug) does not pin."""
     from agents_inc import model_sync
@@ -60,6 +81,10 @@ def bump(alias: str | None, slug: str | None, routing: Path = ROUTING, models_js
             model_sync.check_settings_writable(settings)  # refuse before touching routing/models
         except ValueError as exc:
             return _refuse(str(exc))
+    if not trust or trust[0] != "match":  # spec 047 D52.1: only a catalog matching the installed codex approves a pin
+        if trust and trust[0] == "foreign":
+            return _refuse(f"catalog written by codex {trust[1]}, installed {trust[2]}; update the CLI first, then `codex debug models`")
+        return _refuse("catalog version unknown or installed codex version not known; pin not changed (unpin still works)")
     models = catalog.load() if models is None else models
     pin = aliases[alias]
     target = slug or catalog.drift(pin, models)
@@ -152,7 +177,8 @@ def run(verb: str | None, alias: str | None = None, slug: str | None = None, unp
     if verb == "chain":
         return chain([a for a in (alias, slug, *(extra or [])) if a], clear=clear)
     if verb == "bump":
-        return bump(alias, slug, unpin=unpin)
-    for line in listing():
+        return bump(alias, slug, unpin=unpin, trust=None if unpin else _trust())
+    lines = listing(trust=_trust())
+    for line in lines:
         print(line)
-    return 0
+    return 1 if any(line.endswith(" NOT-IN-CATALOG") for line in lines) else 0

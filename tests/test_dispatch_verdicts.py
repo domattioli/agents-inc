@@ -414,5 +414,67 @@ class ClaimCheckTest(VerdictBase):
         self.assertIn("check_claims.py", dispatch.PINNED_SCRIPTS)
 
 
+class NoChangesTest(VerdictBase):
+    """Spec 045 FR-001 (#202): a write run that changed nothing in scope is never green, even with passing gates."""
+    SCOPE = "agents_inc/x.py"
+
+    def _tracked(self):
+        (self.repo / "agents_inc").mkdir()
+        (self.repo / "agents_inc" / "x.py").write_text("x = 1\n", encoding="utf-8")
+        for cmd in (["git", "add", "-A"], ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"]):
+            subprocess.run(cmd, cwd=self.repo, check=True, capture_output=True)
+
+    def test_outcome_rank(self):
+        o = dispatch._outcome
+        self.assertEqual(o({}, "COMPLIANT", 0, 0, None, None, True, no_changes=True), ("unverified", "no-changes"))
+        self.assertEqual(o({}, "COMPLIANT", 0, 0, None, "gate-failed", True, no_changes=True), ("red", "gate-failed"))
+        self.assertEqual(o({}, "COMPLIANT", 0, 0, None, None, True, stopped=True, no_changes=True),
+                         ("unverified", "delegate-stopped"))
+        self.assertEqual(o({}, "COMPLIANT", 0, 0, None, None, True, broker_skipped=True, no_changes=True),
+                         ("unverified", "gates-skipped-broker"))
+        self.assertEqual(o({}, "COMPLIANT", 0, 0, None, "gate-not-runnable", True, no_changes=True),
+                         ("unverified", "gate-not-runnable"))
+        self.assertEqual(o({}, "COMPLIANT", 0, 0, None, None, True), ("green", None))
+
+    def test_blocked_report_no_writes_passing_gate_is_not_green(self):
+        report = "BLOCKED: the sandbox denied the policy files.\n" + GOOD_REPORT
+        code, out, spec = self._go([{"argv": PASS}], report=report, FILES_IN_SCOPE=self.SCOPE)
+        self.assertEqual((code, spec["outcome"], spec["reason"]), (4, "unverified", "no-changes"), out)
+        self.assertIn("reason=no-changes", out)
+        self.assertIn("report-says-blocked", (spec.get("claims") or {}).get("warnings", []))
+
+    def test_identical_bytes_rewrite_is_no_changes(self):
+        self._tracked()
+        code, out, spec = self._go([{"argv": PASS}], FILES_IN_SCOPE=self.SCOPE,
+                                   during=lambda cwd: (cwd / self.SCOPE).write_text("x = 1\n", encoding="utf-8"))
+        self.assertEqual((code, spec["reason"]), (4, "no-changes"), out)
+
+    def test_ignored_scratch_deliverable_is_green(self):
+        (self.repo / ".gitignore").write_text(".scratch/\n", encoding="utf-8")
+        for cmd in (["git", "add", "-A"], ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "i"]):
+            subprocess.run(cmd, cwd=self.repo, check=True, capture_output=True)
+        (self.repo / ".scratch" / "t").mkdir(parents=True)
+        (self.repo / ".scratch" / "t" / "old.md").write_text("a\n", encoding="utf-8")
+
+        def during(cwd):
+            (cwd / ".scratch" / "t" / "new.md").write_text("n\n", encoding="utf-8")
+        code, out, spec = self._go([{"argv": PASS}], FILES_IN_SCOPE=".scratch/t/", during=during)
+        self.assertEqual((code, spec["outcome"]), (0, "green"), out)
+
+    def test_ignored_scratch_file_modified_is_green(self):
+        (self.repo / ".gitignore").write_text(".scratch/\n", encoding="utf-8")
+        for cmd in (["git", "add", "-A"], ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "i"]):
+            subprocess.run(cmd, cwd=self.repo, check=True, capture_output=True)
+        (self.repo / ".scratch" / "t").mkdir(parents=True)
+        (self.repo / ".scratch" / "t" / "old.md").write_text("a\n", encoding="utf-8")
+        code, out, spec = self._go([{"argv": PASS}], FILES_IN_SCOPE=".scratch/t/old.md",
+                                   during=lambda cwd: (cwd / ".scratch/t/old.md").write_text("b\n", encoding="utf-8"))
+        self.assertEqual((code, spec["outcome"]), (0, "green"), out)
+
+    def test_read_task_without_changes_is_unchanged(self):
+        code, out, spec = self._go([{"argv": PASS}], FILES_IN_SCOPE=self.SCOPE, TASK_ACCESS="read")
+        self.assertNotEqual(spec["reason"], "no-changes", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -104,7 +104,13 @@ def handle_tools_list(req_id):
             "tools": [
                 {
                     "name": "DelegateAgent",
-                    "description": "Delegate a task to an agent (Codex models: %s)" % ", ".join(models),
+                    "description": ("Delegate a task to an agent (Codex models: %s). Runs in the Codex read-only sandbox: "
+                                    "reads files and runs read-only commands under cwd, but writes no files, has no network "
+                                    "and cannot run `agents-inc dispatch` or nested codex; ask for file content in the reply, "
+                                    "or use `agents-inc dispatch` for write work. Time limit: %ds by default and for "
+                                    "low/medium, %ds high, %ds xhigh; after a timeout, resume with conversation_id."
+                                    % (", ".join(models), DEFAULT_TIMEOUT, TIMEOUT_BY_EFFORT["high"],
+                                       TIMEOUT_BY_EFFORT["xhigh"])),
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -136,6 +142,38 @@ def handle_tools_list(req_id):
     }
 
 AUTH_RE = re.compile(r"refresh|401|unauthorized|login|token", re.IGNORECASE)
+# Lines from MCP servers inside Codex (rmcp client, e.g. a GitHub server's AuthRequired) are not Codex login failures.
+# Anchored to the real noise shapes (spec 047 G5): a Codex auth line that only mentions "mcp" in a URL keeps its hint.
+MCP_NOISE_RE = re.compile(r"\brmcp::|AuthRequired\(")
+TIMEOUT_EXIT = 124
+# Spec 047 FR-007: the provider refused the model for this client. The "Model metadata ... not found" warning alone is
+# not a rejection: Codex prints it before runs that then succeed on fallback metadata.
+MODEL_REJECT_RE = re.compile(r"model_not_found|is not supported when using Codex")
+MODEL_REJECT_HINT = (". Model not supported by this Codex client; update the CLI (npm install -g @openai/codex@latest) "
+                     "or change the pin (agents-inc models)")
+
+
+def _codex_model_rejected(returncode, stderr):
+    return returncode not in (0, TIMEOUT_EXIT) and bool(MODEL_REJECT_RE.search(stderr or ""))
+
+
+def _codex_auth_failed(stderr):
+    return any(AUTH_RE.search(ln) and not MCP_NOISE_RE.search(ln) for ln in (stderr or "").splitlines()
+               if not ln.startswith("CONVERSATION_ID="))
+
+
+def _thread_id(stderr):
+    for ln in (stderr or "").splitlines():
+        if ln.startswith("CONVERSATION_ID="):
+            return ln.split("=", 1)[1].strip()
+    return ""
+
+
+def _timeout_msg(limit, effort, thread_id=""):
+    msg = "Error: Codex timed out after %ds (effort %s)" % (limit, effort or "default")
+    if thread_id:
+        return msg + "; resume with conversation_id %s" % thread_id
+    return msg + "; the conversation can be resumed with conversation_id if its thread id is known"
 
 
 def _last_line(text):
@@ -197,12 +235,14 @@ def handle_tools_call(req_id, params):
             stdin=subprocess.DEVNULL
         )
     except subprocess.TimeoutExpired:
-        return _result(req_id, "Error: timeout after %ds (effort %s)" % (limit, effort or "default"), True)
+        return _result(req_id, _timeout_msg(limit, effort), True)
     except Exception as e:
         return _result(req_id, f"Error: {str(e)}", True)
 
     stderr = result.stderr or ""
     last = _last_line(stderr)
+    if result.returncode == TIMEOUT_EXIT:
+        return _result(req_id, _timeout_msg(limit, effort, _thread_id(stderr)), True)
     if result.returncode != 0 or not (result.stdout or "").strip():
         if result.returncode != 0:
             msg = "Error: codex exited %d" % result.returncode
@@ -210,7 +250,9 @@ def handle_tools_call(req_id, params):
             msg = "Error: empty result from codex (exit 0)"
         if last:
             msg += ": " + last
-        if AUTH_RE.search(stderr):
+        if _codex_model_rejected(result.returncode, stderr):
+            msg += MODEL_REJECT_HINT
+        elif _codex_auth_failed(stderr):
             msg += ". Codex login failed; run `codex login` in a terminal"
         return _result(req_id, msg, True)
 

@@ -25,6 +25,17 @@ def _lint(text):
         return subprocess.run([sys.executable, str(SCRIPT), str(prompt)], capture_output=True, text=True)
 
 
+class SlotSpellingLintTest(unittest.TestCase):
+    def test_slot_name_spelling_with_na_is_compliant(self):
+        text = (COMPLIANT_PROMPT
+                .replace("SECOND-OPINION JUSTIFICATION: not applicable -- first pass.", "SECOND_OPINION: N/A (first pass)")
+                .replace("PLAN CONTRACT: not applicable -- deliverable is not a plan.", "PLAN_CONTRACT: N/A (not a plan)"))
+        self.assertNotIn("SECOND-OPINION", text)
+        self.assertNotIn("PLAN CONTRACT", text)
+        r = _lint(text)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
 class FanOutLintTest(unittest.TestCase):
     def test_trailing_prose_is_compliant(self):
         r = _lint(COMPLIANT_PROMPT + "FAN_OUT: width 0, total 0, depth 0. Spawn no sub-agents.\n")

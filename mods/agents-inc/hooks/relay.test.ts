@@ -105,6 +105,8 @@ test('a free slug with slots outside the session cwd is still refused', async ($
   await start($, on)
   const out = await $.tool.call({ tool: TOOL, model: 'codestral-latest', slots: '/etc/passwd', agentId: 'a1' })
   expect(out.deny).toContain('slots must be')
+  expect(out.deny).toContain('then call again. refused: slots-outside-repo (')  // spec 045 FR-008: D87 shape after the old prefix
+  expect(out.deny).toContain('value: /etc/passwd fix: write it to ')
 })
 
 test('a slots path outside the session cwd is refused', async ($, on) => {

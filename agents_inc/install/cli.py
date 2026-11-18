@@ -188,6 +188,19 @@ def uninstall_mod(paths: InstallPaths) -> list:
         if done is not None and done.returncode != 0: notices.append(f"warning: `claude {' '.join(argv)}` failed ({done.returncode})")
     return notices
 
+def _repair(args):
+    """Spec 047 B3: after a successful install, print host CLI and pin warnings (read-only; pins never edited).
+    A failed install prints its own error alone."""
+    rc = install(args)
+    if rc == 0:
+        from . import doctor
+        try:
+            for line in doctor.cli_warnings(_paths(), live=True): print(f"WARNING: {line}")
+        except Exception as exc:  # a check must never turn a good repair into a failure
+            print(f"WARNING: host CLI check skipped: {exc}")
+    return rc
+
+
 def install(args):
     """Install from --source, or from the installed package's own data when --source is omitted.
     A failure is loud (FAIL line, exit 1) and leaves a marker that doctor reports (#155)."""
@@ -400,7 +413,7 @@ def main(argv=None):
     p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model"); p.add_argument("--probe", action="store_true", help="also run the tool-use probe for each free guest agent model (one free request each)")
     p = subs.add_parser("repair"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES); p.add_argument("--role", action="append", metavar="KEY=VALUE", help="store one roles item in the agents-inc settings file (VALUE default removes it); `agents-inc doctor` shows the effective values (D80)");p.add_argument("--legacy-routes", action=argparse.BooleanOptionalAction, default=None, help="keep the relay agent, mcp__agents-inc__run and @alias routes (off by default; the choice persists across repair)")
     p = subs.add_parser("unwire"); p.add_argument("--host", choices=("claude",), default="claude")
-    p = subs.add_parser("hook"); p.add_argument("event", choices=("session-start", "agent-nudge", "agent-done")); p.add_argument("--host", choices=("claude", "codex", "gemini"))
+    p = subs.add_parser("hook"); p.add_argument("event", choices=("session-start", "agent-nudge", "agent-done", "native-observed")); p.add_argument("--host", choices=("claude", "codex", "gemini"))
     p = subs.add_parser("ledger", add_help=False); p.add_argument("rest", nargs=argparse.REMAINDER)
     p = subs.add_parser("models"); p.add_argument("verb", nargs="?", choices=("bump", "chain", "probe")); p.add_argument("alias", nargs="?"); p.add_argument("slug", nargs="?"); p.add_argument("extra", nargs="*"); p.add_argument("--unpin", action="store_true"); p.add_argument("--clear", action="store_true")
     p = subs.add_parser("report", help="draft a bug report or feature request for agents-inc; --submit files it"); p.add_argument("kind", choices=("bug", "feature")); p.add_argument("--title", required=True); p.add_argument("--body", required=True, help="text, or - to read stdin"); p.add_argument("--submit", action="store_true")
@@ -471,7 +484,7 @@ def main(argv=None):
             if args.probe:
                 from . import native_probe
                 native_probe.run(paths, None)
-            report = check_install(paths, args.live_model)
+            report = check_install(paths, args.live_model, live_versions=True)  # spec 047: CLI versions, 24 h record
             if args.json:
                 print(json.dumps(report.as_dict()))
             else:
@@ -533,7 +546,7 @@ def main(argv=None):
             for line in uninstall_mod(paths): print(line)
             if retained: print("WB_CONFIG_CONFLICT: retained modified artifacts", file=sys.stderr); [print(p, file=sys.stderr) for p in sorted(retained)]; return 1
             return 0
-        if args.command == "repair": return install(args)
+        if args.command == "repair": return _repair(args)
         if args.command == "rollback":
             if not receipt.prior_release: raise RuntimeError("no predecessor release")
             if Path(receipt.prior_release).name == receipt.release_hash:

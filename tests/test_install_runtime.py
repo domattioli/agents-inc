@@ -17,8 +17,8 @@ class RuntimeTest(unittest.TestCase):
         tiers = json.loads((Path(__file__).parents[1] / "agents_inc/routing.json").read_text())["tiers"]
         persona_tier = {"astra": "executive", "sol": "orchestrator", "terra": "workhorse", "luna": "grunt"}
         self.assertEqual(MODEL_ALIASES, {alias: tiers[tier]["codex"] for alias, tier in persona_tier.items()})
-        argv = build_codex_argv(Path("/opt/Codex CLI/codex"), "astra", "medium", Path("/work here"), {"gpt-6-astra": ["medium"]})
-        self.assertEqual(argv[:4], ["/opt/Codex CLI/codex", "exec", "-m", "gpt-6-astra"])
+        argv = build_codex_argv(Path("/opt/Codex CLI/codex"), "astra", "medium", Path("/work here"), {"gpt-6.2-astra": ["medium"]})
+        self.assertEqual(argv[:4], ["/opt/Codex CLI/codex", "exec", "-m", "gpt-6.2-astra"])
         self.assertIn("read-only", argv)
         self.assertIn('shell_environment_policy.inherit="none"', argv)
         self.assertIn('web_search="disabled"', argv)
@@ -101,7 +101,7 @@ class RuntimeTest(unittest.TestCase):
                         stdin_path = tf.name
                     try:
                         with open(stdin_path) as stdin_file:
-                            ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6-astra": ["medium"]})
+                            ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6.2-astra": ["medium"]})
                     finally:
                         os.unlink(stdin_path)
 
@@ -111,7 +111,7 @@ class RuntimeTest(unittest.TestCase):
                 self.assertIn("usage or rate limit", stderr_output)
                 mock_report.assert_called_once()
                 call_args = mock_report.call_args
-                self.assertEqual(call_args[0], ("codex", "gpt-6-astra", "rate_limited"))
+                self.assertEqual(call_args[0], ("codex", "gpt-6.2-astra", "rate_limited"))
 
     def test_run_codex_empty_output_returns_1(self):
         """Empty stdout with exit 0 returns 1."""
@@ -140,7 +140,7 @@ class RuntimeTest(unittest.TestCase):
                         stdin_path = tf.name
                     try:
                         with open(stdin_path) as stdin_file:
-                            ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6-astra": ["medium"]})
+                            ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6.2-astra": ["medium"]})
                     finally:
                         os.unlink(stdin_path)
 
@@ -174,7 +174,7 @@ class RuntimeTest(unittest.TestCase):
                     stdin_path = tf.name
                 try:
                     with open(stdin_path) as stdin_file:
-                        ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6-astra": ["medium"]})
+                        ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6.2-astra": ["medium"]})
                 finally:
                     os.unlink(stdin_path)
 
@@ -207,7 +207,7 @@ class RuntimeTest(unittest.TestCase):
                     stdin_path = tf.name
                 try:
                     with open(stdin_path) as stdin_file:
-                        ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6-astra": ["medium"]})
+                        ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6.2-astra": ["medium"]})
                 finally:
                     os.unlink(stdin_path)
 
@@ -242,7 +242,7 @@ class RuntimeTest(unittest.TestCase):
                         stdin_path = tf.name
                     try:
                         with open(stdin_path) as stdin_file:
-                            ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6-astra": ["medium"]})
+                            ret = run_codex("astra", "medium", Path("/tmp"), stdin_file, receipt, {"gpt-6.2-astra": ["medium"]})
                     finally:
                         os.unlink(stdin_path)
 
@@ -337,6 +337,8 @@ class EmptyReplyReasonTest(unittest.TestCase):
                 run_codex("luna", "medium", raw, io.StringIO("do it"), receipt, {"gpt-6-luna": ["medium"]}, tools=True)
             text = seen.read_text()
         self.assertTrue(text.startswith(runtime.NO_ASK_PREAMBLE)); self.assertTrue(text.endswith("do it"))
+        self.assertIn("host tool permission flow", text)
+        self.assertIn("respect denials", text)
 
     def _run_host_tools(self, events):
         """A host-tools thread run whose fake Codex prints these --json events and writes no final message."""

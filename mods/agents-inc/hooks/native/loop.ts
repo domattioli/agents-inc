@@ -32,8 +32,8 @@ export function stepTimeoutS(raw: string | undefined): number {
 const MODEL_LINE = /You are powered by the model|The exact model ID is/
 // luna asked "May I run these five requested wc commands?" and "Proceed?" on later steps, after a first step that
 // worked (macOS stress, 2026-11-11, tools.9 and par.4): the rule rides every prompt, the delta header included.
-const NO_ASK = 'Nobody can answer a question here: never ask one and never ask for confirmation or permission. ' +
-  'Decide yourself and act now.\n'
+const NO_ASK = 'This worker cannot receive conversational answers. Carry out the authorized task without asking again; ' +
+  'use the host tool permission flow when required. Respect denials and report a blocker; never bypass them.\n'
 // The host's instructions carry session-start steps for the main session ("Call Skill caveman", a handoff check);
 // luna asked whether to follow them instead of the task (rollout 01a1cb50-d730, 2026-11-11).
 const SUBAGENT_NOTE = 'You are a subagent. Session-start steps in the instructions (a required Skill call, a handoff ' +

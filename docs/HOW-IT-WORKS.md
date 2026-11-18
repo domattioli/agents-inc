@@ -25,6 +25,37 @@ bridge/daemon lifecycle is unsupported by this installer.
   - **Prerequisite**
     - Newcomers should read `START-HERE.md` first.
 
+## Native delegation
+
+The active host's tool list and model catalog determine availability. Use the
+host's spawn, messaging, wait and cancel tools when offered. Task authorization
+determines what the delegate may do. The host decides whether a tool action needs
+approval. Agents-inc's native guidance and observation hooks issue no
+permission decisions for allowed calls. Claude's explicit enforce gate and guest
+eligibility rules continue to apply.
+
+Use a fresh context for independent tasks. Brief the goal, relevant files or
+facts, permitted access, and the acceptance check. Reuse the delegate for a
+related follow-up and send the changes. If the requested model or feature is
+missing, continue any independent work and report the unmet requirement.
+A different route requires its own authority. A host denial ends that action.
+
+The local host ledger is append-only. The supervisor runs deterministic checks
+and obtains any required independent review before recording an explicit verdict
+with `agents-inc ledger append --node-id <id> --verdict pass|fail`.
+
+| Route | Host ledger evidence |
+|---|---|
+| Claude Agent/Task | Tool-call ID, task description, requested or host-resolved model, agent ID when supplied, foreground return, and any final-request token counts. A background launch alone stays dispatched. |
+| Claude registered guest | Guest lifecycle records include the model, task, available usage and end status, including aborts when reported. |
+| Codex native | Trusted `SubagentStart` and `SubagentStop` hooks record the host agent ID, session, model and observed state where provided. These events lack the task brief and run-wide usage. A missing stop remains pending. |
+| Gemini native | Use the host's own evidence. Agents-inc installs no native lifecycle recorder for Gemini. |
+
+A return does not set a verification verdict. Hosts that skip a hook can leave
+an incomplete record. Claude's final-request usage stays separate from totals.
+See the [Codex hook event reference](https://learn.chatgpt.com/docs/hooks) and
+[Claude Code hook reference](https://code.claude.com/docs/en/hooks#agent).
+
 ## System
 
 - Delegation system
@@ -377,6 +408,7 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
   - Claude aliases are bare (`opus`, `sonnet`, `haiku`), so new Claude releases arrive through Claude Code itself.
 - Doctor
   - `agents-inc doctor` prints the status on line 1 and one `WARNING:` line per warning. Warnings never change the status. `MODEL_DRIFT <alias>: pinned <slug>, newest <slug>` means the catalog lists a newer slug. `INSTALL_STALE` means the installed release differs from the checkout it was installed from; run `agents-inc repair --source <checkout>`. After an install from a git checkout whose bundle paths were clean, only HEAD moving to a commit whose bundle paths differ counts (a commit, checkout, reset or branch switch); uncommitted and untracked files do not. After an install with uncommitted bundle changes, any further edit counts. When git cannot run, the check reports not stale. `WB_CLI_TEMP_PATH` means the recorded `codex` path is temporary or a shim.
+  - Host CLI and catalog warnings (spec 047, D52.1). `HOST_CLI_OUTDATED <cli> <installed> < <latest>` means a newer Codex or Claude Code CLI is published; the line names the update command. `CODEX_CATALOG_FOREIGN` means `models_cache.json` was written by a different Codex version than the one installed, so doctor makes no drift claim; update the CLI, then run `codex debug models`. `PIN_NOT_IN_CATALOG <alias>` means the installed CLI's catalog does not list the pinned model, so every call to that alias will fail. `(catalog version unknown)` after a `MODEL_DRIFT` line means doctor could not tell which Codex version wrote the catalog. `host-cli-version: could-not-test` means the latest version could not be looked up (offline); it never changes READY. Doctor and repair look up versions at most once a day; session start only reads the stored result.
 - Roster
   - The installer creates an empty `~/.config/agents-inc/roster.json`. Model aliases there or in `AGENTS_INC_MODEL_MAP` (JSON object or file path) override the built-in slugs.
 - DelegateAgent MCP server

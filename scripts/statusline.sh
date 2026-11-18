@@ -108,7 +108,7 @@ done <<EOF
 $dump
 EOF
 # No cache at all: placeholder roster (dashes). Cache without enough models: blank rows.
-if [ -z "$dump" ]; then mids=(claude-fable-5-1 claude-opus-5-5 claude-sonnet-5-5 claude-haiku-4-5 gpt-6-astra gpt-6.1-sol gpt-6.1-terra gpt-6-luna)
+if [ -z "$dump" ]; then mids=(claude-fable-5-1 claude-opus-5-5 claude-sonnet-5-5 claude-haiku-4-5 gpt-6.2-astra gpt-6.2-sol gpt-6.1-terra gpt-6-luna)
 else for k in 0 1 2 3 4 5 6 7; do [ -n "${mids[k]}" ] || { mtok[k]=—; mcost[k]=—; h5tok[k]=—; h5cost[k]=—; d1tok[k]=—; d1cost[k]=—; dtok[k]=—; dcost[k]=—; motok[k]=—; mocost[k]=—; altok[k]=—; alcost[k]=—; }; done; fi
 : "${ch5_reset:-}" "${cd7_reset:-}" "${dur_ms:-}" "${ftok[0]}" "${total_cost:-}"
 
@@ -190,26 +190,28 @@ sharecols(){ printf '%s\n' "$@" | awk '{i=NR-1;c=i%6;v=$0;if(v==""||v~/[^0-9.eE+
 # No noise floor: only a zero, missing or non-numeric cell is NA, or every cell of a provider whose d28 is zero.
 # history_days = days of history per provider (— or empty = unknown -> 28). days = clamp(history, 1, 28). d28 = the provider's 28D cell.
 # 28D cell: if raw history_days > 28 and ALL > 0, expected = ALL*28/history, r = 28D/expected, same log2 map; else N. ALL cell: N.
-# expected = d28 * window_hours / (days*24); permille = clamp(500 + 250*log2(value/expected), 0, 1000): r <= 0.25 cyan, r = 1 mid blend, r >= 4 magenta (one range for model, Σ and dollar cells). Window hours: 5H 5, 1D hours since midnight (floor 6), 7D min(168, days*24), SESS = duration (under 30 min -> NA).
+# expected = d28 * window_hours / (days*24); permille = clamp(500 + 250*log2(value/expected), 0, 1000): r <= 0.25 cyan, r = 1 mid blend, r >= 4 magenta (one range for model, Σ and dollar cells). Window hours: 5H 5, 1D hours since midnight (floor 6), 7D min(168, days*24), SESS = duration (under PACE_SESS_FLOOR_S, 5 min -> NA).
 # Prints one token per value: permille, NA (dim: zero, unknown, or d28 zero), or N (neutral: ALL always; 28D when history <= 28 or unknown).
-pacecols(){ local ss=$1 mm=$2 hd=$3; shift 3; printf '%s\n' "$@" | awk -v ss="$ss" -v mm="$mm" -v hd="$hd" 'BEGIN{split(hd,H,",")}{v[NR-1]=$0}
+# SESS pace floor (operator, 2026-11-18): a session younger than this many seconds renders CD in SESS pace cells (pacecols and modelpace).
+PACE_SESS_FLOOR_S=300
+pacecols(){ local ss=$1 mm=$2 hd=$3; shift 3; printf '%s\n' "$@" | awk -v ss="$ss" -v mm="$mm" -v hd="$hd" -v sf="$PACE_SESS_FLOOR_S" 'BEGIN{split(hd,H,",")}{v[NR-1]=$0}
  END{for(j=0;j<NR;j++){g=int(j/6);c=j%6;if(c==5){print "N";continue}
    x=v[j];d=v[g*6+4];if(x==""||x~/[^0-9.eE+-]/||d==""||d~/[^0-9.eE+-]/){print "NA";continue}
    x+=0;d+=0;if(x<=0||d<=0){print "NA";continue}
    hr=28;if(H[g+1]!=""&&H[g+1]!~/[^0-9.eE+-]/)hr=H[g+1]+0;dy=hr;if(dy>28)dy=28;if(dy<1)dy=1
    if(c==4){a=v[g*6+5];if(hr<=28||a==""||a~/[^0-9.eE+-]/||a+0<=0){print "N";continue}r=x/(a*28/hr);t=500+250*log(r)/log(2);if(t>1000)t=1000;if(t<0)t=0;print int(t);continue}
-   if(c==0){if(ss<1800){print "NA";continue}h=ss/3600}else if(c==1)h=5;else if(c==2)h=(mm/60<6)?6:mm/60;else h=(dy*24<168)?dy*24:168
+   if(c==0){if(ss<sf){print "NA";continue}h=ss/3600}else if(c==1)h=5;else if(c==2)h=(mm/60<6)?6:mm/60;else h=(dy*24<168)?dy*24:168
    r=x/(d*h/(dy*24));t=500+250*log(r)/log(2);if(t>1000)t=1000;if(t<0)t=0;print int(t)}}'; }
 # Model cells (SESS 5H 1D 7D 28D), modelpace <sess_s> <min_since_midnight> <12 rows of "c0 c1 c2 c3 c4 usd_per_day days hist_days all_cost">: cost-weighted pace against the row's own or family baseline (cache pace block).
 # c0..c4 = the row's dollar cells SESS 5H 1D 7D 28D. r = cell cost / expected cost; expected = usd_per_day * window_hours / 24, same window hours as pacecols (5H 5, 1D hours since midnight floor 6, 7D min(168, days*24), SESS duration).
-# 28D: expected = all_cost * 28 / hist_days; neutral (N) when hist_days <= 28. Zero, missing or null cost, null pace, SESS under 30 min -> NA (grey). Same map as pacecols: permille = clamp(500 + 250*log2(r), 0, 1000).
+# 28D: expected = all_cost * 28 / hist_days; neutral (N) when hist_days <= 28. Zero, missing or null cost, null pace, SESS under PACE_SESS_FLOOR_S (5 min) -> NA (grey). Same map as pacecols: permille = clamp(500 + 250*log2(r), 0, 1000).
 # Prints 5 tokens per row, row-major: permille, NA or N. The ALL column is not a pace cell (it keeps sharecols).
-modelpace(){ local ss=$1 mm=$2; shift 2; printf '%s\n' "$@" | awk -v ss="$ss" -v mm="$mm" 'function ok(v){return v!=""&&v!~/[^0-9.eE+-]/}
+modelpace(){ local ss=$1 mm=$2; shift 2; printf '%s\n' "$@" | awk -v ss="$ss" -v mm="$mm" -v sf="$PACE_SESS_FLOOR_S" 'function ok(v){return v!=""&&v!~/[^0-9.eE+-]/}
  {for(c=0;c<5;c++){x=$(c+1);u=$6;dy=$7;hs=$8;al=$9
   if(!ok(x)||x+0<=0){print "NA";continue}
   if(c==4){if(!ok(hs)){print "NA";continue}if(hs+0<=28){print "N";continue}if(!ok(al)||al+0<=0){print "NA";continue}e=al*28/hs}
   else{if(!ok(u)||u+0<=0||!ok(dy)){print "NA";continue}dd=dy+0;if(dd>28)dd=28;if(dd<1)dd=1
-   if(c==0){if(ss<1800){print "NA";continue}h=ss/3600}else if(c==1)h=5;else if(c==2)h=(mm/60<6)?6:mm/60;else h=(dd*24<168)?dd*24:168
+   if(c==0){if(ss<sf){print "NA";continue}h=ss/3600}else if(c==1)h=5;else if(c==2)h=(mm/60<6)?6:mm/60;else h=(dd*24<168)?dd*24:168
    e=u*h/24}
   t=500+250*log(x/e)/log(2);if(t>1000)t=1000;if(t<0)t=0;print int(t)}}'; }
 ramp_t(){ case "$1" in NA) _c=$CD;; *) ramp_c "$1";; esac; }

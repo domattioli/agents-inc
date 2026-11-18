@@ -97,6 +97,17 @@
       "status": "available",
       "supported_efforts": ["low", "medium", "high", "max", "ultra"]
     },
+    "gpt-6.2-astra": {
+      "vendor": "openai",
+      "provider": "codex",
+      "tier": "executive",
+      "tasks_good": ["extract", "summarize", "draft", "review-draft", "review-of-record", "code-write", "code-review", "orchestrate", "classify"],
+      "tasks_bad": [],
+      "ctx_hint": 200000,
+      "cost_class": "premium",
+      "status": "unprobed",
+      "supported_efforts": ["low", "medium", "high", "max", "ultra"]
+    },
     "gemini-2.5-flash": {
       "vendor": "google",
       "provider": "gemini",
@@ -334,6 +345,17 @@
       "supported_efforts": ["low", "medium", "high", "max"]
     },
     "gpt-6.1-sol": {
+      "vendor": "openai",
+      "provider": "codex",
+      "tier": "orchestrator",
+      "tasks_good": ["code-write"],
+      "tasks_bad": [],
+      "ctx_hint": 128000,
+      "cost_class": "mid",
+      "status": "unprobed",
+      "supported_efforts": ["low", "medium", "high", "max", "ultra"]
+    },
+    "gpt-6.2-sol": {
       "vendor": "openai",
       "provider": "codex",
       "tier": "orchestrator",

@@ -89,13 +89,88 @@ def _hook_drift(paths: InstallPaths) -> list[str]:
         return ["WB_HOOK_DRIFT"] if source.read_bytes() != installed.read_bytes() else []
     except OSError: return ["WB_HOOK_DRIFT_UNCHECKED"]
 
-def _model_drift(models: list[dict] | None) -> list[str]:
-    """D52: one warning per Codex alias whose pinned slug has a newer catalog slug."""
+def _catalog_warnings(models: list[dict] | None, trust: str | None, written: str | None, installed: str | None,
+                      update: str, aliases: dict[str, str] | None = None) -> list[str]:
+    """Spec 047 (D52.1): catalog verdicts (MODEL_DRIFT, PIN_NOT_IN_CATALOG) only from a catalog whose client_version
+    matches the installed codex. trust None (session start without a fresh record): nothing. foreign or unknown: one
+    line saying the catalog was not checked and why. match with an unreadable model list (None): not checked; a
+    well-formed empty list: every pin is missing."""
+    aliases = MODEL_ALIASES if aliases is None else aliases
+    if trust is None:
+        return []
+    if trust == "foreign":
+        return [f"CODEX_CATALOG_FOREIGN: models_cache.json written by codex {written}, installed {installed}; "
+                f"model drift and pins not checked. Update the CLI first: {update}; then `codex debug models` refreshes the catalog"]
+    if trust != "match":
+        why = "models_cache.json has no client_version" if not written else "installed codex version not known"
+        return [f"CODEX_CATALOG_UNCHECKED: catalog version unknown ({why}); model drift and pins not checked"]
+    if models is None:
+        return [f"CODEX_CATALOG_UNCHECKED: models_cache.json from codex {written} has no readable model list; "
+                f"model drift and pins not checked; `codex debug models` refreshes the catalog"]
     out = []
-    for alias, slug in MODEL_ALIASES.items():
-        newer = catalog.drift(slug, models)
-        if newer: out.append(f"MODEL_DRIFT {alias}: pinned {slug}, newest {newer}")
+    for alias, slug in aliases.items():
+        status = catalog.pin_status(slug, models)
+        if status == "missing":
+            out.append(f"PIN_NOT_IN_CATALOG {alias}: {slug} (codex {installed}): pin absent or unusable in the matching "
+                       f"local catalog; runtime availability not verified. "
+                       f"Update the CLI ({update}) or run agents-inc models bump {alias} <listed slug>")
+        elif status == "drift":
+            out.append(f"MODEL_DRIFT {alias}: pinned {slug}, newest {catalog.drift(slug, models)}")
     return out
+
+
+def _version_item(recs: dict, now: float) -> DoctorItem:
+    """Spec 047 FR-005 (G3, H4): what the host CLI version check really did."""
+    if not recs:
+        return DoctorItem("host-cli-version", False, "not-tested", "could-not-test", "no host CLI found")
+    bad = [f"{n} ({r.get('error') or 'no answer'})" for n, r in recs.items() if not (r.get("installed") and r.get("latest"))]
+    if bad:
+        return DoctorItem("host-cli-version", False, "not-tested", "could-not-test", "could-not-check: " + ", ".join(bad))
+    if all(r.get("reused") for r in recs.values()):
+        oldest = min(r["checked_at"] for r in recs.values())
+        return DoctorItem("host-cli-version", False, "record", "pass", "latest versions from the stored lookup", age=now - oldest)
+    return DoctorItem("host-cli-version", False, "now", "pass")
+
+
+def cli_warnings(paths: InstallPaths, models: list[dict] | None = None, catalog_path: Path | None = None,
+                 live: bool = False, fetch=None, path: str | None = None, now: float | None = None,
+                 items: list | None = None, codex_installed: bool | None = None) -> list[str]:
+    """Spec 047 FR-005 (D52.1). live (doctor, repair): run `--version` per CLI and look up the latest version, each
+    lookup (successful or failed) reused for 24 h; record both. Not live (session start, or the opt-out): read only the
+    record and stats the recorded binary; no process, no socket. The recorded installed version is trusted at any age
+    while the binary's path, mtime and size are unchanged; a changed binary gives one run-doctor line and no verdict;
+    no record gives nothing. Registry answers older than 24 h are not shown."""
+    from . import host_cli
+    now = time.time() if now is None else now
+    if live and host_cli.opted_out():
+        live = False  # D52.1 opt-out: no `--version` process, no registry request; the record only
+    cache_file = catalog_path or catalog.cache_path({**os.environ, "HOME": str(paths.home)})
+    if models is None: models = catalog.load(cache_file)  # None: missing or unreadable
+    lines = []
+    if live:
+        recs = host_cli.refresh(paths.state, now, fetch=fetch or host_cli._fetch, path=path)
+        if items is not None: items.append(_version_item(recs, now))
+        for name, rec in recs.items():
+            if not (rec.get("installed") and rec.get("latest")):
+                lines.append(f"HOST_CLI_VERSION {name}: could-not-check ({rec.get('error') or 'no answer'})")
+    else:
+        recs = host_cli.cached(paths.state, now, path=path)  # file read, which, realpath, os.stat only (K1, L1)
+        stale = [n for n, r in recs.items() if r.get("stale")]
+        for name in stale:
+            del recs[name]
+            lines.append(f"HOST_CLI_RECORD_STALE {name}: the CLI changed since the last check; run agents-inc doctor")
+        if codex_installed is None:  # no receipt to ask: the selected executable on PATH (no process)
+            codex_installed = shutil.which("codex", path=path) is not None
+        # L3: only Codex installed, session-start path, no usable record. Codex is optional: absent Codex, no line.
+        if codex_installed and "codex" not in recs and "codex" not in stale:
+            lines.append("CODEX_CATALOG_UNCHECKED: catalog not checked, no host CLI record; run agents-inc doctor")
+    installed = (recs.get("codex") or {}).get("installed")
+    trust = catalog.trust(cache_file, installed) if (live or "codex" in recs) else None
+    pkg, brew = host_cli.CLIS["codex"]
+    update = host_cli.update_command(host_cli.install_method("codex", pkg, path=path), pkg, brew)
+    return (_catalog_warnings(models, trust, catalog.client_version(cache_file), installed, update)
+            + host_cli.outdated_lines(recs, path=path) + lines)
+
 
 def _install_stale(paths: InstallPaths, release_hash: str) -> list[str]:
     """D52: warn when the checkout recorded at install time would now stage to a different release hash."""
@@ -255,7 +330,8 @@ def luna_line(paths: InstallPaths) -> str | None:
 
 def check_install(paths: InstallPaths, live_model: str | None = None, runner=subprocess.run,
                   models: list[dict] | None = None, catalog_path: Path | None = None,
-                  which=None, sandbox_probe=None, net_probe=None) -> DoctorReport:
+                  which=None, sandbox_probe=None, net_probe=None, live_versions: bool = False,
+                  version_fetch=None, version_path: str | None = None) -> DoctorReport:
     from .dispatch import WORKER_PATH, sandbox_available, worker_env  # lazy: dispatch is heavy and optional here
     sandbox_probe = sandbox_probe or sandbox_available
     net_probe = net_probe or dispatch_path_probe
@@ -295,8 +371,12 @@ def check_install(paths: InstallPaths, live_model: str | None = None, runner=sub
     warnings.extend(_sandbox_exclusion(paths))
     if models is None:  # the catalog of the home being checked; CODEX_HOME still wins. [] stops a re-read of the default.
         default = catalog.cache_path({**os.environ, "HOME": str(paths.home)})
-        models = catalog.load(catalog_path or default) or []
-    warnings.extend(_model_drift(models))
+        models = catalog.load(catalog_path or default)  # None: missing or unreadable (spec 047 H2)
+    # Spec 047: D52 drift lines, gated by catalog trust, plus pin and host CLI version warnings.
+    warnings.extend(cli_warnings(paths, models, catalog_path, live=live_versions, fetch=version_fetch,
+                                 path=version_path, items=items,
+                                 codex_installed=receipt.codex_path is not None and receipt.codex_path.is_file()
+                                 and os.access(receipt.codex_path, os.X_OK)))
     warnings.extend(_install_stale(paths, receipt.release_hash))
     match = install_match_item(paths, receipt.release_hash)
     items.append(match)

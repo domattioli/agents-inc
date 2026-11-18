@@ -43,6 +43,10 @@ class DoctorWarningsTest(unittest.TestCase):
         self.paths = InstallPaths.for_home(self.home)
         # Fixture cache plus a sol slug newer than any plausible pin, so drift is provable whatever routing.json pins.
         cache = json.loads((CATALOG_DIR / "models_cache.json").read_text())
+        for pin in MODEL_ALIASES.values():  # live pins are listed, so a matching catalog reports drift, not a missing pin
+            if not any(m.get("slug") == pin for m in cache["models"]):
+                cache["models"].append({"slug": pin, "visibility": "list", "supported_in_api": True})
+        cache["client_version"] = "0.1.0"  # spec 047 D52.1: drift is claimed only from a catalog matching the installed codex
         cache["models"].append({"slug": "gpt-99-sol", "visibility": "list", "supported_in_api": True, "priority": 0,
                                 "supported_reasoning_levels": [{"effort": "low", "description": "x"}]})
         self.codex_home = raw / "codex_home"; self.codex_home.mkdir()
@@ -52,11 +56,20 @@ class DoctorWarningsTest(unittest.TestCase):
         args = argparse.Namespace(source=str(self.source), adopt_existing_workerbee=False, without_codex=True, no_host_wiring=False, yes=True)
         with mock.patch.object(cli, "_paths", return_value=self.paths):
             self.assertEqual(cli.install(args), 0)
+        import time
+        self.paths.state.mkdir(parents=True, exist_ok=True)  # spec 047: the recorded installed codex matches the cache
+        from agents_inc.install import host_cli  # spec 047 L1: the record names the selected codex by identity
+        self.codex_bin = Path(self.tmp.name) / "codex-bin"; self.codex_bin.mkdir()
+        (self.codex_bin / "codex").write_text("#!/bin/sh\necho 'codex-cli 0.1.0'\n"); (self.codex_bin / "codex").chmod(0o755)
+        (self.paths.state / "host-cli-versions.json").write_text(json.dumps(
+            {"codex": {"installed": "0.1.0", "latest": "0.1.0", "checked_at": time.time(),
+                       "binary": host_cli._identity("codex", path=str(self.codex_bin))}}))
 
     def tearDown(self): self.tmp.cleanup()
 
     def test_model_drift_is_a_warning_not_a_code(self):
-        report = check_install(self.paths, models=self.models, **HOST)
+        report = check_install(self.paths, models=self.models, catalog_path=self.codex_home / "models_cache.json",
+                               version_path=str(self.codex_bin), **HOST)
         self.assertEqual(report.codes, ())
         self.assertTrue(report.ready)
         self.assertIn(self.drift, report.warnings)
@@ -80,7 +93,7 @@ class DoctorWarningsTest(unittest.TestCase):
         out = io.StringIO()
         stub_bin = Path(self.tmp.name) / "stub-bin"; stub_bin.mkdir()
         (stub_bin / "claude").write_text("#!/bin/sh\nexit 0\n"); (stub_bin / "claude").chmod(0o755)
-        env = {"CODEX_HOME": str(self.codex_home), "PATH": str(stub_bin) + os.pathsep + os.environ.get("PATH", "")}  # doctor needs a claude CLI; CI has none
+        env = {"CODEX_HOME": str(self.codex_home), "PATH": str(stub_bin) + os.pathsep + str(self.codex_bin) + os.pathsep + os.environ.get("PATH", "")}  # doctor needs a claude CLI; CI has none
         with mock.patch.object(cli, "_paths", return_value=self.paths), mock.patch.dict(os.environ, env), mock.patch("agents_inc.install.doctor.dispatch_path_probe", return_value=True), contextlib.redirect_stdout(out):
             code = cli.main(["doctor"])
         lines = out.getvalue().splitlines()

@@ -57,8 +57,8 @@ Aliases, case-insensitive:
 | `sonnet` | `claude-sonnet-5-5` | `claude -p` |
 | `opus` | `claude-opus-5-5` | `claude -p` |
 | `fable` | `claude-fable-5-1` | `claude -p` |
-| `astra` | `gpt-6-astra` | codex-bridge daemon |
-| `sol` | `gpt-5.6-sol` | codex-bridge daemon |
+| `astra` | `gpt-6.2-astra` | codex-bridge daemon |
+| `sol` | `gpt-6.2-sol` | codex-bridge daemon |
 | `terra` | `gpt-5.6-terra` | codex-bridge daemon |
 | `luna` | `gpt-6-luna` | codex-bridge daemon |
 | `gemini` | `gemini-3.8-flash` | `gask.sh --tier digest` |

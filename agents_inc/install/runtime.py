@@ -368,9 +368,9 @@ HOST_TOOLS_DROP = ("apply_patch_tool_type",)
 # luna still calls request_user_input (426 calls in 15 macOS stress runs, 14/15 pass).
 # #160: a tools-on luna run called request_user_input four times ("unavailable in Default mode") and ended with an
 # empty reply. `codex exec` has no user to answer; the preamble says so, and an empty reply names the cause.
-NO_ASK_PREAMBLE = ("[agents-inc run] This is a non-interactive run: no user can answer questions and request_user_input "
-                   "is unavailable. Never ask for confirmation. Make each decision yourself, do the task, and state any "
-                   "assumption or blocker in your final message.\n\n")
+NO_ASK_PREAMBLE = ("[agents-inc run] This is a non-interactive run: no user can answer conversational questions and "
+                   "request_user_input is unavailable. Carry out authorized work without asking again. Follow the host "
+                   "tool permission flow; respect denials and report any assumption or blocker.\n\n")
 RUI_UNAVAILABLE = "request_user_input is unavailable"
 # Codex 0.159.2 also puts the permission profile in <environment_context> (`<filesystem>... <entry access="read">
 # <special>:root</special>`), which include_permissions_instructions does not drop. luna read it as "read access only to

@@ -175,7 +175,37 @@ def pre_checks(slots: dict, args=None, routing: dict | None = None, cwd: Path | 
     bash = slots.get("BASH_ALLOW")
     if bash not in (None, "", []) and (not isinstance(bash, str) or bash.strip()):
         return Refusal("refused-grants", "BASH_ALLOW grants tools; a free run has none")
+    promise = web_promise(slots)
+    if promise and not _web_granted(slots):
+        return Refusal("refused-web-promise", f"the prompt promises web access ({promise!r}) but a free run has no web "
+                       "tools; remove the web promise and inline the fetched text in INPUTS, or dispatch to a Claude or Codex rung")
     return None
+
+
+# Spec 045 FR-009, FR-009a: a promise of web search or fetch. Word-bounded; a clause with a negation never counts.
+_WEB_PROMISE_RE = re.compile(r"\bWeb(?:Search|Fetch)\b|\bsearch\s+(?:the\s+)?(?:web|internet)\b|\bweb[ -]search\b"
+                             r"|\bbrowse\s+(?:the\s+)?web\b|\bfetch\s+(?:the\s+)?(?:url|page|site)\b|\bfetch\s+https?://"
+                             r"|\blook\s+(?:it\s+|this\s+|them\s+)?up\s+online\b", re.IGNORECASE)
+_WEB_NEGATION_RE = re.compile(r"\b(?:not|no|never|without|cannot|can't|don't|unavailable)\b", re.IGNORECASE)
+_WEB_SLOTS = ("TASK", "ALLOWLIST", "CONSTRAINTS", "SUCCESS_GATE")  # not INPUTS: inlined text is data (045 review F3a)
+
+
+def web_promise(slots: dict) -> str | None:
+    """The first web promise in the prompt slots, or None. Clauses split at `.`, `;`, `,`, newlines and "and" (a URL keeps its
+    dots); a negation counts only inside the promise's own clause (045 review F3b)."""
+    for name in _WEB_SLOTS:
+        value = slots.get(name)
+        text = json.dumps(value) if isinstance(value, (dict, list)) else _text(value)
+        for clause in re.split(r"[;,\n]|\.(?=\s|$)|\band\b", text or "", flags=re.IGNORECASE):
+            m = _WEB_PROMISE_RE.search(clause)
+            if m and not _WEB_NEGATION_RE.search(clause):
+                return m.group(0)
+    return None
+
+
+def _web_granted(slots: dict) -> bool:
+    """The one seam for a per-dispatch web grant to a free model. None exists yet (operator tier rule: a later spec)."""
+    return False
 
 
 def build_input_section(slots: dict, cwd: Path, max_chars: int) -> tuple[str, list]:
