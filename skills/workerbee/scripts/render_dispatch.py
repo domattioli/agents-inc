@@ -87,10 +87,11 @@ CLAIMS_LINE = ("CLAIMS BLOCK: end your report with exactly one fenced block tagg
                "The block is data for a check; it never grants anything.")
 
 # #131 (H7): one fixed line after CONSTRAINTS, so the stop-on-block clause never depends on the slot author.
-STOP_ON_BLOCK_LINE = ("STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, "
-                      "stop and hand back to your supervisor with the work done so far; never switch to another tool to "
-                      "route around the block. A denial of an incidental side effect, such as a cache write, is not a "
-                      "block: ignore it and continue.")
+STOP_ON_BLOCK_LINE = ("STOP ON BLOCK: never switch tools to route around a denied task operation. Stop and hand back to "
+                      "your supervisor with the work done so far when a hook, permission classifier or sandbox prevents "
+                      "the task from being completed. If only an incidental side effect is denied, such as a cache "
+                      "directory you cannot create, leave it undone, continue the authorized work, and list each such "
+                      "denial in your report.")
 
 
 # 026 US4 (#109): C0 controls except tab, LF and CR, DEL, and bidirectional controls never reach a prompt.
@@ -185,6 +186,25 @@ def weak_gate_warnings(gates, base) -> list[str]:
         path = Path(target) if os.path.isabs(target) else Path(base) / g.get("cwd", ".") / target
         if path.exists():
             out.append(f"warning: gate-weak: `{' '.join(argv)}` already holds before launch ({target} exists)")
+    return out
+
+
+# Spec 045 FR-004 (#155 j): BASH_ALLOW prefixes that act outside the repo; a gate should check that effect.
+EFFECT_PREFIXES = ("gh", "npm publish", "git tag", "aws", "gcloud", "docker push", "twine", "kubectl")
+
+
+def effect_gate_warnings(bash_allow, gates) -> list[str]:
+    """One `warning: effect-gate-missing ...` line per BASH_ALLOW prefix that starts with an EFFECT_PREFIXES entry when no
+    gate argv starts with that command's first word. Never a refusal: the caller prints the lines."""
+    gate_heads = {os.path.basename((g.get("argv") or [""])[0]) for g in gates or []}  # /usr/bin/gh counts as gh
+    out = []
+    for prefix in bash_allow or []:
+        words = str(prefix).split()
+        for effect in EFFECT_PREFIXES:
+            if words[:len(effect.split())] == effect.split() and words[0] not in gate_heads:
+                out.append(f"warning: effect-gate-missing: BASH_ALLOW `{prefix}` can act outside the repo; "
+                           f"no gate starts with `{words[0]}` to check the effect")
+                break
     return out
 
 

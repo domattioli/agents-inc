@@ -38,8 +38,7 @@ TOOLS = [
      "answer, then call wait). slots keys (all strings; render refuses a missing one): ROLE, TASK, CONSTRAINTS, "
      "OUT_OF_SCOPE, FILES_IN_SCOPE, STOP_RULE, SUCCESS_GATE, FAILURE_GATE, PRE_EXISTING_CHANGES, NOTES, ALLOWLIST, "
      "FAN_OUT, CLASSIFICATION, EFFORT, SECOND_OPINION, PLAN_CONTRACT; optional STYLE. Never send PERMISSION_MODE (broker-owned). "
-     "CONSTRAINTS must include: 'Stop-on-block: if a hook or permission classifier blocks a tool call, stop and hand "
-     "back to the dispatcher; never switch tool to route around it.' SUCCESS_GATE and FAILURE_GATE each name a "
+     "CONSTRAINTS need no stop-on-block text: the renderer adds the STOP ON BLOCK line. SUCCESS_GATE and FAILURE_GATE each name a "
      "command in backticks. PRE_EXISTING_CHANGES may be 'snapshot <snapshot>' (the broker fills the path). "
      "A Worker that writes nothing: ALLOWLIST 'none -- do all work yourself'. "
      "A Worker never leads: FAN_OUT 'width 0, total 0, depth 0' or omitted (else worker-cannot-lead).",

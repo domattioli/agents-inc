@@ -111,6 +111,16 @@ class PersonaDenyTest(_Home):
                 result, _ = self.run_hook("agent-nudge", data)
                 self.assertEqual(self.decision(result), "deny")
 
+    def test_guest_type_cannot_carry_another_models_persona(self):
+        """A registered guest type exempts only its own persona: "sol: review" on the luna guest type is denied."""
+        for desc, subagent in (("sol: review", "agents-inc:luna"), ("SOL: review", "agents-inc:luna"),
+                               ("astra: review", "agents-inc:sol"), ("luna: count", "agents-inc:gemini-flash")):
+            with self.subTest(desc=desc, subagent=subagent):
+                data = payload(desc, session=f"m-{subagent}-{desc}")
+                data["tool_input"]["subagent_type"] = subagent
+                result, _ = self.run_hook("agent-nudge", data)
+                self.assertEqual(self.decision(result), "deny")
+
     def test_other_agent_types_still_denied(self):
         data = payload("luna: count lines")
         data["tool_input"]["subagent_type"] = "general-purpose"

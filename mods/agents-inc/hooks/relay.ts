@@ -84,7 +84,7 @@ export const register: Register = on => {
       return { deny: `unknown model ${model}; use one of ${MODELS.join(' ')} or a free slug: ${FREE_MODELS.join(' ')}` }
     const slotsReal = (await $.fs.stat(slots, { resolve: true }).catch(() => undefined))?.realPath
     const rootReal = (await $.fs.stat(sessionCwd, { resolve: true }).catch(() => undefined))?.realPath
-    if (!isInside(slotsReal, rootReal)) return { deny: `slots must be a file inside ${sessionCwd}: write it to ${sessionCwd}/.scratch/<task>/slots.json (not the scratchpad or /tmp), then call again` }
+    if (!isInside(slotsReal, rootReal)) return { deny: `slots must be a file inside ${sessionCwd}: write it to ${sessionCwd}/.scratch/<task>/slots.json (not the scratchpad or /tmp), then call again. refused: slots-outside-repo (the slots file is inside the dispatch cwd, in a git-ignored .scratch/<task>/) value: ${slots.slice(0, 200)} fix: write it to ${sessionCwd}/.scratch/<task>/slots.json` }
 
     const runCwd = e.cwd === undefined ? sessionCwd : String(e.cwd)
     if (runCwd !== sessionCwd) {

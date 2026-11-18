@@ -22,6 +22,10 @@ Prefer a permitted native tool with the requested model. The brief scopes task
 authority. The host owns permissions and lifecycle. If a model is unavailable,
 continue independent work and report any unmet requirement. Use a separately
 authorized route only when policy permits it. Respect host denials.
+Prescribed fleet: when the operator names the fleet shape, state one short
+block first (gate verdict per Step 0, Step 1 rung and MUST 10, delegate count,
+a leaner alternative), then launch as prescribed unless the operator changes
+it; no confirmation step.
 
 ### Step 0.5: Check provider eligibility
 
@@ -54,9 +58,9 @@ which model ids sit on each rung; edit `agents_inc/models.json` or
 | rung | provider | default (routing.json) | all ids (models.json) |
 |---|---|---|---|
 | executive | claude | `fable` | `fable` |
-| executive | codex | `gpt-6-astra` | `gpt-6-astra` |
+| executive | codex | `gpt-6.2-astra` | `gpt-6-astra`, `gpt-6.2-astra` |
 | orchestrator | claude | `opus` | `opus` |
-| orchestrator | codex | `gpt-6.1-sol` | `gpt-5.6-sol`, `gpt-6.1-sol` |
+| orchestrator | codex | `gpt-6.2-sol` | `gpt-5.6-sol`, `gpt-6.1-sol`, `gpt-6.2-sol` |
 | workhorse | claude | `sonnet` | `sonnet` |
 | workhorse | codex | `gpt-6.1-terra` | `gpt-5.6-terra`, `gpt-6.1-terra` |
 | grunt | claude | `haiku` | `haiku` |
@@ -373,9 +377,9 @@ Under `agents-inc dispatch` a Claude delegate's tools are the GRANTS section of
 its prompt (#54, D58). A harness "requires approval" block means a missing
 grant. It is not a policy refusal and not a reason to try another tool. Run
 one plain command per Bash call, with no `cd`, `&&`, `;`, pipes, loops, or
-shell variables, because a compound command matches no grant. On a block the
-delegate stops, records the exact command, hands back, and never routes around
-it. The supervisor adds the prefix to BASH_ALLOW and resumes or redispatches.
+shell variables, because a compound command matches no grant. On a block of a
+task operation the delegate stops, records the exact command, hands back, and
+never routes around it; an incidental denial is reported and work continues. The supervisor adds the prefix to BASH_ALLOW and resumes or redispatches.
 
 Same for a delegate's RED. A RED reported honestly is a good outcome. Say
 so **in the dispatch prompt** — delegates round up to GREEN when they

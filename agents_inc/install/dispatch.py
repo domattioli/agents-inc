@@ -559,7 +559,8 @@ def grants_section(allowed: list, disallowed: list, bash_allow: list, permission
             f"BASH_ALLOW prefixes (each also allowed with arguments): {prefixes}\n"
             f"DENIED: {', '.join(disallowed) or 'none'}\n"
             "A call outside ALLOWED stops with a harness message such as \"This command requires approval\": that is a "
-            "missing grant, not a policy refusal. Stop, record the exact command, and hand back; never route around it. "
+            "missing grant, not a policy refusal. Never route around it. If the task needs the call, stop, record the exact "
+            "command, and hand back; if it is incidental, continue and report it. "
             + ((f"No shell: this run has Read, Glob and Grep{' and the ask_lead tool (' + ASK_TOOL + ')' if ask else ''} "
                 "only.\n") if read_only else
                "One plain command per Bash call: no cd, &&, ;, pipes, loops, or shell variables; a compound command "
@@ -609,7 +610,7 @@ ALLOW_SANDBOXED_ENV = "AGENTS_INC_ALLOW_SANDBOXED"
 SANDBOX_FIX = ('do not retry unchanged; two routes: (a) rerun as one plain command with no cd, &&, ;, pipe, redirect, heredoc or $(...) '
                '(add "agents-inc dispatch *" to sandbox.excludedCommands; `agents-inc repair --yes` adds it); (b) for Claude rungs set '
                'sandbox.network.allowedDomains ["api.anthropic.com"] in ~/.claude/settings.json')
-CODEX_NESTED_FIX = "Codex cannot nest a sandbox (rc 71); run as one plain `agents-inc ...` command"
+CODEX_NESTED_FIX = "Codex nesting fails (rc 71); use approved elevation or terminal; do not retry unchanged"
 PROBE_HOST, PROBE_TIMEOUT = "api.anthropic.com", 2.0
 _SANDBOX_NOTE: dict = {}  # run.json fields launch() sets when it proceeds inside a Claude Code sandbox
 
@@ -966,6 +967,20 @@ def check_parent(spec: dict, env, lead_dir) -> str | None:
     return None
 
 
+def _caller_sandbox_refusal(kind: str) -> "CallerSandboxed | None":
+    """#94 decision of launch(), shared with the pre-pin check (045 FR-005, #207): the refusal launch() would raise, else None."""
+    where = caller_sandbox()
+    if not where:
+        return None
+    if where.startswith("CODEX_SANDBOX"):  # 662ddd7: Codex Desktop cannot nest the Codex sandbox, whatever the rung
+        return CallerSandboxed(where, CODEX_NESTED_FIX, "caller-sandboxed-codex")
+    if not where.startswith("SANDBOX_RUNTIME") or not api_reachable():
+        return CallerSandboxed(where)
+    if kind != "claude":
+        return CallerSandboxed(where, CODEX_NESTED_FIX, "caller-sandboxed-codex")
+    return None
+
+
 def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, run_dir: Path,
            permission_mode: str = DEFAULT_PERMISSION_MODE, resume: str | None = None,
            codex_write: bool = False, codex_network: bool = False, lead_dir: Path | None = None,
@@ -975,13 +990,11 @@ def launch(kind: str, model: str, effort: str | None, cwd: Path, prompt: str, ru
     or the Codex thread id to continue. Under the broker, every Worker also gets the ask_lead server (D54).
     lead_dir (#68, D60): run a Codex or Claude delegate as a Lead with the broker MCP tools over that run directory."""
     if not _BROKER_SAFE_WRITES:
-        where = caller_sandbox()
         _SANDBOX_NOTE.clear()
-        if where:
-            if not where.startswith("SANDBOX_RUNTIME") or not api_reachable():
-                raise CallerSandboxed(where)
-            if kind != "claude":
-                raise CallerSandboxed(where, CODEX_NESTED_FIX, "caller-sandboxed-codex")
+        refusal = _caller_sandbox_refusal(kind)
+        if refusal:
+            raise refusal
+        if caller_sandbox():
             _SANDBOX_NOTE.update({"caller_sandbox": "claude-code", "api": "reachable"})
     if read_only and (why := broad_cwd(cwd)):  # the non-git path has no snapshot: re-check right before the start
         raise RuntimeError(f"refused-non-git: {why}")
@@ -1460,7 +1473,8 @@ DETAIL_REASONS = frozenset({"rc-nonzero", "quota-paused", "blocked", "timeout", 
 def _outcome(spec: dict, report: str, vrc: int, rc: int, fan_reason: str | None, gate_reason: str | None = None,
              gated: bool = False, quota: bool = False, snap: str = "", blocked: bool = False, is_error: bool = False,
              timed_out: bool = False, no_report: bool = False, stopped: bool = False,
-             broker_skipped: bool = False, scope_unreadable: bool = False) -> tuple[str, str | None]:
+             broker_skipped: bool = False, scope_unreadable: bool = False,
+             no_changes: bool = False) -> tuple[str, str | None]:
     """Return (outcome, reason), first match wins (spec 042, data-model.md "Run outcome"): launch-level reds (quota
     pause, blocked, timeout, rc-nonzero, fan-out, no report, snapshot tampered or error); a failed gate; a declared stop; a
     change outside the scope (unverified); a skipped snapshot; an unreadable allowed path (scope-unreadable); a broker child; no gates; a gate that could not start (unverified); a report fault with no gate evidence;
@@ -1496,11 +1510,23 @@ def _outcome(spec: dict, report: str, vrc: int, rc: int, fan_reason: str | None,
         return "unverified", "scope-unreadable"
     if broker_skipped:  # a broker child never runs commands for its Lead
         return "unverified", "gates-skipped-broker"
+    if no_changes and gated and gate_reason is None:  # 045 FR-001 (#202): passing gates on an untouched scope prove nothing
+        return "unverified", "no-changes"
     if not gated:
         return "unverified", "no-gates"
     if gate_reason == "gate-not-runnable":
         return "unverified", "gate-not-runnable"
     return "green", "report-format-advisory" if advisory else None
+
+
+_REPORT_BLOCKED_RE = re.compile(r"(?m)^\s*(?:STATUS:\s*)?BLOCKED\b")
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def _report_empty(out_path: Path) -> bool:
@@ -1749,11 +1775,19 @@ def _finish(spec: dict, run_dir: Path, out_path: Path, result: dict, home_repo: 
     # A free reply is not a delegate report: the format check never decides it. Gates green, no gates unverified (FR-008).
     spec["scope"] = _scope_record(evidence, snap)
     claims = _claim_check(spec, run_dir, out_path, free)
+    if not free and not claims.get("stopped") and _REPORT_BLOCKED_RE.search(
+            strip_claims_fences(_read_text(out_path))):  # 045 FR-002: advisory only (D85 items 6, 9)
+        print("warning: report-says-blocked (no claims-block stop; outcome unchanged)", file=sys.stderr)
+        spec["claims"]["warnings"] = spec["claims"].get("warnings", []) + ["report-says-blocked"]
+        with contextlib.suppress(OSError):
+            _write_json(run_dir / "claims.json", spec["claims"])
+    no_changes = (not free and spec.get("task_access") != "read" and bool((spec.get("gates") or {}).get("allow"))
+                  and _snapshot_aware(spec) and not evidence.get("in_scope") and not evidence.get("unbaselined"))
     outcome, reason = _outcome(spec, "COMPLIANT" if free and report != "none" else report, vrc, result["rc"], fan_reason,
                                gate_reason, gated, quota, snap, blocked, is_error, timed_out,
                                no_report=_report_empty(out_path), stopped=bool(claims.pop("stopped", False)),
                                broker_skipped=skipped,
-                               scope_unreadable=bool(spec["scope"].get("unreadable")))
+                               scope_unreadable=bool(spec["scope"].get("unreadable")), no_changes=no_changes)
     if free and cls.reason in FREE_WRAPPER_REASONS:  # spec 037 R6: the wrapper's own refusal names the reason
         outcome, reason = "red", cls.reason
     spec["outcome"] = outcome
@@ -1936,6 +1970,8 @@ def _grants_from_slots(slots: dict, cwd: Path, scripts: Path = SCRIPTS) -> tuple
     for prefix in bash_allow:
         if GATE_CREDENTIAL_RE.search(prefix) or names_credential(prefix.split()):
             return None, [], ("refused-bash-allow", f"credential-seeking prefix {prefix!r}")
+    for warning in getattr(rd, "effect_gate_warnings", lambda *_: [])(bash_allow, gates):  # 045 FR-004: never a refusal
+        print(warning, file=sys.stderr)
     return gates, bash_allow, None
 
 
@@ -2197,6 +2233,13 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
         sdir, ssrc = _INHERITED_SCRIPTS or (SCRIPTS, "installed")
     else:
         sdir, ssrc = scripts_dir(cwd)
+        # 045 FR-005 (#207, guards as 662ddd7): a caller launch() would refuse is told so before pinning. Never for a dry run
+        # (it starts no child) or a free model (its own reachability hold decides).
+        if not args.dry_run and kind in ("claude", "codex") and (refusal := _caller_sandbox_refusal(kind)):
+            early = _read_run_json(run_dir) or {"run_id": run_id, "kind": kind, "model": model, "effort": effort,
+                                                "schema_version": 1, "cwd": str(cwd), "rc": None, "outcome": None,
+                                                "session_id": None}
+            return _launch_failed(early, run_dir, refusal, getattr(args, "home_repo", None))
         if ssrc == "checkout":
             try:
                 sdir = _pin_scripts(sdir, run_id)
@@ -2241,7 +2284,8 @@ def _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, ru
             spec["outcome"] = str(refusal); spec["state"] = _outcome_state(spec["outcome"]); spec["reason_detail"] = refusal.detail
             _write_json(run_dir / "run.json", spec)
             print(f"dispatch {run_id} {model} refused {refusal}: {refusal.detail} lint={lint}")
-            _emit_refusal("free-run-precheck", f"{refusal}: {refusal.detail}")
+            _emit_refusal("web-promise" if refusal == "refused-web-promise" else "free-run-precheck",
+                          f"{refusal}: {refusal.detail}")
             return EXIT_USAGE
     globs = scope_globs(_slot_str("FILES_IN_SCOPE", slots.get("FILES_IN_SCOPE", "")))
     if kind == "codex":  # #167: the Codex sandbox reads only inside cwd; warn, never refuse
@@ -2773,6 +2817,11 @@ _CLAUSE_SPLIT2_RE = re.compile(r";|\n|:(?=\s|$)|(?<=[.!?])\s+|,\s*(?:and\s+|but\
 _SETTINGS_PATH_RE = re.compile(_HOME_ALT + r"/(?:\.claude/settings(?:\.local)?\.json|\.config/agents-inc/settings\.json)(?![\w./-])")
 _QUOTED_RE = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"|`[^`\n]*`")
 _ERROR_MARKER_RE = re.compile(r"error|denied|refused|not permitted|permission|blocked|failed|cannot|could not|no such file|EACCES|EPERM", re.IGNORECASE)
+# 045 FR-003 (#155 i): "the run failed" names a run, it does not order one; only these nouns after a determiner are dropped.
+_NOUN_FOLLOW_RE = re.compile(r"\b(?:the|this|that|last|previous)\s+run\s+(?:failed|exited|stopped|ended|returned|printed|reported)\b",
+                             re.IGNORECASE)
+# 045 review F1: a quote that chains an access word with a further step ("and paste it", "then", "now") is an instruction.
+_QUOTE_INSTRUCTION_RE = re.compile(r"\b(?:and|then|now|also|please|again)\b", re.IGNORECASE)
 _FOLLOW_RE = re.compile(r"\b(?:follow|follows|following|run|runs|running|do|does|apply|applies|obey|obeys|execute|executes|perform|carry|comply|implement|act|heed)\b", re.IGNORECASE)
 # A shell expansion next to a secret name: the final path is not known when the screen runs (FR-026).
 _SECRET_NAME_RE = re.compile(r"auth\.json|(?<=/)tokens?\b|(?<![\w])\.(?:aws|gnupg)\b|(?<![\w])\.env\b|id_rsa|id_ed25519|\.pem\b|\.key\b|(?<![\w])\.ssh\b|\.netrc\b"
@@ -2807,7 +2856,7 @@ def _blank_diagnostic_paths(value: str) -> str:
     """R3: blank a quoted settings path when the quote itself is an error report (a marker word that comes before any
     access word in the quote) and nothing outside the quotes asks for access or tells the reader to act on it."""
     outside = _QUOTED_RE.sub(" ", value)
-    if _ACCESS_REQ_RE.search(outside) or _FOLLOW_RE.search(outside):
+    if _ACCESS_REQ_RE.search(outside) or _FOLLOW_RE.search(_NOUN_FOLLOW_RE.sub(" ", outside)):
         return value
 
     def quote(q):
@@ -2816,7 +2865,7 @@ def _blank_diagnostic_paths(value: str) -> str:
         if not marker:
             return text
         access = _ACCESS_REQ_RE.search(text)
-        if access and access.start() < marker.start():
+        if access and (access.start() < marker.start() or _QUOTE_INSTRUCTION_RE.search(text)):
             return text
         return _SETTINGS_PATH_RE.sub(lambda m: " " * len(m.group(0)), text)
     return _QUOTED_RE.sub(quote, value)

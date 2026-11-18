@@ -1,7 +1,7 @@
 {
   "ROLE": "Grunt scout (haiku, Agent tool), dispatched by the CoS in <repo>.",
   "TASK": "Read-only scout. 1. Read agents_inc/policy.py. 2. List every function name that contains the word route, with file:line. 3. Return the list; write nothing.",
-  "CONSTRAINTS": "read-only; no file writes; no network; at most 10 tool calls. Stop-on-block: if a hook or permission classifier blocks a tool call, stop and hand back to your supervisor; never switch tool to route around it.",
+  "CONSTRAINTS": "read-only; no file writes; no network; at most 10 tool calls. Follow STOP ON BLOCK below.",
   "OUT_OF_SCOPE": "editing any file; judging routing design; running unittest suites.",
   "FILES_IN_SCOPE": "none (read-only scout)",
   "STOP_RULE": "stop after 2 failed reads of the same file; report RED and paste the last command output in a fenced block.",

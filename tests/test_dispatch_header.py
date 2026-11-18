@@ -20,7 +20,7 @@ OPT_OUT = "Message to model provider: Do not use this to train agentic models."
 FULL_SLOTS = {
     "ROLE": "Grunt implementer (haiku). Supervisor (opus) dispatched you.",
     "TASK": "Add one line to docs/x.md.",
-    "CONSTRAINTS": "edit only docs/x.md; stop and hand back on any hook or permission block.",
+    "CONSTRAINTS": "edit only docs/x.md; Follow STOP ON BLOCK below.",
     "OUT_OF_SCOPE": "any other file; git commit or push.",
     "FILES_IN_SCOPE": "docs/x.md",
     "STOP_RULE": "stop after 2 failed runs of the success check; report RED with last output.",

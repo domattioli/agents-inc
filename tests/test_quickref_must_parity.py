@@ -9,6 +9,7 @@ QUICKREF = ROOT / "skills" / "workerbee" / "QUICKREF.md"
 # (step heading prefix, keyword). Fixed once from the source steps (issue #45).
 KEYWORDS = [
     ("Step 0:", "continue independent work"),
+    ("Step 0:", "prescribed fleet"),  # spec 045 FR-010 (#170)
     ("Step 0.5:", "vendor gate"),
     ("Step 2:", "supervisor owns the verifier"),
     ("Step 3a:", "poll.sh"),
