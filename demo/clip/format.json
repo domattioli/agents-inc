@@ -1,0 +1,23 @@
+{
+  "ROLE": "Workhorse formatter (terra), dispatched by the supervisor in the agents-inc repository.",
+  "TASK": "Format a short draft as Markdown. 1. Read demo/clip/draft.md. 2. Write demo/clip/out/formatted.md: the first line becomes a level-1 heading; the lines Overview, Schedule, Rules and Contacts become level-2 headings in that order; the Overview text stays one paragraph; every line under Schedule, Rules and Contacts becomes one '- ' bullet item. 3. Preserve the draft's wording exactly: do not add, drop, reorder or reword any sentence. 4. Run `python3 demo/clip/check_structure.py demo/clip/out/formatted.md demo/clip/draft.md` and report its output.",
+  "CONSTRAINTS": "write only demo/clip/out/formatted.md; no commit or push; no network; at most 15 tool calls; keep the draft's wording word for word.",
+  "OUT_OF_SCOPE": "editing the draft, source notes or checker; correcting facts or wording; any file outside FILES_IN_SCOPE.",
+  "FILES_IN_SCOPE": [
+    "demo/clip/out/formatted.md"
+  ],
+  "STOP_RULE": "stop after 2 failed runs of the structure check; report RED with its last output.",
+  "SUCCESS_GATE": "`python3 demo/clip/check_structure.py demo/clip/out/formatted.md demo/clip/draft.md` exits 0.",
+  "FAILURE_GATE": "`python3 demo/clip/check_structure.py demo/clip/out/formatted.md demo/clip/draft.md` exits non-zero, or a path outside FILES_IN_SCOPE changed.",
+  "GATES": [
+    {
+      "argv": ["python3", "demo/clip/check_structure.py", "demo/clip/out/formatted.md", "demo/clip/draft.md"],
+      "cwd": ".",
+      "timeout_s": 60,
+      "expect_rc": 0
+    }
+  ],
+  "TASK_ACCESS": "write",
+  "CLASSIFICATION": "public (invented demo text)",
+  "EFFORT": "low"
+}

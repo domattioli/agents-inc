@@ -1,0 +1,14 @@
+{
+  "ROLE": "Reviewer (opus), read-only, dispatched by the supervisor in the agents-inc repository.",
+  "TASK": "Review a formatted document against its source notes. 1. Read demo/clip/source_notes.md, demo/clip/draft.md and demo/clip/out/formatted.md. 2. Compare every statement in formatted.md with the source notes. 3. List each statement whose fact or meaning differs from the source notes, one finding per line in the form 'FINDING <n>: <section>: <formatted text> | source says: <source text>'. 4. If none differ, write 'FINDINGS: none'. Ignore Markdown formatting; check meaning only.",
+  "CONSTRAINTS": "read-only; no file writes; no network; at most 10 tool calls; quote text exactly.",
+  "OUT_OF_SCOPE": "editing any file; judging style or structure; suggesting rewrites beyond the finding line.",
+  "FILES_IN_SCOPE": "none (read-only reviewer)",
+  "STOP_RULE": "stop after 2 failed reads of the same file; report RED with the last output.",
+  "SUCCESS_GATE": "every FINDING line quotes text that `grep -F` finds in demo/clip/out/formatted.md and demo/clip/source_notes.md.",
+  "FAILURE_GATE": "any quoted text absent per `grep -F`, or any write reported by `python3 skills/workerbee/scripts/pre_dispatch_snapshot.py verify <snapshot>`.",
+  "TASK_ACCESS": "read",
+  "PERMISSION_MODE": "plan",
+  "CLASSIFICATION": "public (invented demo text)",
+  "EFFORT": "medium"
+}

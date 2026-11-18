@@ -1,0 +1,10 @@
+{
+ "run_id": "20261118T202116Z-opus-b1fd24",
+ "model": "opus",
+ "kind": "claude",
+ "outcome": "unverified",
+ "reason": "no-gates",
+ "rc": 0,
+ "task_access": "read",
+ "gate_results": []
+}

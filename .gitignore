@@ -249,3 +249,8 @@ docs/teach-me/
 
 # Operator-only rules (spec 035)
 AGENTS.local.md
+
+# Demo clip: manim working folder (spec 048)
+demo/clip/media/
+demo/clip/out/
+demo/clip/__pycache__/

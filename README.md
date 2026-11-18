@@ -4,6 +4,10 @@
 
 <p align="center"><strong>Run your AI subscriptions like a small company you direct: a Lead splits each request among Workers, a script checks every result, and a reviewer must accept it. You stay in charge and approve what matters. The project is experimental, and the governed path is off until you turn it on.</strong></p>
 
+<p align="center"><strong><a href="https://github.com/domattioli/agents-inc/blob/main/docs/START-HERE.md">New here? Start with the guide: install, set up providers and run your first job.</a></strong></p>
+
+<p align="center"><a href="https://github.com/domattioli/agents-inc/blob/main/docs/assets/demo.mp4"><img src="https://raw.githubusercontent.com/domattioli/agents-inc/main/docs/assets/demo.gif" width="800" alt="An animated company tree: you and an Executive talk a request through, an Orchestrator hands work to Workers and Grunts, and a reviewer sends one result back until it passes."></a><br><em>Illustration of how agents-inc delegates and checks work.</em></p>
+
 <p align="center">
 <img alt="Status: experimental" src="https://img.shields.io/badge/status-experimental-orange">
 <a href="https://github.com/domattioli/agents-inc/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/domattioli/agents-inc/actions/workflows/tests.yml/badge.svg"></a>
