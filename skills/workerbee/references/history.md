@@ -61,7 +61,7 @@ defensible `$1.15` to `$33.06`.
 - **v1.1.3** (2026-09-12) — upstream incident A root-cause follow-up: bare-prose
   confirm-and-echo requirement (v1.1.2) is unenforceable by itself — same
   class of instruction the issue says gets ignored. Adds
-  `scripts/check_subdelegate_allowlist.py`, a mechanical transcript lint
+  `skills/workerbee/scripts/check_subdelegate_allowlist.py`, a mechanical transcript lint
   (no hook mechanism exists in this repo to block live) that flags a
   nested sub-delegate call landing on a forbidden model or missing the
   confirm-echo line. Self-tested both ways. Does not resolve incident A's open

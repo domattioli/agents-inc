@@ -26,7 +26,7 @@ class StagedBundle:
 
 def _files(root: Path):
     for path in sorted(root.rglob("*")):
-        if path.name == "manifest.json" or any(part in EXCLUDED or part.endswith(".bak") for part in path.relative_to(root).parts): continue
+        if path.name == "manifest.json" or any(part in EXCLUDED or part.endswith((".bak", ".orig")) or ".bak." in part for part in path.relative_to(root).parts): continue
         if path.is_symlink(): raise ValueError(f"symlink payload rejected: {path}")
         if path.is_file(): yield path
         elif not path.is_dir(): raise ValueError(f"non-regular payload rejected: {path}")

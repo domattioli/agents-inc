@@ -4,6 +4,10 @@
 
 <p align="center"><strong>Run your AI subscriptions like a small company you direct: a Lead splits each request among Workers, a script checks every result, and a reviewer must accept it. You stay in charge and approve what matters. The project is experimental, and the governed path is off until you turn it on.</strong></p>
 
+<p align="center"><strong><a href="https://github.com/domattioli/agents-inc/blob/main/docs/START-HERE.md">New here? Start with the guide: install, set up providers and run your first job.</a></strong></p>
+
+<p align="center"><a href="https://github.com/domattioli/agents-inc/blob/main/docs/assets/demo.mp4"><img src="https://raw.githubusercontent.com/domattioli/agents-inc/main/docs/assets/demo.gif" width="800" alt="An animated company tree: you and an Executive talk a request through, an Orchestrator hands work to Workers and Grunts, and a reviewer sends one result back until it passes."></a><br><em>Illustration of how agents-inc delegates and checks work.</em></p>
+
 <p align="center">
 <img alt="Status: experimental" src="https://img.shields.io/badge/status-experimental-orange">
 <a href="https://github.com/domattioli/agents-inc/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/domattioli/agents-inc/actions/workflows/tests.yml/badge.svg"></a>
@@ -27,7 +31,7 @@
 
 ## 1. Status & Roadmap
 
-Version 0.6.4. The project is experimental and pre-MVP. The governed path (`WORKERBEES_GOVERNANCE`) is off by default. Changes per release are in the [CHANGELOG](https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md). The build plan and cut line are in [docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md). Open work is tracked in [the issues](https://github.com/domattioli/agents-inc/issues).
+Version 0.7.0. The project is experimental and pre-MVP. The governed path (`WORKERBEES_GOVERNANCE`) is off by default. Changes per release are in the [CHANGELOG](https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md). The build plan and cut line are in [docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md). Open work is tracked in [the issues](https://github.com/domattioli/agents-inc/issues).
 
 - **Now:** measure the token cost of delegation against doing the work in one session, and port the test suite to Windows ([#138](https://github.com/domattioli/agents-inc/issues/138)).
 - **Next:** let a Worker launched by a broker lead its own Workers ([#73](https://github.com/domattioli/agents-inc/issues/73)).

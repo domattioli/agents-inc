@@ -377,7 +377,7 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
 ## Governed pool
 
 - Routing and policy
-  - Four rungs; Gemini, Mistral and OpenRouter only at Grunt and only for `extract` and `summarize`. [../workerbees/router.py](../workerbees/router.py) enforces it from [../workerbees/routing.json](../workerbees/routing.json) before dispatch.
+  - Four rungs; Gemini, Mistral and OpenRouter only at Grunt and only for `extract` and `summarize`. [../agents_inc/router.py](../agents_inc/router.py) enforces it from [../agents_inc/routing.json](../agents_inc/routing.json) before dispatch.
 - Roles
   - The CEO is the operator; the CoS is the session the operator talks to. The Lead is the top-ranked model the operator names for a run and reports to the CoS once, at the end. A Worker is any agent that reports to a Lead.
 - Escalation
@@ -388,13 +388,13 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
   - Only the CoS commits and pushes.
   - A Worker sees only its own slice.
 - Verification order
-  1. **Verifier** ([../workerbees/verifier.py](../workerbees/verifier.py)): deterministic, no model call; quote accuracy, file existence, hash match, arithmetic. About 100–500 ms, $0. FAIL stops and returns to a human.
-  2. **Reviewer** ([../workerbees/reviewer.py](../workerbees/reviewer.py)): semantic review by a different vendor. About 2–20 s. Returns PASS, FAIL or `same_vendor`; `same_vendor` makes no call and means a person must review.
-  3. **Ledger** ([../workerbees/ledger.py](../workerbees/ledger.py)): append-only dual write, `~/.workerbees/ledger.jsonl` and `~/.workerbees/ledger.db`. About 10–50 ms per node.
-  - Decision: ACCEPTED when all gates pass, otherwise NEEDS_REVIEW ([../workerbees/pipeline.py](../workerbees/pipeline.py)).
+  1. **Verifier** ([../agents_inc/verifier.py](../agents_inc/verifier.py)): deterministic, no model call; quote accuracy, file existence, hash match, arithmetic. About 100–500 ms, $0. FAIL stops and returns to a human.
+  2. **Reviewer** ([../agents_inc/reviewer.py](../agents_inc/reviewer.py)): semantic review by a different vendor. About 2–20 s. Returns PASS, FAIL or `same_vendor`; `same_vendor` makes no call and means a person must review.
+  3. **Ledger** ([../agents_inc/ledger.py](../agents_inc/ledger.py)): append-only dual write, `~/.workerbees/ledger.jsonl` and `~/.workerbees/ledger.db`. About 10–50 ms per node.
+  - Decision: ACCEPTED when all gates pass, otherwise NEEDS_REVIEW ([../agents_inc/pipeline.py](../agents_inc/pipeline.py)).
   - Illustrative 500-word summary: Worker haiku 2 s + $0.01, verifier 0.2 s, reviewer terra 8 s + $0.04, ledger 0.05 s; about 10 s + $0.05 in total.
 - Schema
-  - The config schema still requires a Claude and a Codex model name at every tier. Making either subscription optional at schema level is a goal, not current behavior ([../workerbees/config_schema.py](../workerbees/config_schema.py), [../workerbees/keys.py](../workerbees/keys.py)).
+  - The config schema still requires a Claude and a Codex model name at every tier. Making either subscription optional at schema level is a goal, not current behavior ([../agents_inc/config_schema.py](../agents_inc/config_schema.py), [../agents_inc/keys.py](../agents_inc/keys.py)).
 
 ## Models: pins, drift and sync
 
@@ -423,7 +423,7 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
 - Free-model counts
   - `PYTHONPATH=. python3 -m agents_inc.free_health rate-limits` lists calls and 429 responses per model, counted from 2026-09-29 ([BENCH.md](BENCH.md)).
 - Governance flag
-  - `WORKERBEES_GOVERNANCE` defaults to `off` ([../workerbees/gateway.py](../workerbees/gateway.py)).
+  - `WORKERBEES_GOVERNANCE` defaults to `off` ([../agents_inc/gateway.py](../agents_inc/gateway.py)).
 - Legacy free-tier scripts
   - `gask.sh`, `mask.sh` and `oask.sh` work when governance is off, are refused in governed lanes, and are planned to fold into the governed dispatcher. Each reports to `agents_inc.free_health`. `oask.sh` saves every reply to one file, so never run OpenRouter calls in parallel.
 - Artifacts
