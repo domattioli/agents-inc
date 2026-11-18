@@ -169,7 +169,7 @@ scripts/watch.sh <stderr>
   - **Review**
     - Use `--sandbox read-only` for review-only work.
   - **Caller sandbox**
-    - `agents-inc dispatch` refuses to start from inside the Claude Code Bash sandbox or a Codex sandbox, because that sandbox blocks the provider API. It exits 69 with `detail=caller-sandboxed`. Rerun it outside the sandbox, for example by adding `"agents-inc dispatch *"` to `sandbox.excludedCommands` (D65; `agents-inc install` adds the narrow entries `agents-inc dispatch *`, `run *`, `repair *` and `install *`, and `repair` replaces the older `"agents-inc *"`).
+    - `agents-inc dispatch` refuses to start from inside the Claude Code Bash sandbox or a Codex sandbox, because that sandbox blocks the provider API. It exits 69 with `detail=caller-sandboxed`. A Codex Desktop caller is detected before checkout scripts are pinned and reports `caller-sandboxed-codex`; rerun it with host-approved elevation or in a normal terminal. In Claude Code, `agents-inc install` adds `"agents-inc dispatch *"` to `sandbox.excludedCommands` (D65), and repair replaces the older broad entry.
 
 ## Irreversible actions
 
