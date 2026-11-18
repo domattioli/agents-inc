@@ -70,3 +70,34 @@ def drift(pin: str, models: list[dict] | None = None) -> str | None:
     if pin_ver is None or top is None:
         return None
     return top if _key(version(top)) > _key(pin_ver) else None
+
+
+def client_version(path: Path | str | None = None) -> str | None:
+    """Spec 047: the Codex version that wrote the cache (`client_version`), or None."""
+    try:
+        value = json.loads(Path(path or cache_path()).read_text(encoding="utf-8")).get("client_version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def trust(path: Path | str | None, installed: str | None) -> str:
+    """Spec 047 FR-002: `match` when the cache was written by the installed codex, `foreign` when by another
+    version, `unknown` when either side is unknown. Only a matching cache is the installed CLI's catalog."""
+    written = client_version(path)
+    if written is None or not installed:
+        return "unknown"
+    return "match" if written == installed else "foreign"
+
+
+def _usable(row: dict | None) -> bool:
+    return bool(row) and row.get("visibility") == "list" and row.get("supported_in_api") is True
+
+
+def pin_status(pin: str, models: list[dict] | None = None) -> str:
+    """Spec 047 FR-003: `missing` when the catalog lacks the pin or lists it hidden or not API-supported,
+    `drift` when a newer slug of its family is listed, else `ok`."""
+    models = load() if models is None else models
+    if not _usable(entry(pin, models)):
+        return "missing"
+    return "drift" if drift(pin, models) else "ok"

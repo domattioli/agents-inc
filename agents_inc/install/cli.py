@@ -188,6 +188,19 @@ def uninstall_mod(paths: InstallPaths) -> list:
         if done is not None and done.returncode != 0: notices.append(f"warning: `claude {' '.join(argv)}` failed ({done.returncode})")
     return notices
 
+def _repair(args):
+    """Spec 047 B3: after a successful install, print host CLI and pin warnings (read-only; pins never edited).
+    A failed install prints its own error alone."""
+    rc = install(args)
+    if rc == 0:
+        from . import doctor
+        try:
+            for line in doctor.cli_warnings(_paths(), live=True): print(f"WARNING: {line}")
+        except Exception as exc:  # a check must never turn a good repair into a failure
+            print(f"WARNING: host CLI check skipped: {exc}")
+    return rc
+
+
 def install(args):
     """Install from --source, or from the installed package's own data when --source is omitted.
     A failure is loud (FAIL line, exit 1) and leaves a marker that doctor reports (#155)."""
@@ -471,7 +484,7 @@ def main(argv=None):
             if args.probe:
                 from . import native_probe
                 native_probe.run(paths, None)
-            report = check_install(paths, args.live_model)
+            report = check_install(paths, args.live_model, live_versions=True)  # spec 047: CLI versions, 24 h record
             if args.json:
                 print(json.dumps(report.as_dict()))
             else:
@@ -533,7 +546,7 @@ def main(argv=None):
             for line in uninstall_mod(paths): print(line)
             if retained: print("WB_CONFIG_CONFLICT: retained modified artifacts", file=sys.stderr); [print(p, file=sys.stderr) for p in sorted(retained)]; return 1
             return 0
-        if args.command == "repair": return install(args)
+        if args.command == "repair": return _repair(args)
         if args.command == "rollback":
             if not receipt.prior_release: raise RuntimeError("no predecessor release")
             if Path(receipt.prior_release).name == receipt.release_hash:

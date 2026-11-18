@@ -94,11 +94,17 @@ def _slug_version(slug):
     return _version(match.group(1)) if match else ()
 
 
+SKIP_LINE = "model_sync: skipped, models_cache.json from codex {}, installed {}"
+
+
 def _best_by_persona(cache):
     best = {}
     for entry in cache.get("models", []):
         slug = entry.get("slug") if isinstance(entry, dict) else None
         if not isinstance(slug, str):
+            continue
+        # Spec 047 (D52): only entries explicitly listed and API-supported, the rule catalog.newest and pin_status use.
+        if entry.get("visibility") != "list" or entry.get("supported_in_api") is not True:
             continue
         match = SLUG_RE.match(slug)
         if not match:
@@ -110,11 +116,19 @@ def _best_by_persona(cache):
     return best
 
 
-def sync_codex(cache_path, routing_path, models_path, apply=False, pinned=()):
+def sync_codex(cache_path, routing_path, models_path, apply=False, pinned=(), installed=None):
     """Promote newer codex persona slugs. Returns report lines (empty when nothing to change).
-    Personas in `pinned` (operator manual pins) are never promoted or cloned; heal still runs."""
+    Personas in `pinned` (operator manual pins) are never promoted or cloned; heal still runs.
+    Spec 047: with `installed` (the codex CLI version), a cache written by another codex version is skipped."""
     with open(cache_path, "r", encoding="utf-8") as f:
         cache = json.load(f)
+    written = cache.get("client_version") if isinstance(cache, dict) else None
+    if not installed:  # spec 047 D52.1: promotion needs a catalog matching the installed codex
+        return ["model_sync: skipped, installed codex version unknown; catalog not checked"]
+    if not written:
+        return ["model_sync: skipped, models_cache.json catalog version unknown (no client_version); catalog not checked"]
+    if written != installed:
+        return [SKIP_LINE.format(written, installed)]
     best = _best_by_persona(cache)
 
     with open(routing_path, "r", encoding="utf-8", newline="") as f:
@@ -256,15 +270,18 @@ def set_mode(settings_path, mode):
     _update_settings(settings_path, lambda data: data.__setitem__("model_updates", mode))
 
 
-def run_scheduled(cache, routing, models, settings_path, pending_path):
-    """Unattended pass. Returns (status, lines): none | applied | pending."""
+def run_scheduled(cache, routing, models, settings_path, pending_path, installed=None):
+    """Unattended pass. Returns (status, lines): none | applied | pending | skipped (catalog not trusted; any pending
+    proposal is kept)."""
     pinned = load_pinned(settings_path)
-    proposal = sync_codex(cache, routing, models, apply=False, pinned=pinned)
+    proposal = sync_codex(cache, routing, models, apply=False, pinned=pinned, installed=installed)
+    if _skipped(proposal):
+        return "skipped", proposal
     if not _has_changes(proposal):
         _remove(pending_path)
         return "none", proposal
     if load_mode(settings_path) == "auto":
-        applied = sync_codex(cache, routing, models, apply=True, pinned=pinned)
+        applied = sync_codex(cache, routing, models, apply=True, pinned=pinned, installed=installed)
         _remove(pending_path)
         return "applied", applied
     payload = {
@@ -275,14 +292,20 @@ def run_scheduled(cache, routing, models, settings_path, pending_path):
     return "pending", proposal
 
 
+def _skipped(lines):
+    return bool(lines) and lines[0].startswith("model_sync: skipped,")
+
+
 def _has_changes(lines):
-    return any(not line.endswith(": pinned, skipped") for line in lines)
+    return any(not line.endswith(": pinned, skipped") and not line.startswith("model_sync: skipped,") for line in lines)
 
 
-def approve_pending(cache, routing, models, pending_path, settings_path=None):
+def approve_pending(cache, routing, models, pending_path, settings_path=None, installed=None):
     """Operator approval: apply the current codex sync, then clear the pending file."""
     pinned = load_pinned(settings_path) if settings_path else []
-    lines = sync_codex(cache, routing, models, apply=True, pinned=pinned)
+    lines = sync_codex(cache, routing, models, apply=True, pinned=pinned, installed=installed)
+    if _skipped(lines):
+        return lines  # spec 047 G2: nothing applied, so the proposal stays pending
     _remove(pending_path)
     return lines
 
@@ -345,8 +368,10 @@ def main(argv=None):
         print("model_sync: codex cache missing: {}".format(cache_path), file=sys.stderr)
         return 2
 
+    from agents_inc.install import host_cli  # spec 047: trust the cache only when written by the installed codex
+    installed = host_cli.installed_version("codex")
     if args.scheduled:
-        status, lines = run_scheduled(cache_path, args.routing, args.models, settings_path, pending_path)
+        status, lines = run_scheduled(cache_path, args.routing, args.models, settings_path, pending_path, installed)
         for line in lines:
             print(line)
         if status == "applied":
@@ -358,16 +383,19 @@ def main(argv=None):
         return 0
 
     if args.approve:
-        lines = approve_pending(cache_path, args.routing, args.models, pending_path, settings_path)
+        lines = approve_pending(cache_path, args.routing, args.models, pending_path, settings_path, installed)
         for line in lines:
             print(line)
+        if _skipped(lines):
+            return 1  # spec 047 G2: approval applied nothing; the pending file is kept
         if _has_changes(lines):
             if not args.skip_tables and _regen_tables():
                 return 1
             print("model_sync: changes applied")
         return 0
 
-    codex_lines = sync_codex(cache_path, args.routing, args.models, apply=args.apply, pinned=load_pinned(settings_path))
+    codex_lines = sync_codex(cache_path, args.routing, args.models, apply=args.apply, pinned=load_pinned(settings_path),
+                             installed=installed)
     for line in codex_lines:
         print(line)
 
