@@ -25,6 +25,37 @@ bridge/daemon lifecycle is unsupported by this installer.
   - **Prerequisite**
     - Newcomers should read `START-HERE.md` first.
 
+## Native delegation
+
+The active host's tool list and model catalog determine availability. Use the
+host's spawn, messaging, wait and cancel tools when offered. Task authorization
+determines what the delegate may do. The host decides whether a tool action needs
+approval. Agents-inc's native guidance and observation hooks issue no
+permission decisions for allowed calls. Claude's explicit enforce gate and guest
+eligibility rules continue to apply.
+
+Use a fresh context for independent tasks. Brief the goal, relevant files or
+facts, permitted access, and the acceptance check. Reuse the delegate for a
+related follow-up and send the changes. If the requested model or feature is
+missing, continue any independent work and report the unmet requirement.
+A different route requires its own authority. A host denial ends that action.
+
+The local host ledger is append-only. The supervisor runs deterministic checks
+and obtains any required independent review before recording an explicit verdict
+with `agents-inc ledger append --node-id <id> --verdict pass|fail`.
+
+| Route | Host ledger evidence |
+|---|---|
+| Claude Agent/Task | Tool-call ID, task description, requested or host-resolved model, agent ID when supplied, foreground return, and any final-request token counts. A background launch alone stays dispatched. |
+| Claude registered guest | Guest lifecycle records include the model, task, available usage and end status, including aborts when reported. |
+| Codex native | Trusted `SubagentStart` and `SubagentStop` hooks record the host agent ID, session, model and observed state where provided. These events lack the task brief and run-wide usage. A missing stop remains pending. |
+| Gemini native | Use the host's own evidence. Agents-inc installs no native lifecycle recorder for Gemini. |
+
+A return does not set a verification verdict. Hosts that skip a hook can leave
+an incomplete record. Claude's final-request usage stays separate from totals.
+See the [Codex hook event reference](https://learn.chatgpt.com/docs/hooks) and
+[Claude Code hook reference](https://code.claude.com/docs/en/hooks#agent).
+
 ## System
 
 - Delegation system

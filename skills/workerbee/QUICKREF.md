@@ -1,18 +1,22 @@
 # workerbee quick reference
 
-Short form of `SKILL.md` for routine dispatch. Read the full `SKILL.md` and `skills/codex-bridge/SKILL.md` only when you dispatch to a non-Claude rung, write a dispatch prompt from scratch, or a gate result is in dispute.
+## Choose a route
 
-## Before any dispatch
-
-The supervisor proceeds with work already authorized by the operator. Do not ask the operator to reconfirm routine choices, retries within scope, or reversible work. Use the host harness for any permission it requires; respect denials and report blockers. A missing delegate grant is handled by the supervisor within existing authority.
-
-1. Dispatch gate (D78). Estimate the direct tool calls the task needs. Three or fewer that write nothing: do it yourself. Three or fewer that edit files: a native workhorse subagent with a short brief (Claude Code: `Agent` with model `sonnet`; Codex: its native subagent), then run one check yourself, because no harness ran gates. Anything larger: `agents-inc dispatch`. Exceptions that send a small task to `agents-inc dispatch`: one of three or more parallel tasks, large output you should not hold, or code work under a repo dispatch policy. Bare-API wrappers (`gask.sh`, `mask.sh`, `oask.sh`) have no filesystem, shell or repo access. Paste real source into the prompt or pick a delegate that has them.
-2. Vendor gate picks the rung; item 4a picks the route. Naming a model chooses the rung, not the route. The `Agent` tool is only for read-only foreground scouts (Explore, Plan) and the item 1 native edit; the agent gate in enforce mode blocks every other use, the native edit included (D61, D78). Claude is the default vendor. Codex (astra, sol, terra, luna), Gemini, Mistral and OpenRouter open only when the operator names one, a stated capability needs it, or the operator declared budget mode (free grunts only). State one line: `vendor gate: <gate> -> <delegate>`.
-3. Chain resolves by ladder (D46): higher rung manages; same rung, ask the operator one question. State the chain only when surprising.
-
-4. Dispatch through `agents-inc dispatch --slots <json> --model <slug>` (D47). The CoS writes the slots file and pastes nothing: the command renders, lints, snapshots, launches, and verifies, and returns one status line. Files stay in the run directory.
-4a. Route in Claude Code with the agents-inc mod: native agent types (D79, proposed). Claude rung: Agent with `model`. Codex or free model: Agent `subagent_type: agents-inc:<nickname>`; the delegate pane and `agents-inc native status` list the registered types. The brief is the Agent prompt (item 4 fields still apply); the parent verifies the report. The relay type, `mcp__agents-inc__run` and `@alias` routes exist only after `agents-inc install --legacy-routes`. Use Bash `agents-inc dispatch --slots` when the mod is absent, and for scripts, CI and broker Workers.
-5. Fan-out (D48): slots carry `FAN_OUT: width <n>, total <n>, depth <n>` (default by rung: Executive and Orchestrator 3/6/2, Workhorse 2/4/1, Grunt 0); Workers <= floor(20 / findings cap); report line `WORKERS SPAWNED: n`.
+1. Keep routine reads and short sequential work local where policy permits.
+2. Check task authority and provider eligibility (vendor gate). Resolve the
+   requested model in the current host. Prefer its native subagent tool when
+   offered and allowed. Codex uses governed dispatch only for authorized Claude
+   integration tests. Claude Code uses Agent with its own model or a registered
+   guest type (`agents-inc native status`), subject to the agent gate. Use Gemini
+   native delegation only if offered in the session.
+3. Brief the task, authorized scope, relevant context, acceptance check and
+   report format. Start independent native reviews with a fresh context. Reuse
+   the same agent for related work and send only what changed.
+4. Let the host request permissions when required. Authorized routine work
+   proceeds without another operator confirmation. Respect denials. When a
+   delegate is unavailable, continue independent work and report unmet reviews.
+5. Use governed dispatch for authorized cross-provider work, scripts and broker
+   Workers. Apply the slot contract below. No paid API fallback.
 
 ## Ladder
 
@@ -25,7 +29,7 @@ The supervisor proceeds with work already authorized by the operator. Do not ask
 
 The supervisor derives authority from the operator’s instruction or a trusted explicit declaration, records the intended scope in the dispatch, and sets `TASK_ACCESS` to `read` or `write`. A model or delegate cannot grant itself authority. `TASK_ACCESS: read` denies worker workspace writes; supervisor gates still run on the host; `TASK_ACCESS: write` requires FILES_IN_SCOPE. Existing slots without TASK_ACCESS keep their legacy permissions. The snapshot checks write scope after execution; it is not a filesystem sandbox.
 
-Roles by rung per D78. Table shows shipped defaults; operator's `roles` settings win where they differ (D80); `agents-inc doctor` prints effective values. The executive (the session that talks to the operator) delegates any task a well-briefed orchestrator or workhorse delegate can do. Pick the cheapest rung that will not get the answer wrong. Escalate on evidence of failure. State the effort level on every dispatch (default medium; `ultra` only if the operator names it).
+Roles by rung per D78. Table shows shipped defaults; operator's `roles` settings win where they differ (D80); `agents-inc doctor` prints effective values. Pick the least expensive eligible rung that can do the task. Escalate on evidence of failure. State the effort level on every dispatch (default medium; `ultra` only if the operator names it).
 
 ## Verification
 
@@ -33,7 +37,7 @@ Roles by rung per D78. Table shows shipped defaults; operator's `roles` settings
 - The supervisor owns the verifier. Do not let a delegate grade its own work.
 - Unknown is not zero. Leave an unestablished price or count absent.
 - Poll every dispatch that outlives one tool call. Exit codes: 0 green, 1 red, 2 child usage and free-run precheck refusals (`refused-*`), 3 other refusals, 4 unverified (nothing was measured: no gates, gate not runnable, scope changed, or the delegate declared a stop: `delegate-stopped`), 69 blocked, 75 quota-paused, 130 cancelled. `scope-foreign-change`: a path outside FILES_IN_SCOPE changed during the run, author unknown (`attribution=unknown`); the run is unverified, not red.
-- Trust a green gate, not a green report. `outcome=green` with GATES means dispatch already ran each GATES command and it exited as expected; do not re-run it. Verify by reading the delegate's diff and output against the TASK. Re-run only when the outcome is `unverified` (no GATES) or in dispute.
+- Treat a native return as unverified until the supervisor checks it. A green governed gate means the harness ran the check. `outcome=green` with GATES means dispatch already ran each GATES command and it exited as expected; do not re-run it. Verify by reading the delegate's diff and output against the TASK. Re-run only when the outcome is `unverified` (no GATES) or in dispute.
 - Routine slot files need 8 slots: ROLE, TASK, CONSTRAINTS, OUT_OF_SCOPE, FILES_IN_SCOPE, STOP_RULE, SUCCESS_GATE, FAILURE_GATE, plus GATES: a JSON list of `{"argv": [...], "cwd": ".", "timeout_s": 600, "expect_rc": 0}` objects (only `argv` required) or plain command strings, for example `["python3 -m unittest tests.test_x"]`. The renderer fills ALLOWLIST, CLASSIFICATION, EFFORT, SECOND_OPINION, PLAN_CONTRACT and PRE_EXISTING_CHANGES with Worker defaults (the last one keeps a `<snapshot>` placeholder that dispatch replaces after capture); set them only when the default is wrong (a Lead, confidential input, a plan deliverable).
 - The slots file is `dispatch_record.v1` (`scripts/dispatch_schema.py`): `FILES_IN_SCOPE` and `ALLOWLIST` may be arrays, `FAN_OUT` an object `{width, total, depth}`; the string forms still work and stderr prints `normalized: <fields>`. A bad type or enum exits 2, and the renderer always adds a `STOP ON BLOCK:` line after CONSTRAINTS.
 - CLASSIFICATION values: public, internal, confidential.
@@ -53,7 +57,6 @@ Grunt prompts also carry `FILES IN SCOPE:` and a numeric `STOP RULE:`. Every pro
 
 MUST lines that are easy to drop:
 
-- State out loud which Step 0 exception you are using, when you use one.
 - Caveman absent or unreadable: the prompt says `caveman NOT installed -> checked by hand`; an unreadable skill file gets `caveman unreadable -> checked by hand` and is not a block.
 - Sub-delegation follows D46 ruling 3. A Lead on the Executive or Orchestrator rung may sub-delegate to any lower rung, only via `agents-inc dispatch`; never the Agent tool (D59). A Workhorse delegate sub-delegates only to the Grunt rung, with an enumerated allowlist. A Grunt never sub-delegates. The delegate echoes `SUB-DELEGATE MODEL: <slug> -- allowlist match: yes` before any nested call.
 - `LESSON-CANDIDATE` relays one level up the chain, never skipping. A scout check for duplicates and contradictions runs before it reaches the Executive. Only the Executive presents it to the operator.
@@ -75,7 +78,7 @@ Bulk findings travel by file path; the hand-back carries counts only. See specki
 - Permission classifier blocks a dispatch: report it, do not rephrase around it.
 - Sandboxed Claude Code session: two routes (D71). (a) One plain command as the whole Bash call, with `"agents-inc dispatch *"` in `sandbox.excludedCommands` (`agents-inc repair --yes` adds it) (doctor warns `WB_SANDBOX_EXCLUDE_MISSING`). (b) `sandbox.network.allowedDomains ["api.anthropic.com"]` in `~/.claude/settings.json` lets Claude rungs run inside the sandbox (doctor warns `WB_SANDBOX_API_DOMAIN_MISSING`); Codex rungs need route (a). Auto mode denies the agent those settings edits, so hand back to the operator with the exact ask before dispatching.
 - Dispatch exits 69 with `detail=caller-sandboxed` (or `caller-sandboxed-codex`): the sandbox blocks the provider API. Compound markers that void route (a): `cd`, `&&`, `;`, `|`, redirect `>`, heredoc `<<`, `$(...)`, and an env prefix; the hook denies such a compound `agents-inc` call. Write slots in one call, dispatch in the next. Auto mode refuses `dangerouslyDisableSandbox`. Never retry unchanged (D65, D66, D71).
-- Harness "requires approval" on a delegate call is a missing grant (#54, D58), not a policy refusal: stop, record the exact command, hand back, never route around it. One plain command per Bash call (no `cd`, `&&`, `;`, pipes, loops, shell variables); a compound command matches no grant.
+- For a required approval, use the host's approval flow. Proceed when granted. On denial, report the blocked step and continue independent work.
 - Workers inherit operator hooks. A hook that needs host state must check `AGENTS_INC_WORKER` and write only under `$TMPDIR`; agents-inc does not change operator hooks.
 - Operator changes the premise: stop the running delegate first.
 

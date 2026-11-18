@@ -59,35 +59,41 @@ Restart Claude Code (and Codex, if used) after the install. `agents-inc install 
 
 `agents-inc install` adds these hooks to `~/.claude/settings.json`, plus `"agents-inc dispatch *"`, `"agents-inc run *"`, `"agents-inc repair *"` and `"agents-inc install *"` under `sandbox.excludedCommands` so a sandboxed Bash can start a dispatch (each delegate and each gate still gets its own `sandbox-exec`). It prints the entries first and asks before writing; `--yes` skips the question, and with no terminal and no `--yes` it writes nothing and prints the command to run. `--no-sandbox-exclude` leaves the exclusion out. `repair` replaces an older `"agents-inc *"` entry with the narrow ones. `agents-inc unwire` removes only these entries.
 
-- `SessionStart`: loads the delegation mandate into each session.
-- `PreToolUse` on `Agent`/`Task`, dispatch-shaped `Bash` and `DelegateAgent`: adds a routing nudge, warns on duplicate dispatches, blocks persona impersonation, and runs the agent gate.
-- `PostToolUse` on `Agent`/`Task`: marks the dispatch done.
-- `UserPromptSubmit`: routes `@alias` side questions. Only with `--legacy-routes` (see below).
+- `SessionStart` gives Claude Code and Codex host-specific routing guidance.
+- Claude Code's `PreToolUse` hook checks Agent/Task routing, prevents persona
+  impersonation, and warns about duplicate delegations. The `PostToolUse` hook
+  records the result and releases the foreground task's duplicate claim.
+- Codex's `SubagentStart` and `SubagentStop` hooks record observed lifecycle
+  events when the host runs trusted hooks.
+- Claude Code's `UserPromptSubmit` hook routes `@alias` questions with
+  `--legacy-routes`.
 
-**Agent gate.** Claude's `Agent` tool skips agents-inc routing, prompt lint, the ledger and verification. The gate decides what happens to those calls.
+### Choose the route in your host
 
-| Mode | Effect |
+| Host | Route |
 |---|---|
-| `advisory` (default) | Nothing is blocked. The session sees a nudge toward `agents-inc dispatch`. |
-| `enforce` | Blocks every `Agent`/`Task` call except foreground `Explore`, `Plan`, `claude-code-guide` and `statusline-setup`. Background runs are always blocked. |
-| `off` | Same as advisory. Doctor reports it as off. |
+| Codex | Use a native subagent when the session offers the requested model and permits delegation. Reserve agents-inc dispatch in Codex for authorized Claude integration tests. |
+| Claude Code | Use Agent for an offered Claude model when the agent gate permits it. With the mod, use Agent with a registered guest type such as `agents-inc:luna` for an authorized cross-provider task. Check `agents-inc native status`. |
+| Gemini | Use a native subagent if the current session offers it and permits the task. |
+| Scripts and broker Workers | Use governed `agents-inc dispatch` within the existing grants. |
 
-- Switch mode: `agents-inc repair --agent-gate enforce|advisory|off`. The choice lives in `~/.config/agents-inc/settings.json`.
-- One session only: launch with `AGENTS_INC_AGENT_GATE=off claude` (or `enforce`).
-- Check: `agents-inc doctor` prints `agent gate: <mode> (<source>)`.
-- Remove every agents-inc hook: `agents-inc unwire`. Other hooks stay. `agents-inc repair` adds them back.
+Resolve the requested model against the host's current catalog. Keep the brief
+and file scope small. Let the host handle required approvals and continue
+independent work if a delegate is unavailable or denied. Verify the result before
+accepting it. The [routing and ledger guide](docs/HOW-IT-WORKS.md#native-delegation)
+describes what each host records.
 
-**The route: native agent types.** With the agents-inc mod, Claude Code lists each delegate model as its own subagent type, such as `agents-inc:luna` or `agents-inc:gemini-flash`. Call it with the `Agent` tool like any subagent; its transcript is the normal subagent view, and the delegate pane lists the registered types and this session's native agents. `agents-inc native status` shows which types are offered and why. `agents-inc dispatch` stays as a command for scripts, CI and broker Workers.
+**Claude agent gate.** The default `advisory` mode allows host-permitted
+Claude Agent calls. `off` also leaves these calls to the host. `enforce`
+allows the foreground types `Explore`, `Plan`, `claude-code-guide`, and
+`statusline-setup`, plus the registered agents-inc types. All modes retain
+the persona guard. Check the effective mode with `agents-inc doctor` and
+configure it with `agents-inc repair --agent-gate enforce|advisory|off`.
 
-The older routes (the `agents-inc:relay` type, the `mcp__agents-inc__run` tool and `@alias` side questions) are off by default. `agents-inc install --legacy-routes` (or `repair --legacy-routes`) keeps them; the choice is stored in `~/.config/agents-inc/settings.json`, so a later plain `repair` keeps it, and `--no-legacy-routes` turns them off again. This change is proposed in D79 and awaits operator acceptance.
-
-**Using agents-inc without the gate.**
-
-- Use `Agent` only for read-only, foreground scouts.
-- Send anything that writes files, runs long, nests or belongs in the ledger through `agents-inc dispatch`.
-- Naming a model chooses the rung, not the route. "Use sonnet" still means `agents-inc dispatch --model sonnet`.
-- Subagents get no SessionStart mandate. If an `Agent` prompt may delegate, say in it: sub-delegate only via `agents-inc dispatch`.
-- Verify what an `Agent` call returns yourself, as for any delegate.
+The relay type, `mcp__agents-inc__run` and `@alias` are optional legacy routes.
+Enable them with `agents-inc install --legacy-routes` or
+`agents-inc repair --legacy-routes`. Repair preserves that choice unless
+you pass `--no-legacy-routes`.
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
 
@@ -108,10 +114,10 @@ The higher rung manages and the lower rung reports to it, so opus is the Lead an
 | Workhorse | sonnet | terra | Normal coding, research, synthesis |
 | Grunt | haiku | luna | Classify, extract, summarize, or make task-authorized edits; free Gemini, Mistral and OpenRouter models enter only here |
 
-The CoS then runs one command. It renders the prompt, lints it, snapshots the tree, launches the delegate and checks the report:
+For governed dispatch, the CoS uses one command to render and lint the brief, snapshot the tree, launch the delegate and run the checks:
 
 ```bash
-agents-inc dispatch --slots slots.json --model sonnet --dry-run   # drop --dry-run to launch
+agents-inc dispatch --slots slots.json --model sonnet --dry-run
 agents-inc models chain supervisor=opus                            # change the default REPORTING CHAIN
 ```
 

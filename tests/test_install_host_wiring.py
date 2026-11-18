@@ -35,9 +35,10 @@ class ManagedBlockTextTest(unittest.TestCase):
 
     def test_block_carries_each_ruling_from_role_defaults(self):
         from agents_inc import role_defaults
-        for line in (role_defaults.ROUTE_LINE, role_defaults.EXECUTIVE_LINE, role_defaults.ROLES_LINE, role_defaults.GATE_LINE):
+        for line in (role_defaults.ROUTE_LINE, role_defaults.EXECUTIVE_LINE, role_defaults.ROLES_LINE):
             self.assertIn(f"- {line}", self.body)
-        self.assertIn("session hook supplies health status and the quick reference", self.text)
+        self.assertIn(role_defaults.GATE_LINE, self.text)
+        self.assertIn(role_defaults.HOST_AUTHORITY_LINE, self.text)
         self.assertNotIn("Launcher:", self.text)  # SessionStart prints launcher and health
 
     def test_block_is_smaller_than_before(self):
@@ -60,13 +61,12 @@ class RoleDefaultsTest(unittest.TestCase):
         self.assertIn("writes", role_defaults.RUNG_ROLES["workhorse"])
         self.assertEqual(role_defaults.RUNG_ROLES["executive"], "judgment only")
 
-    def test_gate_line_has_three_outcomes(self):
+    def test_gate_line_guides_routine_reads_and_native_edits(self):
         from agents_inc import role_defaults
         gate = role_defaults.GATE_LINE
-        self.assertIn("no writes: do it yourself", gate)
-        self.assertIn("with edits: native workhorse subagent", gate)
-        self.assertIn("one check yourself", gate)
-        self.assertIn("`agents-inc dispatch`", gate)
+        self.assertIn("routine reads", gate)
+        self.assertIn("native workhorse subagent", gate)
+        self.assertIn("Verify the result yourself", gate)
 
 
 class HostWiringTest(unittest.TestCase):
@@ -112,6 +112,12 @@ class HostWiringTest(unittest.TestCase):
         self.assertEqual(config["hooks"]["PreToolUse"][0]["matcher"], "Agent|Task")
         codex = json.loads((self.home / ".codex/hooks.json").read_text())
         self.assertNotIn("PreToolUse", codex["hooks"])  # nudge is Claude-only
+        for event in ("SubagentStart", "SubagentStop"):
+            self.assertEqual(len(codex["hooks"][event]), 1)
+            self.assertIn("hook native-observed --host codex", codex["hooks"][event][0]["hooks"][0]["command"])
+        self.assertNotIn("PermissionRequest", codex["hooks"])
+        self.assertIn("Use Codex native subagents", (self.home / ".codex/AGENTS.md").read_text())
+        self.assertIn("Use Claude Code Agent", (self.home / ".claude/AGENTS.md").read_text())
         self.assertEqual(wiring_problems(self.paths), [])
 
     def test_gemini_reads_agents_md_and_keeps_existing_names(self):

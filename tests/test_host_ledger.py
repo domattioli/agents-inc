@@ -7,6 +7,7 @@ import io
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -54,6 +55,49 @@ class _Home(unittest.TestCase):
 
 
 class HookRowTest(_Home):
+    def test_claude_foreground_result_records_resolved_model_and_partial_usage(self):
+        payload = {**agent_payload(), "tool_response": {
+            "status": "completed", "resolvedModel": "claude-haiku-4-5", "agentId": "agent-1",
+            "usage": {"input_tokens": 12, "output_tokens": 4}, "totalDurationMs": 1250,
+            "content": [{"type": "text", "text": "self-reported pass"}],
+        }}
+        self.assertTrue(host_ledger.record_hook_dispatch(self.paths.state, payload))
+        row, = self.rows()
+        self.assertEqual((row["agent_id"], row["model"], row["seconds"]),
+                         ("agent-1", "claude-haiku-4-5", 1.25))
+        self.assertEqual(row["final_request_usage"], {"input_tokens": 12, "output_tokens": 4})
+        self.assertEqual(row["status"], "returned")
+        self.assertIsNone(row["input_tokens"])
+        self.assertIsNone(row["verdict"])
+        self.assertNotIn("self-reported pass", str(row))
+
+    def test_codex_observed_return_requires_an_explicit_verdict(self):
+        from agents_inc.install import hook
+
+        payload = {"session_id": "S1", "agent_id": "native-review", "agent_type": "review",
+                   "model": "gpt-6.2-sol", "last_assistant_message": "self-reported pass"}
+        now = datetime.now(timezone.utc)
+        timestamps = [(now + timedelta(seconds=i)).isoformat() for i in range(3)]
+        with mock.patch.object(ledger, "_now_iso", side_effect=timestamps):
+            for event in ("SubagentStart", "SubagentStop"):
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    raw = json.dumps({**payload, "hook_event_name": event})
+                    self.assertEqual(hook.run(self.paths, "native-observed", "codex", io.StringIO(raw)), 0)
+                self.assertEqual(json.loads(out.getvalue()), {})
+            self.assertEqual([row["status"] for row in self.rows()], ["dispatched", "returned"])
+            node = ledger.load(self.host_ws()).nodes["native-review"]
+            self.assertEqual((node.model, node.status, node.verdict), ("gpt-6.2-sol", "returned", None))
+            self.assertNotIn("self-reported pass", str(self.rows()))
+            self.assertEqual(self.run_cli("append", "--node-id", "native-review", "--verdict", "fail")[0], 0)
+        node = ledger.load(self.host_ws()).nodes["native-review"]
+        self.assertEqual((node.status, node.verdict), ("red", "fail"))
+
+    def test_codex_missing_stop_remains_pending_and_unknown_event_is_ignored(self):
+        payload = {"session_id": "S1", "agent_id": "interrupted-review", "hook_event_name": "SubagentStart"}
+        self.assertTrue(host_ledger.record_codex_subagent(self.paths.state, payload))
+        self.assertFalse(host_ledger.record_codex_subagent(self.paths.state, {**payload, "hook_event_name": "Interrupt"}))
+        self.assertIn("interrupted-review", self.run_cli("pending")[1])
+
     def test_native_luna_agent_call_gets_no_hook_row_and_other_types_still_do(self):
         # Spec 028 FR-026: `agents-inc luna begin` writes that agent's row; the hook would add a second, labelled claude.
         native = agent_payload("toolu_N1")

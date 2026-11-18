@@ -918,3 +918,25 @@ Spec 042 US5. The credential screen and the Bash hook each had gaps the red-team
 ### Task-specific grunt authority (2026-11-17)
 
 The operator removed the blanket read-only role for haiku and luna. A supervisor may assign edits when the operator authorizes the task, subject to the dispatch permissions, scope, verification and any explicit restrictive setting. Model rung alone does not grant authority. `grunt_read_only: true` remains an opt-in restriction; the default is false. This supersedes the grunt read-only default in D78 and D80. A trusted supervisor can set `TASK_ACCESS` to `read` or `write`; read denies worker workspace writes, and write requires scope. Legacy dispatches without this field retain their existing permissions. Scope is checked by the snapshot after execution, not confined by this declaration.
+
+
+## D89 — Prefer a host's native delegate where permitted (2026-11-17)
+
+Use the active host's offered model and native subagent tools for authorized
+work. The host owns permissions and lifecycle. The task defines authority.
+Keep Claude's explicit agent gate, role settings and guest eligibility, and
+preserve the broker rules from D59 for governed dispatch. This supersedes D78's
+dispatch-by-size rule for interactive native delegation and adopts D79's
+native entry points without requiring the mod for same-provider Claude agents.
+From Codex, reserve agents-inc dispatch for authorized Claude integration tests
+and use Haiku for any live Claude test.
+
+Use a separate authorized route only when policy permits it. Continue independent
+work when a model is unavailable, and report any required review still open. A
+host denial ends the denied action. Keep the root operator duty short. Its
+purpose is to prevent needless delay while honoring host controls and preserving
+existing work.
+
+Lifecycle records are observations. The supervisor still verifies and records
+an explicit verdict. Usage outside the evidence the host provides stays unknown.
+See the [native delegation guide](HOW-IT-WORKS.md#native-delegation).
