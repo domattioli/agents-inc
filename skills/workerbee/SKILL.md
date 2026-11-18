@@ -244,7 +244,7 @@ infer completion from a process exiting. **Exit 0 means returned, not
 verified** — keep those two states distinct or a crashed job reads as a
 success.
 
-To actually watch a job, use `scripts/watch.sh` in another pane. That stream
+To actually watch a job, use `skills/codex-bridge/scripts/watch.sh` in another pane. That stream
 goes to a human's eyes, not into a context window — which is also the only
 progress signal available to an operator who cannot read a test.
 
