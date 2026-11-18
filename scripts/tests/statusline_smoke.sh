@@ -144,7 +144,7 @@ for label in DSK RAM CPU GPU;do hasre "$base" "$label +([0-9][0-9]|--)" "$label 
 has "$base" 'EFF    HI' "EFF label + effort high = HI"
 has "$base" 'CTX    42' "CTX label + context 42"
 # Table labels: model names, sum rows, reset countdown (resets_at 0 is no data -> dash).
-for label in 'Fable 5.1' 'Opus 5.5' 'Sonnet 5.5' 'Haiku 4.5' 'GPT-6 Astra' 'GPT-6.1 Sol' 'GPT-6.1 Terra' 'GPT-6 Luna';do has "$base" "$label" "$label label";done
+for label in 'Fable 5.1' 'Opus 5.5' 'Sonnet 5.5' 'Haiku 4.5' 'GPT-6.2 Astra' 'GPT-6.2 Sol' 'GPT-6.1 Terra' 'GPT-6 Luna';do has "$base" "$label" "$label label";done
 has "$base" '5H —     Σ' "Claude 5H row: bar label, reset dash (resets_at 0), Σ"
 has "$base" '7D —     $' "Claude 7D row: bar label, reset dash (resets_at 0), \$"
 # Bar fill: 5 cells, n = (pct*5+50)/100, at least 1 when pct > 0. EFF high 60% = 3, Claude 5H 41% = 2,
@@ -163,8 +163,8 @@ has "$baseraw" $'\033[38;2;130;245;205mFable 5.1' "Fable 5.1 top-tier teal (raw)
 has "$baseraw" $'\033[38;2;112;213;186mOpus 5.5' "Opus 5.5 tier-2 teal (raw)"
 has "$baseraw" $'\033[38;2;95;182;167mSonnet 5.5' "Sonnet 5.5 tier-3 teal (raw)"
 has "$baseraw" $'\033[38;2;77;151;148mHaiku 4.5' "Haiku 4.5 tier-4 teal (raw)"
-has "$baseraw" $'\033[38;2;130;245;205mGPT-6 Astra' "GPT-6 Astra top-tier teal (raw)"
-has "$baseraw" $'\033[38;2;112;213;186mGPT-6.1 Sol' "GPT-6.1 Sol tier-2 teal (raw)"
+has "$baseraw" $'\033[38;2;130;245;205mGPT-6.2 Astra' "GPT-6.2 Astra top-tier teal (raw)"
+has "$baseraw" $'\033[38;2;112;213;186mGPT-6.2 Sol' "GPT-6.2 Sol tier-2 teal (raw)"
 has "$baseraw" $'\033[38;2;95;182;167mGPT-6.1 Terra' "GPT-6.1 Terra tier-3 teal (raw)"
 has "$baseraw" $'\033[38;2;77;151;148mGPT-6 Luna' "GPT-6 Luna tier-4 teal (raw)"
 
@@ -303,8 +303,11 @@ has "$seededraw" $'\033[38;2;158;166;190m   42' "ANT 30D \$ 42 renders neutral C
 has "$seededraw" $'\033[38;2;90;181;241m  .20' "FREE 5H \$ .20 (old floor: CD) now paced: r 0.672 at permille 356 (raw)"
 # (4) OAI row label is ~ (estimated pricing); ANT keeps \$.
 hasre "$seeded" '7D +[0-9a-z—]+ +~ ' "OAI dollar row label is ~"
-# (5) Session under 30 min (12 min): SESS \$ renders CD.
-has "$seededraw" $'\033[38;2;128;128;136m    8' "ANT SESS \$ 8 in a 12 min session renders CD (raw)"
+# (5) SESS pace floor is 5 min (operator, 2026-11-18). 12 min (754 s): SESS \$ 8 is paced: d28 = 41.9, no history_days -> days 28, expected = 41.9*(754/3600)/672 = 0.01306, r = 628 -> permille 1000 -> 255;102;214.
+has "$seededraw" $'\033[38;2;255;102;214m    8' "ANT SESS \$ 8 in a 12 min session is paced, r 628 saturates (raw)"
+# 4 min (240 s) is under the floor: SESS \$ renders CD.
+jq '.cost.total_duration_ms=240000' "$SIDFIX" >"$WORK/sid4m.json"; run_case "$WORK/sid4m.json"
+has "$RAW" $'\033[38;2;128;128;136m    8' "ANT SESS \$ 8 in a 4 min session renders CD (raw)"
 # (e) Zero token cell stays dim and is left out of the rank set.
 has "$seededraw" $'\033[38;2;128;128;136m    0' "zero token cell is dim (raw)"
 # Rate-limit bars: Codex 5H 87% = 4 cells, Codex 7D 29% = 1 cell; Claude unchanged.
@@ -336,7 +339,7 @@ cp "$WORK/seed_keep.json" "$HOME/.claude/statusline-domi-cache.json"
 # ---- Pace colour of model cells (spec 043 Phase 6). Variant cache with a pace block per row.
 # Rows (pace usd_per_day 10, days 28 unless noted): expected 5H = 10*5/24 = 2.0833; 7D = 10*7 = 70; 28D = all_cost*28/hist_days = 84*28/60 = 39.2.
 # Fable 5H 0.5 (r .24 -> 0;224;255) 7D 70.0001 and 28D 39.2001 (r 1 -> 127;163;235); Opus 5H 2.0834 (r 1 -> 127;163;235), 7D 280 (r 4 -> 255;102;214), 28D 9.7 (r .247 -> 0;224;255);
-# Sonnet 5H 8.4 (r 4.03 -> 255;102;214), 7D 26 (r .371, permille 142 -> 36;207;250), 28D hist 20 -> neutral CN; Haiku null pace -> grey. SESS: 754 s -> grey (under 30 min).
+# Sonnet 5H 8.4 (r 4.03 -> 255;102;214), 7D 26 (r .371, permille 142 -> 36;207;250), 28D hist 20 -> neutral CN; Haiku null pace -> grey. SESS: 754 s (12 min, over the 5 min floor) is paced: Fable cost 6.4 vs 10*(754/3600)/24 = 0.0872 (r 73), Sonnet 1.3 (r 14.9), FREE 1.2 (r 13.8) all saturate -> 255;102;214.
 G=$'\033[38;2;128;128;136m'; Z=$'\033[0m'; C0=$'\033[38;2;0;224;255m'; C1=$'\033[38;2;127;163;235m'; C4=$'\033[38;2;255;102;214m'
 PACE_P='{usd_per_day:10,days:28,hist_days:60,all_cost:84,source:"own"}'
 jq "
@@ -347,15 +350,15 @@ jq "
  | .free_top4_d7[0] |= (.h5.equiv_cost=2.0834 | .pace=$PACE_P)" "$WORK/seed_keep.json" >"$WORK/pace.json"
 cp "$WORK/pace.json" "$HOME/.claude/statusline-domi-cache.json"; run_case "$SIDFIX"; pace_d=$DISPLAY; pace_raw=$RAW
 width_gate 148; sep_gate; border_gate
-has "$pace_raw" "${G} 7.7M${Z}${C0} 900k" "Fable 5H r 0.24 -> 0;224;255 (raw)"
+has "$pace_raw" "${C4} 7.7M${Z}${C0} 900k" "Fable 5H r 0.24 -> 0;224;255 (raw)"
 has "$pace_raw" "${G}    0${Z}${C1} 1.0M" "Opus 5H r 1 -> 127;163;235 (raw)"
-has "$pace_raw" "${G} 4.0M${Z}${C4} 2.5M" "Sonnet 5H r 4.03 -> 255;102;214 (raw)"
+has "$pace_raw" "${C4} 4.0M${Z}${C4} 2.5M" "Sonnet 5H r 4.03 -> 255;102;214 (raw)"
 has "$pace_raw" "${G}   4k${Z}${G}   4k" "Haiku null pace: 5H grey (raw)"
 has "$pace_raw" "${C1} 7.3M${Z}${C1}  20M" "Fable 7D r 1 and 28D r 1 (hist 60) -> 127;163;235 (raw)"
 has "$pace_raw" "${C4} .26B${Z}${C0}  50M" "Opus 7D r 4 -> 255;102;214, 28D r 0.247 -> 0;224;255 (raw)"
 has "$pace_raw" $'\033[38;2;36;207;250m  76M\033[0m\033[38;2;158;166;190m  10M' "Sonnet 7D r 0.371 -> 36;207;250, 28D neutral CN with history 20 (raw)"
 has "$pace_raw" "${G}  85M${Z}${G}  20M" "Haiku null pace: 7D and 28D grey (raw)"
-has "$pace_raw" "${G}  20k${Z}${C1}   1k" "FREE row paced like any other: 5H r 1 -> 127;163;235 (raw)"
+has "$pace_raw" "${C4}  20k${Z}${C1}   1k" "FREE row paced like any other: 5H r 1 -> 127;163;235 (raw)"
 has "$pace_raw" "${G} 3.4M${Z}${G} 9.0M" "OAI rows without a pace block: grey (raw)"
 lacks "$pace_d" legend "no legend on screen"
 # 1D uses hours since local midnight, floor 6: Fable 1D cost = 10*h/24*1.0001 -> r 1 -> 127;163;235.

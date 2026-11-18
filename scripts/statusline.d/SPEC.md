@@ -62,7 +62,7 @@ Skip the run when the cache file is < 60 s old AND its `session_id` matches.
   "provider_windows": {"claude": PW, "openai": PW, "free": PW}   # PW = {"h5": T, "d1": T, "d7": T, "d28": T, "all": T}, T = {"tokens": int|null, "cost": num|null}. All of the provider's rows, every model including ones without a model cell (retired ids). Same sources and cost model as claude_h5/claude_today/claude_d7/claude_all, openai_h5/openai_today/openai_total_d7/openai_all, free_windows/free_all (free cost = equiv_cost). d1 = local today; d28 = last 28 local days. null = unknown.
 }
 Labels (`models[id].label`, derived from the id; the renderer derives the same string itself): `claude-<family>-<major>[-<minor>]` -> "Fable 5.1", "Opus 5.5", "Opus 5", "Sonnet 5", "Haiku 4.5";
-`gpt-<version>[-<name>]` -> "GPT-6 Astra", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna". Any other id passes through (renderer cuts it to 13 columns).
+`gpt-<version>[-<name>]` -> "GPT-6 Astra", "GPT-6.2 Astra" (each id keeps its own label and row; a superseded id such as `gpt-6-astra` stays labeled and takes the same Executive rung colour), "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna". Any other id passes through (renderer cuts it to 13 columns).
 Ranking key = (`d28.tokens` desc, `all.tokens` desc, id); a pin outside the top 4 takes row 4 and sorts by the same key (low pin last); ids with 28D 0 (retired) drop out unless pinned. Σ/$ rows stay provider totals.
 
 ## Renderer layout
@@ -115,7 +115,7 @@ Branch colour: name only, by kind (table above). The git dirty and ahead counts 
   - Unchanged by the 2026-11-15 rulings (item 13).
 - Model cells in SESS, 5H, 1D, 7D, 28D (operator, 2026-11-15): colour = pace, "is this burning faster than normal". The number shown stays tokens; the colour input is API-equivalent dollars (about 96 percent of shown Opus tokens are cache reads).
   - Ratio `r` = cell cost / expected cost. Expected = `pace.usd_per_day` × window days, from the model's own 28-day rate (collector `pace` block: `usd_per_day`, `days`, `hist_days`, `all_cost`). FREE rows pace like any other row (`equiv_cost`, free `pace`).
-  - Window hours: SESS = session duration, `CD` under 30 min; 5H = 5, cost from `h5.cost` (an ended window gives 0, so `CD`); 1D = hours since local midnight, floor 6; 7D = min(168, `days` × 24).
+  - Window hours: SESS = session duration, `CD` under 5 min (operator, 2026-11-18; was 30 min; constant `PACE_SESS_FLOOR_S` in `statusline.sh`); 5H = 5, cost from `h5.cost` (an ended window gives 0, so `CD`); 1D = hours since local midnight, floor 6; 7D = min(168, `days` × 24).
   - 28D cell: expected = `pace.all_cost` × 28 / `pace.hist_days`; neutral `CN` when `hist_days` ≤ 28.
   - Mapping: permille = clamp(500 + 250 × log2 r, 0, 1000). r ≤ 0.25 cyan (0,224,255), r = 1 mid (127,163,235), r ≥ 4 magenta (255,102,214).
   - Zero, null or missing pace or cost render `CD`. A cache without the pace fields still renders (all such cells `CD`). Stale-cache dimming (trust rules) still applies.
@@ -126,7 +126,7 @@ Branch colour: name only, by kind (table above). The git dirty and ahead counts 
   - The fifth window label is `28D`, 28 calendar days. OpenAI 7D uses calendar days like Claude.
 - Dollar cells (operator chose the Opus design, 2026-10-02): colour = pace, each provider against its own 28-day rate. `$` values are API-equivalent figures, not money paid (plans: Claude $100, ChatGPT Plus $20 a month), and OAI uses a different pricing method from ANT, so cross-provider `$` comparison is not meaningful. A ratio against the provider's own baseline has no units, so the pricing bias cancels.
   - Baseline: `d28` = that provider's 28D cell (the collector's 28-day window). `days` = min(28, `history_days[provider]`), floor 1. Expected for a window = `d28 × window_hours / (days × 24)`. Without `history_days`, `days` = 28. (Third pass: dividing by 28 when history is shorter made every window read hot.)
-  - Window hours: 5H = 5. 7D = min(168, days × 24). 1D = hours since local midnight, floor 6. SESS = session duration (`cost.total_duration_ms`); a session under 30 min renders `CD`.
+  - Window hours: 5H = 5. 7D = min(168, days × 24). 1D = hours since local midnight, floor 6. SESS = session duration (`cost.total_duration_ms`); a session under 5 min renders `CD` (operator, 2026-11-18; was 30 min; same `PACE_SESS_FLOOR_S`).
   - Ratio `r = value / expected`. permille = clamp(500 + 250 × log2 r, 0, 1000): r ≤ 0.25 cyan, r = 1 mid, r ≥ 4 magenta.
   - 28D cell (operator, 2026-10-02, fifth pass): pace against the lifetime rate. Expected = ALL × 28 / `history_days`; r = 28D / expected; same log mapping. When `history_days` ≤ 28 (or unknown), 28D is most of ALL: neutral `CN`.
   - ALL cell (operator, 2026-10-02, sixth pass): log share across the 3 providers' ALL values, the same mapping as model cells (max magenta, max/1000 or less cyan). Applies to Σ and `$` ALL alike; OpenAI `$` is priced by category like Claude (spec 043 T025a); price tables still differ, so the `$` comparison is rough. Zero or missing renders `CD`.
