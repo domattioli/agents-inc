@@ -417,7 +417,7 @@ test('the step debug line carries the codex tool counts and the thread is per se
   await setup($, on, { agentId: 'g10', replies: [{ out: JSON.stringify({ say: 'x', tools: [] }), err: ['agents-inc run: tools {"request_user_input":2}'] }], logs, writes })
   await step($, 'g10')
   expect(logs.find(l => l.startsWith('agents-inc luna: step 0 of g10'))).toContain('codex_tools {"request_user_input":2}')
-  expect(writes).toEqual([]) // .prompt.txt only with AGENTS_INC_LUNA_DEBUG=1
+  expect(writes.filter(w => !w.endsWith('/handles.json'))).toEqual([]) // .prompt.txt only with AGENTS_INC_LUNA_DEBUG=1; handles.json is spec 048
 })
 
 test('begin runs once per agent before the first step and end adds a changed-tree line', async ($, on) => {

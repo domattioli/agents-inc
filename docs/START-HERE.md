@@ -126,6 +126,9 @@ and runs commands. The final answer is the same report you get without the mod.
 - **Stop a run:** stop the relay in Claude Code. Or run
   `agents-inc dispatch --cancel <run dir>` from a terminal.
 - **Manual install:** see `mods/agents-inc/README.md`.
+- **Handles:** a guest agent keeps its thread across a Claude Code restart. `agents-inc handles list`
+  shows each handle of the newest session, and `agents-inc handles retire <id>` ends one
+  (ask it for a handoff note first, then paste the note into a new Agent).
 
 - **Audience:** People who have not run the system before.
 - **Style:** Plain language; the other docs are compressed for experienced readers.
