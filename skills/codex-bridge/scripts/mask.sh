@@ -75,6 +75,7 @@ TIER="code"
 RAW=false
 AGENT=false
 RESET=false
+HANDLE=""
 MASK_TIMEOUT="${MASK_TIMEOUT:-180}"
 MASK_AGENT_TIMEOUT="${MASK_AGENT_TIMEOUT:-900}"
 PROMPT=""
@@ -105,6 +106,11 @@ while [[ $# -gt 0 ]]; do
       AGENT=true
       shift
       ;;
+    --handle)
+      [[ $# -ge 2 ]] || { echo "error: --handle requires an id" >&2; exit 2; }
+      HANDLE="$2"
+      shift 2
+      ;;
     --reset)
       RESET=true
       shift
@@ -127,6 +133,13 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# --handle gives one agent conversation its own id file; without it the legacy single id file stays in use.
+if [[ -n "$HANDLE" ]]; then
+  SAFE_HANDLE=$(printf '%s' "$HANDLE" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')
+  [[ -n "$SAFE_HANDLE" && "$SAFE_HANDLE" != "." && "$SAFE_HANDLE" != ".." ]] || { echo "error: invalid --handle" >&2; exit 2; }
+  CONVERSATION_FILE="$HOME/.codex-bridge/mistral-conversations/$SAFE_HANDLE"
+fi
 
 if [[ -z "$PROMPT" ]]; then
   PROMPT=$(cat)

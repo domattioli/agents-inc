@@ -2088,7 +2088,17 @@ def run(args) -> int:
     saved_handlers = _install_cancel_handlers()
     try:
         _start_run_record(run_dir, run_id, kind, model, effort, slots, slots_path, cwd)
-        code = _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, run_dir)
+        # Codex Desktop cannot write the private trust store and cannot nest the Codex sandbox.
+        # Diagnose the caller before pinning so this is not mislabeled as a snapshot failure.
+        where = caller_sandbox() if not _BROKER_SAFE_WRITES and not args.dry_run and kind in ("claude", "codex") else None
+        if where and where.startswith("CODEX_SANDBOX"):
+            spec = _read_run_json(run_dir) or {"run_id": run_id, "kind": kind, "model": model, "effort": effort,
+                                                "schema_version": 1, "cwd": str(cwd), "rc": None, "outcome": None,
+                                                "session_id": None}
+            code = _launch_failed(spec, run_dir, CallerSandboxed(where, CODEX_NESTED_FIX, "caller-sandboxed-codex"),
+                                  getattr(args, "home_repo", None))
+        else:
+            code = _run_dir_phase(args, model, kind, effort, slots, slots_path, cwd, run_id, run_dir)
         _ensure_return_row(run_dir, slots, code)
         outcome = _run_end_outcome(run_dir, code)
         return code
