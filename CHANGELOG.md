@@ -4,7 +4,42 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.7.0] — 2026-11-18
+
+### Added
+
+- `agents-inc doctor` and `agents-inc repair` report an outdated Codex or Claude Code CLI, and a model pin the installed CLI cannot run. The check looks up the latest CLI version at the npm registry and sends nothing that identifies you. Set `AGENTS_INC_NO_UPDATE_CHECK` to turn it off (spec 047).
+- `agents-inc dispatch --rules` lists the refusal rules. Every refusal names its rule, the value and the fix (spec 042).
+- The delegate pane (mod 0.5.0) draws a mission map: a vertical spine of CoS, Lead and primary Worker, six task-category stations, pulses that follow who started whom, a status line and a feed with a dim rung column, and a static text map on narrow panes (spec 039). The pane now opens at session start; `/delegate-pane` reopens it.
+- The delegate pane (mod 0.6.0) now holds the agents-manager delegation tree, new-agent form and message box beside the mission map, fed by one 1 s poll; on panes under 34 columns the form and message box sit behind one toggle line. The agents-manager mod and the native types list are gone. The installer installs only the delegate pane and removes `agents-manager` and a stale `luna-pane-local` entry when present; a second run changes nothing (spec 040). Upgrading from an earlier release takes two `agents-inc install` runs: the first runs the old installer and installs the new release, the second retires agents-manager and luna-pane.
+- Persistent delegate handles: a guest agent keeps one conversation across calls and across a Claude Code restart, per provider, and a restart sends only the new messages. `agents-inc handles list` shows the handles of the newest session and `agents-inc handles retire <id>` ends one (spec 048).
+
+### Changed
+
+- Behavior change for scripts that read exit codes: a write dispatch that changes nothing in scope while its gates pass now ends `unverified` with reason `no-changes` and exits 4. It used to end green (#202).
+- Dispatch, doctor and session checks report passed, failed or not checked. `unverified` exits 4 (spec 042).
+- `agents-inc models` exits 1 and prints `NOT-IN-CATALOG` for a pin that the CLI catalog does not list. Pins show `unchecked` when the installed CLI did not write the catalog.
+- Every dispatch prompt now carries a rewritten stop-on-block clause. A delegate never switches tools to get around a denied operation. It continues past incidental denials and reports them (#145).
+- The default pins `astra` and `sol` move to `gpt-6.2-astra` and `gpt-6.2-sol`. They need a Codex CLI that lists those models (0.170.0 was used).
+- Host-native delegation is the preferred route, and delegate guidance follows the host's permission flow. Task-scoped dispatch and the benchmark triage check are new (#206).
+- Status line SESS cells take a pace colour after 5 minutes of session time. The old threshold was 30 minutes. The status line also shows measured usage and marks a stale window with its age (spec 043).
+- Each role, rung and relation has one name in the docs and pane labels (spec 041).
+
+### Fixed
+
+- `agents-inc dispatch` from a folder outside git no longer stops with a raw git error. A read-only delegate runs with the snapshot skipped and the result reads `unverified` with reason `snapshot-skipped`; a delegate that can write is refused before launch with the fix (dispatch from a git repository, files in a git-ignored `.scratch/<task>/`). On this path the filesystem root, home and its parents, and folders inside a hidden folder at the top of home or `~/Library` are refused as cwd.
+- On that non-git path a read-only Claude delegate now starts with `claude --restricted`. The Claude CLI then refuses any Read, Glob or Grep outside the cwd, including absolute paths, `~` paths, `..` paths and symlinks inside cwd that point outside it. The flag also skips user, project and local settings files, so user hooks and user deny rules do not apply to that delegate. The Claude CLI itself still reads its own files (login, session history). A read-only Claude delegate in a git repository is unchanged.
+- The non-git path also refuses a cwd that is a mount point (a volume root such as `/Volumes/<disk>` or `/System/Volumes/Data`; subfolders stay allowed) and protects both the account-database home and `$HOME`. Because `--restricted` ignores the user's deny rules, dispatch now passes its own secret-file deny list (`.env` files, keys, `.netrc`, `.npmrc`, `.pypirc`, `credentials*`, `.aws`, `.ssh`, `.gnupg`) in a single `--settings` value for new runs and resumes. A resume takes the skip marker from the trusted record as well as run.json, and an unclear git answer refuses the resume.
+- After an install from a clean git checkout, uncommitted edits there no longer make the install stale and stop every dispatch; only `HEAD` moving to a commit whose bundle files differ does (commit, checkout, reset, branch switch). `install` and `repair` warn when they install uncommitted changes, note a `HEAD` that is not on a tag, and START-HERE describes the release-worktree setup (#174).
+- The delegate tool `DelegateAgent` reports a timeout as a timeout, with the thread id to resume, and a model the client rejects as a rejected model. Neither shows as a login failure now. Its description states that it is read-only.
+- Dispatch from inside a Codex or Claude Code sandbox ends `blocked` with a hint, before script pinning, in place of `snapshot-error` (#207).
+- The secret screen no longer refuses a quoted error after "the run failed" or "the run exited"; instructions inside quotes stay refused (#155).
+- Dispatch lints a free-model brief that promises web access (#87, #155), warns on an external-effect grant, and refuses a bad slots location in the same shape as other refusals (#135, #155).
+
+### Docs
+
+- New tagline. The release notes open with it.
+- The README gains a start-here line and a short illustration clip.
 
 ## [0.6.4] — 2026-11-12
 

@@ -22,7 +22,7 @@
   "agents": [
     {
       "id": "agent-supervisor-01",
-      "name": "Orchestrator Supervisor",
+      "name": "Supervisor",
       "type": "supervisor",
       "capabilities": [
         "extract.markdown",

@@ -99,7 +99,7 @@ class GrantsBase(unittest.TestCase):
 class ToolGrantTest(GrantsBase):
     def test_default_allow_and_deny_lists_are_exact(self):
         rc, out, _ = self._dispatch()
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         spec = self._spec()
         snap, run_dir = spec["snapshot"], self._run_dir()
         want = ["Read", "Glob", "Grep"]
@@ -220,7 +220,7 @@ class ToolGrantTest(GrantsBase):
         self.assertIsInstance(spec["allowed_tools"], list)
         self.assertIsInstance(spec["disallowed_tools"], list)
         self.assertEqual(spec["gate_results"][0]["rc"], 0)
-        self.assertEqual(set(spec["gate_results"][0]), {"argv", "cwd", "expect_rc", "rc", "excerpt", "network"})  # G: network opt-in recorded
+        self.assertEqual(set(spec["gate_results"][0]), {"id", "argv", "cwd", "expect_rc", "rc", "excerpt", "network", "state", "reason", "last_line"})  # G: network opt-in recorded; 042 verdict fields
 
     def test_dry_run_records_grants(self):
         rc, out, _ = self._main("--slots", str(self._slots(GATES=[{"argv": PASS}])), "--model", "haiku",
@@ -255,7 +255,7 @@ class GrantsSectionTest(GrantsBase):
 
     def test_prompt_lists_every_allowed_and_denied_rule(self):
         rc, out, _ = self._dispatch()
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         spec, prompt = self._spec(), self._prompt()
         self.assertIn(self.HEADER, prompt)
         for rule in spec["allowed_tools"] + spec["disallowed_tools"]:
@@ -294,7 +294,7 @@ class GrantsSectionTest(GrantsBase):
 
     def test_codex_prompt_has_no_grants(self):
         rc, out, _ = self._dispatch("terra")
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         self.assertNotIn("GRANTS (", self._prompt())
 
     def test_broker_child_prompt_has_grants(self):
@@ -303,7 +303,7 @@ class GrantsSectionTest(GrantsBase):
             rc, out, _ = self._dispatch()
         finally:
             dispatch._BROKER_SAFE_WRITES = False
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         self.assertIn(self.HEADER, self._prompt())
 
     def test_grants_section_mentions_acceptEdits(self):
@@ -469,7 +469,7 @@ class GateRunTest(GrantsBase):
     def test_passing_gate_is_green(self):
         rc, out, spec = self._gate_run([{"argv": PASS}])
         self.assertEqual((rc, spec["outcome"], spec["reason"]), (0, "green", None))
-        self.assertIn("outcome=green out=", out)
+        self.assertIn("outcome=green gates=1/1 claims=not-checked out=", out)
 
     def test_failing_gate_is_red_gate_failed(self):
         rc, out, spec = self._gate_run([{"argv": [sys.executable, "-c", "import sys;sys.exit(1)"]}])
@@ -489,7 +489,7 @@ class GateRunTest(GrantsBase):
         # D72: preflight normally refuses first; a binary that vanishes after preflight is still gate-missing.
         with mock.patch.object(dispatch, "capability_preflight", return_value=[]):
             rc, _, spec = self._gate_run([{"argv": ["/nonexistent/bin/xyz"]}])
-        self.assertEqual((rc, spec["outcome"], spec["reason"]), (1, "red", "gate-missing"))
+        self.assertEqual((rc, spec["outcome"], spec["reason"]), (4, "unverified", "gate-not-runnable"))
         self.assertIsNone(spec["gate_results"][0]["rc"])
         self.assertEqual(spec["gate_results"][0]["error"], "FileNotFoundError")
 
@@ -503,17 +503,17 @@ class GateRunTest(GrantsBase):
                                                    if a[0] == dispatch.SANDBOX_EXEC else real(a, *k, **kw))
             rc, _, spec = self._gate_run([{"argv": ["/nonexistent/bin/xyz"]}])
         self.assertFalse([c for c in run.call_args_list if c.args and c.args[0][0] == dispatch.SANDBOX_EXEC])
-        self.assertEqual((rc, spec["reason"]), (1, "gate-missing"))
+        self.assertEqual((rc, spec["reason"]), (4, "gate-not-runnable"))
         self.assertEqual(spec["gate_results"][0]["error"], "FileNotFoundError")
 
     def test_timeout_is_gate_missing(self):
         rc, _, spec = self._gate_run([{"argv": [sys.executable, "-c", "import time;time.sleep(5)"], "timeout_s": 0.5}])
-        self.assertEqual((rc, spec["reason"]), (1, "gate-missing"))
+        self.assertEqual((rc, spec["reason"]), (1, "gate-timeout"))
         self.assertEqual(spec["gate_results"][0]["error"], "timeout")
 
     def test_no_gates_is_unverified_exit_zero(self):
         rc, out, spec = self._gate_run(None)
-        self.assertEqual((rc, spec["outcome"], spec["reason"]), (0, "unverified", "no-gates"))
+        self.assertEqual((rc, spec["outcome"], spec["reason"]), (4, "unverified", "no-gates"))
         self.assertIn("outcome=unverified reason=no-gates", out)
         self.assertEqual(spec["gate_commands"], [])
         self.assertNotIn("gate_results", spec)
@@ -528,7 +528,7 @@ class GateRunTest(GrantsBase):
         marker = self.root / "marker"
         rc, out, spec = self._gate_run(None, FAILURE_GATE=f"any failure; `touch {marker}` must not run",
                                       SUCCESS_GATE=f"`touch {marker}` exits 0")
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         self.assertFalse(marker.exists())
 
     def test_excerpt_is_capped(self):
@@ -548,7 +548,7 @@ class GateRunTest(GrantsBase):
         spec = {"cwd": str(self.repo), "gate_commands": [{"argv": ["git", "push"], "cwd": ".", "timeout_s": 5,
                                                           "expect_rc": 0}]}
         results, reason = dispatch._run_gates(spec)
-        self.assertEqual((results[0]["rc"], results[0]["error"], reason), (None, "refused", "gate-missing"))
+        self.assertEqual((results[0]["rc"], results[0]["error"], reason), (None, "refused", "gate-refused"))
 
     def test_gate_cwd_link_planted_after_dispatch_is_refused(self):
         outside = self.root / "outside"
@@ -557,7 +557,7 @@ class GateRunTest(GrantsBase):
         spec = {"cwd": str(self.repo), "gate_commands": [{"argv": [sys.executable, "-c", "pass"], "cwd": "sub",
                                                           "timeout_s": 5, "expect_rc": 0}]}
         results, reason = dispatch._run_gates(spec)
-        self.assertEqual((results[0]["rc"], results[0]["error"], reason), (None, "cwd-outside", "gate-missing"))
+        self.assertEqual((results[0]["rc"], results[0]["error"], reason), (None, "cwd-outside", "gate-refused"))
 
     def test_broker_child_skips_gates(self):
         marker = self.root / "gate-ran"
@@ -568,7 +568,7 @@ class GateRunTest(GrantsBase):
         finally:
             dispatch._BROKER_SAFE_WRITES = False
         spec = self._spec()
-        self.assertEqual((rc, spec["outcome"], spec["reason"]), (0, "unverified", "gates-skipped-broker"))
+        self.assertEqual((rc, spec["outcome"], spec["reason"]), (4, "unverified", "gates-skipped-broker"))
         self.assertIsNone(spec["gate_results"])
         self.assertFalse(marker.exists())
 
@@ -602,7 +602,7 @@ class ResumeGateTest(GrantsBase):
         (run / "run.json").write_text(json.dumps(spec))
         with mock.patch.object(dispatch, "launch", side_effect=self._fake()):
             rc, out, _ = self._main("--resume", run.name, "--message", "go on", "--run-dir", str(self.runs))
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         self.assertIsNone(self.calls[-1]["allowed_tools"])
         self.assertIsNone(self.calls[-1]["disallowed_tools"])
         self.assertIn("unverified", out)
@@ -706,7 +706,7 @@ class BrokerGrantTest(GrantsBase):
         self.assertEqual(self._serve(), 0)
         res = self._result("g1")
         self.assertEqual((res["status"], res["dispatch_exit_code"], res["outcome"], res["reason"]),
-                         ("unverified", 0, "unverified", "gates-skipped-broker"))
+                         ("unverified", 4, "unverified", "gates-skipped-broker"))
         self.assertFalse(marker.exists())
         spec = json.loads((self.run_dir / "run.json").read_text())
         self.assertEqual(spec["request_counts"]["unverified"], 1)

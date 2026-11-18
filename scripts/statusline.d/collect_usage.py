@@ -13,10 +13,10 @@ import time
 DEFAULT_CONFIG = {
     # Padding roster only: the displayed rows are the top 4 exact model ids per provider by ALL-time tokens.
     "claude_models": ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"],
-    "openai_models": ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"],
+    "openai_models": ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna"],
     "subscriptions": {"claude": 100, "openai": 100},
     "prices_json": [os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "skills", "codex-bridge", "reference", "prices.json")],
-    "openai_price_estimates": {"gpt-6-astra": "claude-fable-5-1", "gpt-5.6-sol": "claude-opus-5", "gpt-5.6-terra": "claude-sonnet-5", "gpt-5.6-luna": "claude-haiku-4-5", "gpt-6.1-sol": "claude-opus-5", "gpt-6.1-terra": "claude-sonnet-5", "gpt-6-luna": "claude-haiku-4-5"},
+    "openai_price_estimates": {"gpt-6.2-astra": "claude-fable-5-1", "gpt-6-astra": "claude-fable-5-1", "gpt-5.6-sol": "claude-opus-5", "gpt-5.6-terra": "claude-sonnet-5", "gpt-5.6-luna": "claude-haiku-4-5", "gpt-6.2-sol": "claude-opus-5", "gpt-6.1-sol": "claude-opus-5", "gpt-6.1-terra": "claude-sonnet-5", "gpt-6-luna": "claude-haiku-4-5"},
     "free_price_estimate": "claude-haiku-4-5",
     "cum_default_estimate": "claude-sonnet-5",
     "usage_db": "~/.codex-bridge/usage.db",
@@ -24,8 +24,65 @@ DEFAULT_CONFIG = {
     "codex_config_toml": "~/.codex/config.toml",
     "codex_sessions_glob": "~/.codex/sessions/**/*.jsonl",
     "cache_path": "~/.claude/statusline-domi-cache.json",
-    "cache_ttl_s": 60
+    "cache_ttl_s": 60,
+    "gap_log": "~/.claude/statusline-domi.log"
 }
+
+def null_pace():
+    return {"usd_per_day": None, "days": None, "hist_days": None, "all_cost": None, "source": None}
+
+def compute_pace(mid, table, now):
+    """Pace baseline for one id. table: id -> (first_seen, d28_cost, all_cost). Own 28-day rate once the id has 7+ days
+    of history; else the summed history of its family (provider + stem, every id in the table); else all null."""
+    first = (table.get(mid) or (None, None, None))[0]
+    hist = (now - first) / 86400.0 if first else None
+    if hist is not None and hist >= 7:
+        days = max(1.0, min(28.0, hist))
+        d28c, allc = table[mid][1], table[mid][2]
+        return {"usd_per_day": (d28c / days) if d28c is not None else None, "days": days, "hist_days": max(0.0, hist),
+                "all_cost": allc, "source": "own"}
+    fam = parse_family(mid)
+    if not fam:
+        return null_pace()
+    members = [t for k, t in table.items() if (parse_family(k) or (None, None))[:2] == fam[:2]]
+    firsts = [t[0] for t in members if t[0]]
+    if not firsts:
+        return null_pace()
+    fhist = (now - min(firsts)) / 86400.0
+    days = max(1.0, min(28.0, fhist))
+    d28s = [t[1] for t in members if t[1] is not None]
+    alls = [t[2] for t in members if t[2] is not None]
+    return {"usd_per_day": (sum(d28s) / days) if d28s else None, "days": days, "hist_days": max(0.0, fhist),
+            "all_cost": sum(alls) if alls else None, "source": "family"}
+
+def _rollout_last_usage(path):
+    """Cumulative total_token_usage of the last token_count event, read from the file tail; None when absent or unreadable."""
+    try:
+        size = os.path.getsize(path)
+        chunk = 65536
+        with open(path, "rb") as f:
+            while True:
+                start = max(0, size - chunk)
+                f.seek(start)
+                lines = f.read(size - start).split(b"\n")
+                if start > 0:
+                    lines = lines[1:]
+                for line in reversed(lines):
+                    if b'"token_count"' not in line:
+                        continue
+                    try:
+                        o = json.loads(line)
+                    except Exception:
+                        continue
+                    pl = o.get("payload") or {}
+                    u = (pl.get("info") or {}).get("total_token_usage") if pl.get("type") == "token_count" else None
+                    if isinstance(u, dict):
+                        return u
+                if start == 0:
+                    return None
+                chunk *= 4
+    except Exception:
+        return None
 
 def empty_result(session_id="", now=None):
     if now is None:
@@ -39,10 +96,13 @@ def empty_result(session_id="", now=None):
             "label": label,
             "provider": prov,
             "session": {"tokens": None, "cost": None},
+            "h5": {"tokens": None, "cost": None},
             "d1": {"tokens": None, "cost": None},
             "d7": {"tokens": None, "cost": None},
             "d28": {"tokens": None, "cost": None},
-            "all": {"tokens": None, "cost": None}
+            "all": {"tokens": None, "cost": None},
+            "first_seen": None,
+            "pace": null_pace()
         }
         
     return {
@@ -61,6 +121,8 @@ def empty_result(session_id="", now=None):
         "openai_today": {"tokens": 0, "cost": None},
         "claude_h5": {"tokens": 0, "cost": None},
         "openai_h5": {"tokens": 0, "cost": None},
+        "openai_gaps": None,
+        "gap_logged": None,
         "free_top4_d7": [],
         "cum_use": {"tokens": 0, "cost": None},
         "claude_all": {"tokens": 0, "cost": None},
@@ -107,9 +169,14 @@ def strip_model_version(model_id):
         return "-".join(parts[:-1])
     return model_id
 
+_NORM_CACHE = {}
+
 def normalize_model(model_id):
     """Exact version id: only a trailing 8-digit date suffix is dropped. Versions are never merged."""
-    return strip_model_version(model_id)
+    r = _NORM_CACHE.get(model_id, _NORM_CACHE)
+    if r is _NORM_CACHE:
+        r = _NORM_CACHE[model_id] = strip_model_version(model_id)
+    return r
 
 def clean_current_id(model_id):
     """Harness model id -> exact id (drop a trailing [1m]-style tag and date suffix)."""
@@ -147,30 +214,88 @@ def read_codex_model(path):
     return None
 
 def pick_rows(candidates, all_tokens, pin, n=4, recent_tokens=None):
-    """Top n ids by ALL tokens, then id (operator ruling 2026-11-09). A pin outside the top n replaces row n.
-    recent_tokens is accepted for callers but unused."""
-    ranked = sorted(candidates, key=lambda m: (-(all_tokens.get(m) or 0), m))
-    top = ranked[:n]
+    """Top n ids by key (28-day tokens desc, ALL tokens desc, id). recent_tokens = 28-day tokens per id.
+    A pin outside the top n replaces row n. Output order uses the same key, so a low pin sorts last."""
+    d28 = recent_tokens or {}
+    def key(m):
+        return (-(d28.get(m) or 0), -(all_tokens.get(m) or 0), m)
+    top = sorted(candidates, key=key)[:n]
     if pin and pin in candidates and pin not in top:
         top = top[:n - 1] + [pin]
-    return sorted(top, key=lambda m: (-(all_tokens.get(m) or 0), m))  # every shown row, pin included, descends by all-time tokens
+    return sorted(top, key=key)
 
-def calculate_cost(model_id, usage_dict, prices):
-    base_id = strip_model_version(model_id)
-    pinfo = prices.get(model_id) or prices.get(base_id)
-    if not pinfo:
+_FAMILY_STEMS = ("fable", "opus", "sonnet", "haiku", "astra", "sol", "terra", "luna")
+
+def parse_family(model_id):
+    """(provider, stem, (major, minor)) for claude-<stem>-N[-M] and gpt-N[.M]-<stem> with a known stem; else None.
+    The family is provider + stem across versions: gpt-5.6-sol and gpt-6.1-sol are one family."""
+    mid = strip_model_version(model_id or "")
+    m = re.match(r"^claude-([a-z]+)-(\d+)(?:-(\d+))?$", mid)
+    if m and m.group(1) in _FAMILY_STEMS:
+        return ("claude", m.group(1), (int(m.group(2)), int(m.group(3) or 0)))
+    m = re.match(r"^gpt-(\d+)(?:\.(\d+))?-([a-z0-9]+)$", mid)
+    if m and m.group(3) in _FAMILY_STEMS:
+        return ("openai", m.group(3), (int(m.group(1)), int(m.group(2) or 0)))
+    return None
+
+def _priced_entry(prices, model_id):
+    p = prices.get(model_id) or prices.get(strip_model_version(model_id))
+    return p if isinstance(p, dict) and p.get("input") is not None else None
+
+_PRICE_CACHE = {}
+
+def price_for(model_id, prices, estimates=None):
+    """Memoized per (prices, estimates, id) object identity: the collector prices ~300k usage rows per run."""
+    key = (id(prices), id(estimates), model_id)
+    hit = _PRICE_CACHE.get(key)
+    if hit is None:
+        hit = _PRICE_CACHE[key] = _price_for(model_id, prices, estimates)
+    return hit
+
+def _price_for(model_id, prices, estimates=None):
+    """(price_dict, source): exact | family:<id> | estimate:<id> | (None, None).
+    Family = nearest priced version at or below the id's, else the lowest priced version above (same provider and stem)."""
+    if not model_id or not isinstance(prices, dict):
+        return (None, None)
+    p = prices.get(model_id) or prices.get(strip_model_version(model_id))
+    if p:
+        return (p, "exact")
+    fam = parse_family(model_id)
+    if fam:
+        below, above = [], []
+        for pid, pv in prices.items():
+            f = parse_family(pid)
+            if f and f[:2] == fam[:2] and isinstance(pv, dict) and pv.get("input") is not None:
+                (below if f[2] <= fam[2] else above).append((f[2], pid, pv))
+        pick = max(below, key=lambda t: t[0]) if below else (min(above, key=lambda t: t[0]) if above else None)
+        if pick:
+            return (pick[2], "family:" + pick[1])
+    mapped = estimates.get(model_id) if isinstance(estimates, dict) else None
+    if mapped:
+        p = _priced_entry(prices, mapped)
+        if p:
+            return (p, "estimate:" + mapped)
+    return (None, None)
+
+_RATE_CACHE = {}
+
+def calculate_cost(model_id, usage_dict, prices, estimates=None):
+    key = (id(prices), id(estimates), model_id)
+    rates = _RATE_CACHE.get(key, _RATE_CACHE)
+    if rates is _RATE_CACHE:
+        pinfo, _src = price_for(model_id, prices, estimates)
+        try:
+            rates = _RATE_CACHE[key] = (float(pinfo.get("input", 0)), float(pinfo.get("output", 0)),
+                                        float(pinfo.get("cache_read", 0)), float(pinfo.get("cache_write", 0))) if pinfo else None
+        except Exception:
+            rates = _RATE_CACHE[key] = None
+    if rates is None:
         return None
     try:
-        i = usage_dict.get("input_tokens", 0) or 0
-        o = usage_dict.get("output_tokens", 0) or 0
-        cr = usage_dict.get("cache_read_input_tokens", usage_dict.get("cache_read", 0)) or 0
-        cw = usage_dict.get("cache_creation_input_tokens", usage_dict.get("cache_write", 0)) or 0
-        
-        cost_i = (i / 1_000_000.0) * float(pinfo.get("input", 0))
-        cost_o = (o / 1_000_000.0) * float(pinfo.get("output", 0))
-        cost_cr = (cr / 1_000_000.0) * float(pinfo.get("cache_read", 0))
-        cost_cw = (cw / 1_000_000.0) * float(pinfo.get("cache_write", 0))
-        return cost_i + cost_o + cost_cr + cost_cw
+        g = usage_dict.get
+        return ((g("input_tokens", 0) or 0) * rates[0] + (g("output_tokens", 0) or 0) * rates[1]
+                + (g("cache_read_input_tokens", g("cache_read", 0)) or 0) * rates[2]
+                + (g("cache_creation_input_tokens", g("cache_write", 0)) or 0) * rates[3]) / 1_000_000.0
     except Exception:
         return None
 
@@ -191,6 +316,92 @@ def parse_iso_to_epoch(iso_str):
         return int(dt.timestamp())
     except Exception:
         return None
+
+def _rollout_events(path):
+    """[(epoch, usage)] of cumulative token_count events; raises on a corrupt line."""
+    ev = []
+    with open(path, "rb") as f:
+        for line in f:
+            if b'"token_count"' not in line:
+                continue
+            o = json.loads(line)
+            pl = o.get("payload") or {}
+            if pl.get("type") != "token_count":
+                continue
+            u = (pl.get("info") or {}).get("total_token_usage")
+            ts = parse_iso_to_epoch(o.get("timestamp"))
+            if isinstance(u, dict) and ts:
+                ev.append((ts, u))
+    return ev
+
+def _cum(ev, limit, strict):
+    last = None
+    for ts, u in ev:
+        if (ts < limit) if strict else (ts <= limit):
+            last = u
+    return last
+
+def thread_window_tokens(rows, starts, now, mtime_floor=0):
+    """In-window tokens per window and model from rollout token_count deltas.
+    rows: (model, created_at, tokens_used, rollout_path, updated_at); starts: {window: epoch}.
+    Returns (res, gaps): res[w][model] = tokens/input/cache_read/output/threads; gaps[w][model] = [threads, lifetime tokens].
+    Missing rollout or no events: counts tokens_used only if created inside the window, else gap. A corrupt file drops its thread."""
+    res = {w: {} for w in starts}
+    gaps = {w: {} for w in starts}
+    uniq = [0, 0]  # threads with a gap in any window, and their lifetime tokens
+    def add(w, model, tok, inp, cr, out):
+        r = res[w].setdefault(model, {"tokens": 0, "input": 0, "cache_read": 0, "output": 0, "threads": 0})
+        r["tokens"] += tok; r["input"] += inp; r["cache_read"] += cr; r["output"] += out; r["threads"] += 1
+    for model, created, used, rpath, upd in rows:
+        try:
+            model = normalize_model(model)
+            if not model:
+                continue
+            used = int(used or 0)
+            ev = None
+            # A thread last updated before a window opened has nothing in it: not a contributor, not a gap.
+            active = {w: st for w, st in starts.items() if (upd or 0) >= st}
+            if not active:
+                continue
+            p = expand_path(rpath) if rpath else ""
+            if p and os.path.isfile(p):
+                if os.path.getmtime(p) < min(active.values()):
+                    continue
+                ev = _rollout_events(p)
+            _gapped = False
+            for w, st in active.items():
+                if ev:
+                    hi = _cum(ev, now, False)
+                    if hi is None:
+                        continue
+                    lo = _cum(ev, st, True) or {}
+                    def g(k):
+                        return max(0, int(hi.get(k) or 0) - int(lo.get(k) or 0))
+                    tot = g("total_tokens")
+                    cached = min(g("cached_input_tokens"), g("input_tokens"))
+                    if tot > 0:
+                        add(w, model, tot, g("input_tokens") - cached, cached, g("output_tokens"))
+                elif (created or 0) >= st:
+                    add(w, model, used, used, 0, 0)  # no category split without a rollout
+                elif used > 0:
+                    gg = gaps[w].setdefault(model, [0, 0])
+                    gg[0] += 1; gg[1] += used
+                    if not _gapped:
+                        _gapped = True
+                        uniq[0] += 1; uniq[1] += used
+        except Exception:
+            continue
+    return res, gaps, uniq
+
+def log_gap_summary(path, line):
+    """Append one summary line, only when the log file already exists."""
+    try:
+        p = expand_path(path)
+        if p and os.path.isfile(p):
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    except Exception:
+        pass
 
 def main():
     try:
@@ -244,6 +455,15 @@ def main():
             except Exception:
                 pass
 
+        openai_gaps = None
+        gap_logged = None  # last gap summary written to the log, kept in the cache file
+        try:
+            with open(out_path, "r", encoding="utf-8") as _pf:
+                _pg = json.load(_pf).get("gap_logged")
+                gap_logged = _pg if isinstance(_pg, dict) else None
+        except Exception:
+            pass
+
         # Prices
         price_candidates = []
         if args.prices:
@@ -273,9 +493,9 @@ def main():
             return calculate_cost(cum_default, usage, prices)
 
         def tiered_input_price(model_id):
-            price = prices.get(model_id) or (prices.get(estimates.get(model_id)) if isinstance(estimates, dict) and estimates.get(model_id) else None)
+            price, _src = price_for(model_id, prices, estimates)
             if not price or price.get("input") is None:
-                price = prices.get(cum_default)
+                price, _src = price_for(cum_default, prices, estimates)
             return float(price["input"]) if price and price.get("input") is not None else None
 
         # Session transcripts parsing (Claude session tokens/cost)
@@ -341,7 +561,7 @@ def main():
         # usage.db parsing
         db_path = expand_path(args.usage_db) if args.usage_db else expand_path(cfg.get("usage_db", ""))
 
-        # Row discovery: every exact model id seen per provider is a candidate; the top 4 by ALL-time tokens
+        # Row discovery: every exact model id seen per provider is a candidate; the top 4 by 28-day tokens
         # are shown (see pick_rows below). Candidates also include the pins and transcript models.
         claude_pin = clean_current_id(args.current_claude_model)
         if claude_pin and not claude_pin.startswith("claude-"):
@@ -373,10 +593,18 @@ def main():
             except Exception:
                 pass
         # Pad to 4 from the default roster so a provider with little history still renders 4 rows.
+        # Row candidates only: non-claude ids logged under backend claude never become rows, but
+        # cfg["claude_models"] (which feeds provider_windows sums) keeps them as before.
+        row_claude = {m for m in cand_claude if m.startswith("claude-")}
+        for _m in DEFAULT_CONFIG["claude_models"]:
+            if len(row_claude) >= 4:
+                break
+            row_claude.add(_m)
         for _m in DEFAULT_CONFIG["claude_models"]:
             if len(cand_claude) >= 4:
                 break
             cand_claude.add(_m)
+        cand_claude |= row_claude
         for _m in DEFAULT_CONFIG["openai_models"]:
             if len(cand_openai) >= 4:
                 break
@@ -406,6 +634,13 @@ def main():
         openai_d28_has_cost = False
         # Earliest usage record per provider (epoch s), same sources as the *_all totals.
         first_ts = {"claude": None, "openai": None, "free": None}
+
+        first_by_id = {}   # exact id -> earliest epoch over usage.db rows (any backend) and Codex threads
+        thr_all = {}       # exact id -> {"tokens", "cost", "has"}: lifetime thread totals priced by category (rollout) or uncached input (no rollout)
+
+        def note_id_first(mid, epoch):
+            if mid and epoch and (mid not in first_by_id or epoch < first_by_id[mid]):
+                first_by_id[mid] = int(epoch)
 
         def note_first(key, epoch):
             if epoch and (first_ts[key] is None or epoch < first_ts[key]):
@@ -481,11 +716,17 @@ def main():
         # 5-hour window aggregates initialization (using codex_res now available)
         claude_h5_data = {"tokens": 0, "cost": 0.0, "has_cost": False}
         openai_h5_data = {"tokens": 0, "cost": 0.0, "has_cost": False}
+        openai_h5_other = {"tokens": 0, "cost": 0.0, "has_cost": False}  # usage.db 5H rows of no configured model
         h5_models_data = {m: {"tokens": 0, "cost": 0.0, "has_cost": False} for m in cfg["claude_models"] + cfg["openai_models"]}
         claude_h5_resets_at = int(args.claude_h5_resets_at) if args.claude_h5_resets_at else 0
         claude_h5_window_start = claude_h5_resets_at - 5 * 3600 if claude_h5_resets_at > 0 else 0
         codex_h5_resets_at = codex_res["h5"]["resets_at"] if codex_res["h5"]["resets_at"] else 0
         codex_h5_window_start = codex_h5_resets_at - 5 * 3600 if codex_h5_resets_at > 0 else 0
+        codex_h5_ended = 0 < codex_h5_resets_at <= now
+        if codex_h5_ended:
+            # The newest known 5H window has closed: nothing is in it, and its reset time is no longer a fact.
+            codex_h5_window_start = 0
+            codex_res["h5"]["resets_at"] = None
 
         if db_path and os.path.exists(db_path):
             try:
@@ -635,6 +876,11 @@ def main():
                             all_models_data[base_m]["cost"] += c
                             all_models_data[base_m]["has_cost"] = True
 
+                # First usage per exact id, over every row of the id whatever backend it was stored under.
+                cur.execute("SELECT model, MIN(ts) FROM usage WHERE model IS NOT NULL AND model != '' GROUP BY model")
+                for _m, _ts in cur.fetchall():
+                    note_id_first(normalize_model(_m), parse_iso_to_epoch(_ts))
+
                 # All-time cumulative use, priced at Anthropic API equivalents.
                 cur.execute("""
                     SELECT backend, model, SUM(input_tokens), SUM(output_tokens),
@@ -717,7 +963,7 @@ def main():
                     srow = cur.fetchone() or (0, 0, 0, 0, 0)
                     sess_usage = {"input_tokens": srow[0], "output_tokens": srow[1],
                                   "cache_read": srow[2], "cache_write": srow[3]}
-                    # Extra windows so the FREE table matches the ANT/OAI layout (SESS 5H 1D 7D 30D ALL).
+                    # Extra windows so the FREE table matches the ANT/OAI layout (SESS 5H 1D 7D 28D ALL).
                     _h5_iso = datetime.datetime.fromtimestamp(time.time() - 5 * 3600, datetime.timezone.utc).isoformat()
                     _win = {}
                     for _wn, _wsql, _wp in (("h5", "ts >= ?", (_h5_iso,)),
@@ -731,7 +977,9 @@ def main():
                         _u = {"input_tokens": _r[0], "output_tokens": _r[1], "cache_read": _r[2], "cache_write": _r[3]}
                         _t = sum(int(x or 0) for x in _r)
                         _win[_wn] = {"tokens": _t, "equiv_cost": equiv_cost(b, normalize_model(m), _u) if _t else None}
+                    _fid = normalize_model(m) if m else None
                     free_top4_d7.append({
+                        "_fid": _fid,
                         "h5": _win["h5"], "d1": _win["d1"], "d28": _win["d28"], "all": _win["all"],
                         "backend": str(b or "unknown"),
                         "model": str(m or "unknown"),
@@ -796,6 +1044,8 @@ def main():
                                 if c is not None:
                                     claude_h5_data["cost"] += c
                                     claude_h5_data["has_cost"] = True
+                                    h5_models_data[base_m]["cost"] += c
+                                    h5_models_data[base_m]["has_cost"] = True
                     except Exception:
                         pass
 
@@ -810,15 +1060,13 @@ def main():
                         for b, m, i, o, cr, cw in cur.fetchall():
                             base_m = normalize_model(m) if m else None
                             tot = (i or 0) + (o or 0) + (cr or 0) + (cw or 0)
-                            openai_h5_data["tokens"] += tot
-                            if base_m in h5_models_data:
-                                h5_models_data[base_m]["tokens"] += tot
-                            c = calculate_cost(base_m, {"input_tokens": i, "output_tokens": o, "cache_read": cr, "cache_write": cw}, prices)
-                            if c is None and base_m in cfg["openai_models"]:
-                                c = calculate_estimated_cost(base_m, {"input_tokens": i, "output_tokens": o, "cache_read": cr, "cache_write": cw}, prices, estimates)
+                            c = calculate_cost(base_m, {"input_tokens": i, "output_tokens": o, "cache_read": cr, "cache_write": cw}, prices, estimates)
+                            # Pair tokens and cost from the same rows: per configured model, else the "other" bucket.
+                            tgt = h5_models_data[base_m] if base_m in h5_models_data else openai_h5_other
+                            tgt["tokens"] += tot
                             if c is not None:
-                                openai_h5_data["cost"] += c
-                                openai_h5_data["has_cost"] = True
+                                tgt["cost"] += c
+                                tgt["has_cost"] = True
                     except Exception:
                         pass
 
@@ -869,72 +1117,88 @@ def main():
             try:
                 conn = sqlite3.connect("file:{}?mode=ro".format(state_db), uri=True)
                 cur = conn.cursor()
-                cur.execute("""
-                    SELECT model, SUM(tokens_used), COUNT(*) FROM threads
-                    WHERE updated_at >= ? AND tokens_used > 0 GROUP BY model
-                """, (now - 7 * 24 * 60 * 60,))
-                for raw_model, tokens, thread_count in cur.fetchall():
-                    model = normalize_model(raw_model)
-                    if model in d7_models_data and int(tokens or 0) > d7_models_data[model]["tokens"]:
-                        openai_total_d7_tokens += int(tokens or 0) - d7_models_data[model]["tokens"]
-                        d7_models_data[model]["tokens"] = int(tokens or 0)
-                        openai_total_d7_requests += int(thread_count or 0)
-                        price = prices.get(model) or (prices.get(estimates.get(model)) if isinstance(estimates, dict) and estimates.get(model) else None)
-                        if price and price.get("input") is not None:
-                            d7_models_data[model]["cost"] = (int(tokens or 0) / 1_000_000.0) * float(price["input"])
-                            d7_models_data[model]["has_cost"] = True
-                # 5H: threads touched inside the Codex 5h window (whole-thread total, estimated).
+                # Window cells count only in-window tokens: rollout token_count deltas per thread (see thread_window_tokens).
+                _mid_dt = datetime.datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0)
+                def _local_mid(back):
+                    return int(time.mktime((_mid_dt - datetime.timedelta(days=back)).timetuple()))
+                _starts = {"d1": _local_mid(0), "d7": _local_mid(6), "d28": _local_mid(27)}
                 if codex_h5_window_start > 0:
-                    cur.execute("""
-                        SELECT model, SUM(tokens_used) FROM threads
-                        WHERE updated_at >= ? AND tokens_used > 0 GROUP BY model
-                    """, (int(codex_h5_window_start),))
-                    for raw_model, tokens in cur.fetchall():
-                        model = normalize_model(raw_model)
-                        if model in h5_models_data and int(tokens or 0) > h5_models_data[model]["tokens"]:
-                            h5_models_data[model]["tokens"] = int(tokens or 0)
-                # 1D: threads touched since local midnight (whole-thread total, estimated).
-                _mid = int(time.mktime(datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timetuple()))
-                cur.execute("""
-                    SELECT model, SUM(tokens_used) FROM threads
-                    WHERE updated_at >= ? AND tokens_used > 0 GROUP BY model
-                """, (_mid,))
-                for raw_model, tokens in cur.fetchall():
+                    _starts["h5"] = int(codex_h5_window_start)
+                _floor = min(_starts.values())
+                cur.execute("SELECT model, created_at, tokens_used, rollout_path, updated_at FROM threads WHERE updated_at >= ? AND tokens_used > 0", (_floor,))
+                _res, _gaps, _uniq = thread_window_tokens(cur.fetchall(), _starts, now, _floor)
+                openai_gaps = {"threads": _uniq[0], "tokens": _uniq[1]}
+                if _uniq[0] and openai_gaps != gap_logged:
+                    log_gap_summary(cfg.get("gap_log", ""), "gaps openai {} threads {} tokens".format(_uniq[0], _uniq[1]))
+                    gap_logged = dict(openai_gaps)
+
+                def _take(window, data_map):
+                    """Per-model larger of usage.db and threads; the winner supplies both tokens and cost."""
+                    gained = 0
+                    _take.cost_delta = 0.0
+                    for model, r in _res.get(window, {}).items():
+                        if model in data_map and r["tokens"] > data_map[model]["tokens"]:
+                            gained += r["tokens"] - data_map[model]["tokens"]
+                            c = calculate_cost(model, {"input_tokens": r["input"], "output_tokens": r["output"], "cache_read": r["cache_read"]}, prices, estimates)
+                            _take.cost_delta += (c or 0.0) - (data_map[model]["cost"] if data_map[model]["has_cost"] else 0.0)
+                            data_map[model].update({"tokens": r["tokens"], "cost": c or 0.0, "has_cost": c is not None})
+                    return gained
+                openai_total_d7_tokens += _take("d7", d7_models_data)
+                openai_total_d7_requests += sum(r["threads"] for r in _res.get("d7", {}).values())
+                if "h5" in _starts:
+                    _take("h5", h5_models_data)
+                _take("d1", d1_models_data)
+                openai_d28_tok += _take("d28", d28_models_data)
+                if _take.cost_delta:
+                    openai_d28_cost += _take.cost_delta  # provider 28D cost follows the chosen source
+                    openai_d28_has_cost = True
+                def _thread_cost(model, used, rpath):
+                    """One thread priced by category (running totals at its last rollout event); no rollout -> uncached input."""
+                    p = expand_path(rpath) if rpath else ""
+                    lu = _rollout_last_usage(p) if p and os.path.isfile(p) else None
+                    if lu:
+                        cached = min(int(lu.get("cached_input_tokens") or 0), int(lu.get("input_tokens") or 0))
+                        u = {"input_tokens": int(lu.get("input_tokens") or 0) - cached, "output_tokens": int(lu.get("output_tokens") or 0), "cache_read": cached}
+                    else:
+                        u = {"input_tokens": used}
+                    return calculate_cost(model, u, prices, estimates)
+                # Lifetime thread totals priced like the window cells: running totals at each thread's last rollout event
+                # by category; no rollout -> uncached input (such threads are the no-usable-rollout gap class).
+                cur.execute("SELECT model, created_at, tokens_used, rollout_path FROM threads WHERE tokens_used > 0")
+                for raw_model, created, used, rpath in cur.fetchall():
                     model = normalize_model(raw_model)
-                    if model in d1_models_data and int(tokens or 0) > d1_models_data[model]["tokens"]:
-                        d1_models_data[model]["tokens"] = int(tokens or 0)
-                        price = prices.get(model) or (prices.get(estimates.get(model)) if isinstance(estimates, dict) and estimates.get(model) else None)
-                        if price and price.get("input") is not None:
-                            d1_models_data[model]["cost"] = (int(tokens or 0) / 1_000_000.0) * float(price["input"])
-                            d1_models_data[model]["has_cost"] = True
-                cur.execute("""
-                    SELECT model, SUM(tokens_used) FROM threads
-                    WHERE updated_at >= ? AND tokens_used > 0 GROUP BY model
-                """, (now - 28 * 24 * 60 * 60,))
-                for raw_model, tokens in cur.fetchall():
-                    model = normalize_model(raw_model)
-                    if model in d28_models_data and int(tokens or 0) > d28_models_data[model]["tokens"]:
-                        # Mirror the d7 thread-db adjustment for the provider-wide d28.
-                        openai_d28_tok += int(tokens or 0) - d28_models_data[model]["tokens"]
-                        d28_models_data[model]["tokens"] = int(tokens or 0)
-                        price = prices.get(model) or (prices.get(estimates.get(model)) if isinstance(estimates, dict) and estimates.get(model) else None)
-                        if price and price.get("input") is not None:
-                            d28_models_data[model]["cost"] = (int(tokens or 0) / 1_000_000.0) * float(price["input"])
-                            d28_models_data[model]["has_cost"] = True
+                    if not model:
+                        continue
+                    note_id_first(model, created)
+                    used = int(used or 0)
+                    c = _thread_cost(model, used, rpath)
+                    t = thr_all.setdefault(model, {"tokens": 0, "cost": 0.0, "has": False})
+                    t["tokens"] += used
+                    if c is not None:
+                        t["cost"] += c
+                        t["has"] = True
                 cur.execute("SELECT model, SUM(tokens_used) FROM threads WHERE tokens_used > 0 GROUP BY model")
                 state_all = {"tokens": 0, "cost": 0.0}
                 for raw_model, tokens in cur.fetchall():
                     model = normalize_model(raw_model)
-                    ip = tiered_input_price(model)
                     state_all["tokens"] += int(tokens or 0)
-                    state_all["cost"] += (int(tokens or 0) / 1_000_000.0) * ip if ip is not None else 0.0
+                    _t = thr_all.get(model)
+                    if _t and _t["has"]:
+                        state_all["cost"] += _t["cost"]
+                    else:
+                        ip = tiered_input_price(model)
+                        state_all["cost"] += (int(tokens or 0) / 1_000_000.0) * ip if ip is not None else 0.0
                     # Per-model ALL = all-time thread total when larger than usage.db (was capped at the 28-day thread total).
                     if model in all_models_data and int(tokens or 0) > all_models_data[model]["tokens"]:
                         all_models_data[model]["tokens"] = int(tokens or 0)
-                        price = prices.get(model) or (prices.get(estimates.get(model)) if isinstance(estimates, dict) and estimates.get(model) else None)
-                        if price and price.get("input") is not None:
-                            all_models_data[model]["cost"] = (int(tokens or 0) / 1_000_000.0) * float(price["input"])
+                        if _t and _t["has"]:
+                            all_models_data[model]["cost"] = _t["cost"]
                             all_models_data[model]["has_cost"] = True
+                        else:
+                            price = prices.get(model) or (prices.get(estimates.get(model)) if isinstance(estimates, dict) and estimates.get(model) else None)
+                            if price and price.get("input") is not None:
+                                all_models_data[model]["cost"] = (int(tokens or 0) / 1_000_000.0) * float(price["input"])
+                                all_models_data[model]["has_cost"] = True
                 if state_all["tokens"] > cum_openai_db["tokens"]:
                     cum_openai_db = state_all
                 if state_all["tokens"] > openai_all_tok:
@@ -946,21 +1210,39 @@ def main():
                     first_ts["openai"] = int(_row[0]) if _row and _row[0] else first_ts["openai"]
                 if args.session_start:
                     cur.execute("""
-                        SELECT model, SUM(tokens_used) FROM threads
-                        WHERE created_at >= ? AND tokens_used > 0 AND (? = '' OR cwd = ? OR cwd LIKE ? || '/%') GROUP BY model
+                        SELECT model, tokens_used, rollout_path FROM threads
+                        WHERE created_at >= ? AND tokens_used > 0 AND (? = '' OR cwd = ? OR cwd LIKE ? || '/%')
                     """, (args.session_start, args.project_dir, args.project_dir, args.project_dir))  # other projects' threads are not this session
-                    for raw_model, tokens in cur.fetchall():
+                    _sess = {}
+                    for raw_model, used, rpath in cur.fetchall():
                         model = normalize_model(raw_model)
-                        if model in openai_session_tokens_map and int(tokens or 0) > openai_session_tokens_map[model]:
-                            openai_session_tokens_map[model] = int(tokens or 0)
+                        d = _sess.setdefault(model, {"tokens": 0, "cost": 0.0, "has": False})
+                        d["tokens"] += int(used or 0)
+                        c = _thread_cost(model, int(used or 0), rpath)
+                        if c is not None:
+                            d["cost"] += c
+                            d["has"] = True
+                    for model, d in _sess.items():
+                        if model in openai_session_tokens_map and d["tokens"] > openai_session_tokens_map[model]:
+                            openai_session_tokens_map[model] = d["tokens"]
                             openai_session_from_threads.add(model)
-                            price = prices.get(model) or (prices.get(estimates.get(model)) if isinstance(estimates, dict) and estimates.get(model) else None)
-                            if price and price.get("input") is not None:
-                                openai_session_costs_map[model] = (int(tokens or 0) / 1_000_000.0) * float(price["input"])
+                            if d["has"]:
+                                openai_session_costs_map[model] = d["cost"]
                                 openai_session_costs_has_val[model] = True
                 conn.close()
             except Exception:
                 pass
+
+        # OpenAI 5H pair: sum of the chosen per-model pairs plus usage.db rows of no configured model.
+        openai_h5_data = {"tokens": openai_h5_other["tokens"], "cost": openai_h5_other["cost"], "has_cost": openai_h5_other["has_cost"]}
+        if codex_h5_ended:
+            openai_h5_data = {"tokens": 0, "cost": 0.0, "has_cost": True}
+        for _m in cfg["openai_models"]:
+            _h = h5_models_data[_m]
+            openai_h5_data["tokens"] += _h["tokens"]
+            if _h["has_cost"]:
+                openai_h5_data["cost"] += _h["cost"]
+                openai_h5_data["has_cost"] = True
 
         # Unknown is not zero: a window whose source is absent is emitted as null, never 0.
         _state_path = expand_path(cfg.get("codex_state_db", "~/.codex/state_5.sqlite"))
@@ -983,6 +1265,7 @@ def main():
         all_conf_models = cfg.get("claude_models", []) + cfg.get("openai_models", [])
         subscriptions = cfg.get("subscriptions", {"claude": 100, "openai": 100})
 
+        pace_all = {}
         for m in all_conf_models:
             prov = "claude" if m in cfg.get("claude_models", []) else "openai"
             label = model_label(m)
@@ -1013,6 +1296,12 @@ def main():
                 all_info = dict(d28_info)
             all_tok = all_info["tokens"]
             all_c = all_info["cost"] if all_info["has_cost"] else None
+            # Pace lifetime dollars: for OpenAI the thread totals priced by category replace the usage.db sum only when they are the larger source.
+            pace_all_c = all_c
+            _ta = thr_all.get(m)
+            if _ta and _ta["has"] and _ta["tokens"] >= all_tok:
+                pace_all_c = _ta["cost"]
+            pace_all[m] = pace_all_c
 
             models_full[m] = {
                 "label": label,
@@ -1020,18 +1309,29 @@ def main():
                 "session": {"tokens": known_int(sess_tok, claude_sess_known if prov == "claude" else openai_sess_known),
                             "tokens_noncache": sess_nc if (claude_sess_known if prov == "claude" else openai_sess_known) else None,
                             "cost": sess_c},
-                "h5": {"tokens": known_int(h5_models_data.get(m, {}).get("tokens", 0), claude_win_known if prov == "claude" else win_known)},
+                "h5": {"tokens": known_int(h5_models_data.get(m, {}).get("tokens", 0), claude_win_known if prov == "claude" else win_known),
+                       "cost": None},
                 "d1": {"tokens": known_int(d1_tok, claude_win_known if prov == "claude" else win_known), "cost": d1_c},
                 "d7": {"tokens": known_int(d7_tok, claude_win_known if prov == "claude" else win_known), "cost": d7_c},
                 "d28": {"tokens": known_int(d28_info["tokens"], claude_win_known if prov == "claude" else win_known), "cost": d28_info["cost"] if d28_info["has_cost"] else None},
                 "all": {"tokens": known_int(all_tok, claude_win_known if prov == "claude" else win_known), "cost": all_c}
             }
 
-        # Rows: top 4 exact ids per provider by ALL-time tokens; the current model outside the top 4 takes row 4.
-        claude_rows = pick_rows(cfg["claude_models"], {m: models_full[m]["all"]["tokens"] for m in cfg["claude_models"]}, claude_pin,
-                                recent_tokens={m: models_full[m]["d7"]["tokens"] for m in cfg["claude_models"]})
+        for m in all_conf_models:
+            _h5 = models_full[m]["h5"]
+            _hd = h5_models_data.get(m, {"tokens": 0, "cost": 0.0, "has_cost": False})
+            if _h5["tokens"] is not None:
+                _h5["cost"] = _hd["cost"] if _hd["has_cost"] else (0.0 if _h5["tokens"] == 0 else None)
+            models_full[m]["first_seen"] = first_by_id.get(m)
+        _pace_table = {m: (first_by_id.get(m), models_full[m]["d28"]["cost"], pace_all.get(m)) for m in all_conf_models}
+        for m in all_conf_models:
+            models_full[m]["pace"] = compute_pace(m, _pace_table, now)
+
+        # Rows: top 4 exact ids per provider by 28-day tokens, then ALL, then id; the current model outside the top 4 takes row 4.
+        claude_rows = pick_rows([m for m in cfg["claude_models"] if m in row_claude], {m: models_full[m]["all"]["tokens"] for m in cfg["claude_models"]}, claude_pin,
+                                recent_tokens={m: models_full[m]["d28"]["tokens"] for m in cfg["claude_models"]})
         openai_rows = pick_rows(cfg["openai_models"], {m: models_full[m]["all"]["tokens"] for m in cfg["openai_models"]}, openai_pin,
-                                recent_tokens={m: models_full[m]["d7"]["tokens"] for m in cfg["openai_models"]})
+                                recent_tokens={m: models_full[m]["d28"]["tokens"] for m in cfg["openai_models"]})
         for m in claude_rows + openai_rows:
             models_dict[m] = models_full[m]
         for m in claude_rows:
@@ -1110,10 +1410,18 @@ def main():
         if _fw["all"]["tokens"] < (_fw["d28"]["tokens"] or 0):
             _fw["all"] = dict(_fw["d28"])
 
+        _ft = {r["_fid"]: (first_by_id.get(r["_fid"]), r["d28"]["equiv_cost"], r["all"]["equiv_cost"]) for r in free_top4_d7 if r.get("_fid")}
+        for r in free_top4_d7:
+            _fid = r.pop("_fid", None)
+            r["first_seen"] = first_by_id.get(_fid) if _fid else None
+            r["pace"] = compute_pace(_fid, _ft, now) if _fid else null_pace()
+
         output = {
             "schema": 1,
             "session_id": args.session_id,
             "generated_at": now,
+            "openai_gaps": openai_gaps,
+            "gap_logged": gap_logged,
             "codex": codex_res,
             "models": models_dict,
             "model_pins": {"claude": claude_pin, "openai": openai_pin},

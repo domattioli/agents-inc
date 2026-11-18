@@ -88,6 +88,11 @@ jobs:
             echo "No CHANGELOG.md section for ${version}" >&2
             exit 1
           fi
+          {
+            printf '%s\n\n' '*Run your AI subscriptions like a small company you direct: a Lead splits each request among Workers, a script checks every result, and a reviewer must accept it.*'
+            cat release-notes.md
+          } > release-notes.tagged.md
+          mv release-notes.tagged.md release-notes.md
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

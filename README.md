@@ -2,7 +2,11 @@
 
 # agents-inc
 
-<p align="center"><strong>agents-inc runs AI models the way a company runs staff: a Lead takes your request, delegates it down an org chart of cheaper Worker models, and accepts nothing until a reviewer signs off. The aim is more checked work from the AI subscriptions you already pay for.</strong></p>
+<p align="center"><strong>Run your AI subscriptions like a small company you direct: a Lead splits each request among Workers, a script checks every result, and a reviewer must accept it. You stay in charge and approve what matters. The project is experimental, and the governed path is off until you turn it on.</strong></p>
+
+<p align="center"><strong><a href="https://github.com/domattioli/agents-inc/blob/main/docs/START-HERE.md">New here? Start with the guide: install, set up providers and run your first job.</a></strong></p>
+
+<p align="center"><a href="https://github.com/domattioli/agents-inc/blob/main/docs/assets/demo.mp4"><img src="https://raw.githubusercontent.com/domattioli/agents-inc/main/docs/assets/demo.gif" width="800" alt="An animated company tree: you and an Executive talk a request through, an Orchestrator hands work to Workers and Grunts, and a reviewer sends one result back until it passes."></a><br><em>Illustration of how agents-inc delegates and checks work.</em></p>
 
 <p align="center">
 <img alt="Status: experimental" src="https://img.shields.io/badge/status-experimental-orange">
@@ -27,7 +31,7 @@
 
 ## 1. Status & Roadmap
 
-Version 0.6.4. The project is experimental and pre-MVP. The governed path (`WORKERBEES_GOVERNANCE`) is off by default. Changes per release are in the [CHANGELOG](https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md). The build plan and cut line are in [docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md). Open work is tracked in [the issues](https://github.com/domattioli/agents-inc/issues).
+Version 0.7.0. The project is experimental and pre-MVP. The governed path (`WORKERBEES_GOVERNANCE`) is off by default. Changes per release are in the [CHANGELOG](https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md). The build plan and cut line are in [docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md). Open work is tracked in [the issues](https://github.com/domattioli/agents-inc/issues).
 
 - **Now:** measure the token cost of delegation against doing the work in one session, and port the test suite to Windows ([#138](https://github.com/domattioli/agents-inc/issues/138)).
 - **Next:** let a Worker launched by a broker lead its own Workers ([#73](https://github.com/domattioli/agents-inc/issues/73)).
@@ -39,15 +43,13 @@ Version 0.6.4. The project is experimental and pre-MVP. The governed path (`WORK
 
 Delegated model work can look done while it is wrong. A flat pool of agents has no way to catch that. `agents-inc` borrows a [corporate org chart](https://github.com/domattioli/agents-inc/blob/main/docs/governance/DELEGATION-MODEL.md). The CEO is you. The CoS (chief of staff) is the session you talk to. A Lead manages one run, and a Worker reports to a Lead.
 
-Cheap models take routine work, and costlier models manage. An author never grades its own work: the Lead checks what its Workers report before anything moves up. Savings are not yet measured, so none are claimed ([docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md)).
+Workers take routine work, and the Lead manages them. An author never grades its own work: the Lead checks what its Workers report before anything moves up. Savings are not yet measured, so none are claimed ([docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md)).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
 
 ## 3. Installation
 
 Requirements: Python 3.11 or later, Bash 3.2 or later, `jq`, `curl`, and the Claude Code CLI signed in to an Anthropic subscription. The Codex CLI is optional; when present, it serves the Codex rungs and cross-vendor review.
-
-Python 3.10 support ends in the next release; the current 0.4 release stays installable on Python 3.10.
 
 ```bash
 pip install agents-inc
@@ -61,35 +63,41 @@ Restart Claude Code (and Codex, if used) after the install. `agents-inc install 
 
 `agents-inc install` adds these hooks to `~/.claude/settings.json`, plus `"agents-inc dispatch *"`, `"agents-inc run *"`, `"agents-inc repair *"` and `"agents-inc install *"` under `sandbox.excludedCommands` so a sandboxed Bash can start a dispatch (each delegate and each gate still gets its own `sandbox-exec`). It prints the entries first and asks before writing; `--yes` skips the question, and with no terminal and no `--yes` it writes nothing and prints the command to run. `--no-sandbox-exclude` leaves the exclusion out. `repair` replaces an older `"agents-inc *"` entry with the narrow ones. `agents-inc unwire` removes only these entries.
 
-- `SessionStart`: loads the delegation mandate into each session.
-- `PreToolUse` on `Agent`/`Task`, dispatch-shaped `Bash` and `DelegateAgent`: adds a routing nudge, warns on duplicate dispatches, blocks persona impersonation, and runs the agent gate.
-- `PostToolUse` on `Agent`/`Task`: marks the dispatch done.
-- `UserPromptSubmit`: routes `@alias` side questions. Only with `--legacy-routes` (see below).
+- `SessionStart` gives Claude Code and Codex host-specific routing guidance.
+- Claude Code's `PreToolUse` hook checks Agent/Task routing, prevents persona
+  impersonation, and warns about duplicate delegations. The `PostToolUse` hook
+  records the result and releases the foreground task's duplicate claim.
+- Codex's `SubagentStart` and `SubagentStop` hooks record observed lifecycle
+  events when the host runs trusted hooks.
+- Claude Code's `UserPromptSubmit` hook routes `@alias` questions with
+  `--legacy-routes`.
 
-**Agent gate.** Claude's `Agent` tool skips agents-inc routing, prompt lint, the ledger and verification. The gate decides what happens to those calls.
+### Choose the route in your host
 
-| Mode | Effect |
+| Host | Route |
 |---|---|
-| `advisory` (default) | Nothing is blocked. The session sees a nudge toward `agents-inc dispatch`. |
-| `enforce` | Blocks every `Agent`/`Task` call except foreground `Explore`, `Plan`, `claude-code-guide` and `statusline-setup`. Background runs are always blocked. |
-| `off` | Same as advisory. Doctor reports it as off. |
+| Codex | Use a native subagent when the session offers the requested model and permits delegation. Reserve agents-inc dispatch in Codex for authorized Claude integration tests. |
+| Claude Code | Use Agent for an offered Claude model when the agent gate permits it. With the mod, use Agent with a registered guest type such as `agents-inc:luna` for an authorized cross-provider task. Check `agents-inc native status`. |
+| Gemini | Use a native subagent if the current session offers it and permits the task. |
+| Scripts and broker Workers | Use governed `agents-inc dispatch` within the existing grants. |
 
-- Switch mode: `agents-inc repair --agent-gate enforce|advisory|off`. The choice lives in `~/.config/agents-inc/settings.json`.
-- One session only: launch with `AGENTS_INC_AGENT_GATE=off claude` (or `enforce`).
-- Check: `agents-inc doctor` prints `agent gate: <mode> (<source>)`.
-- Remove every agents-inc hook: `agents-inc unwire`. Other hooks stay. `agents-inc repair` adds them back.
+Resolve the requested model against the host's current catalog. Keep the brief
+and file scope small. Let the host handle required approvals and continue
+independent work if a delegate is unavailable or denied. Verify the result before
+accepting it. The [routing and ledger guide](docs/HOW-IT-WORKS.md#native-delegation)
+describes what each host records.
 
-**The route: native agent types.** With the agents-inc mod, Claude Code lists each delegate model as its own subagent type, such as `agents-inc:luna` or `agents-inc:gemini-flash`. Call it with the `Agent` tool like any subagent; its transcript is the normal subagent view, and the delegate pane lists the registered types and this session's native agents. `agents-inc native status` shows which types are offered and why. `agents-inc dispatch` stays as a command for scripts, CI and broker Workers.
+**Claude agent gate.** The default `advisory` mode allows host-permitted
+Claude Agent calls. `off` also leaves these calls to the host. `enforce`
+allows the foreground types `Explore`, `Plan`, `claude-code-guide`, and
+`statusline-setup`, plus the registered agents-inc types. All modes retain
+the persona guard. Check the effective mode with `agents-inc doctor` and
+configure it with `agents-inc repair --agent-gate enforce|advisory|off`.
 
-The older routes (the `agents-inc:relay` type, the `mcp__agents-inc__run` tool and `@alias` side questions) are off by default. `agents-inc install --legacy-routes` (or `repair --legacy-routes`) keeps them; the choice is stored in `~/.config/agents-inc/settings.json`, so a later plain `repair` keeps it, and `--no-legacy-routes` turns them off again. This change is proposed in D79 and awaits operator acceptance.
-
-**Using agents-inc without the gate.**
-
-- Use `Agent` only for read-only, foreground scouts.
-- Send anything that writes files, runs long, nests or belongs in the ledger through `agents-inc dispatch`.
-- Naming a model chooses the rung, not the route. "Use sonnet" still means `agents-inc dispatch --model sonnet`.
-- Subagents get no SessionStart mandate. If an `Agent` prompt may delegate, say in it: sub-delegate only via `agents-inc dispatch`.
-- Verify what an `Agent` call returns yourself, as for any delegate.
+The relay type, `mcp__agents-inc__run` and `@alias` are optional legacy routes.
+Enable them with `agents-inc install --legacy-routes` or
+`agents-inc repair --legacy-routes`. Repair preserves that choice unless
+you pass `--no-legacy-routes`.
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
 
@@ -108,20 +116,22 @@ The higher rung manages and the lower rung reports to it, so opus is the Lead an
 | Executive | fable | astra | Final say, irreversible acts, conflicting results |
 | Orchestrator | opus | sol | Decompose, dispatch, plan |
 | Workhorse | sonnet | terra | Normal coding, research, synthesis |
-| Grunt | haiku | luna | Classify, extract, summarize; free Gemini, Mistral and OpenRouter models enter only here |
+| Grunt | haiku | luna | Classify, extract, summarize, or make task-authorized edits; free Gemini, Mistral and OpenRouter models enter only here |
 
-The CoS then runs one command. It renders the prompt, lints it, snapshots the tree, launches the delegate and checks the report:
+For governed dispatch, the CoS uses one command to render and lint the brief, snapshot the tree, launch the delegate and run the checks:
 
 ```bash
-agents-inc dispatch --slots slots.json --model sonnet --dry-run   # drop --dry-run to launch
+agents-inc dispatch --slots slots.json --model sonnet --dry-run
 agents-inc models chain supervisor=opus                            # change the default REPORTING CHAIN
 ```
 
-Every dispatch prompt carries a `REPORTING CHAIN` line derived from the ladder, and every launched dispatch writes one `dispatched` row to the ledger. Codex delegates can write to `--cwd` by default, the same as a Claude subagent; the slot `CODEX_WRITE: no` makes one read-only. A worked slots file is in [skills/workerbee/slots.md](https://github.com/domattioli/agents-inc/blob/main/skills/workerbee/slots.md).
+Every dispatch prompt carries a `REPORTING CHAIN` line derived from the ladder, and every launched dispatch writes one `dispatched` row to the ledger. Codex delegates can write to `--cwd` by default, the same as a Claude subagent; the slot `CODEX_WRITE: no` makes one read-only. Use `TASK_ACCESS: read` to deny worker workspace writes, or `TASK_ACCESS: write` with `FILES_IN_SCOPE` for an authorized edit. Existing dispatches without the field retain their previous permissions. Scope is checked after execution; supervisor gates run on the host. A worked slots file is in [skills/workerbee/slots.md](https://github.com/domattioli/agents-inc/blob/main/skills/workerbee/slots.md).
 
 **Narrate (prototype, macOS).** `agents-inc narrate on` enables a watcher; `agents-inc narrate run` follows the active Claude Code transcript and speaks a two-sentence digest of each new assistant message with `say`. luna writes the digest through `agents-inc run`, so message text leaves the machine: messages with a classification marker are skipped, and `--summarizer local` makes no model call. Other options: `--voice`, `--transcript`, `--decide-only`, `--once`, `--dry-run`; `off` and `status` complete the set. Design: [docs/proposals/narrate.md](https://github.com/domattioli/agents-inc/blob/main/docs/proposals/narrate.md).
 
-Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. With `--legacy-routes`, `@haiku <question>` inside any Claude Code session sends one side question to a cheaper model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
+For a trusted MCP client, `agents-inc mcp --cwd /absolute/workspace` exposes governed dispatch, status, results, cancellation, and follow-up; see [the MCP adapter guide](docs/HOW-IT-WORKS.md#workspace-bound-mcp-adapter). Write tasks and host gates require the server’s `--allow-writes` flag.
+
+Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. With `--legacy-routes`, `@haiku <question>` inside any Claude Code session sends one side question to a Haiku model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
 

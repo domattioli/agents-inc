@@ -1,0 +1,8 @@
+{
+ "run_id": "20991101T000000Z-sonnet-old000",
+ "model": "sonnet",
+ "kind": "claude",
+ "cwd": "/work",
+ "outcome": "red",
+ "reason": "rc-nonzero"
+}

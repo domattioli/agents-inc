@@ -1,0 +1,36 @@
+{
+ "name": "false-09-notchecked-gate-claimed-pass",
+ "report": "done.\n```claims\nfiles_changed: a.py\ngates: g1=0\nstopped: none\n```\n",
+ "run": {
+  "changed": [
+   "a.py"
+  ],
+  "gate_results": [
+   {
+    "id": "g1",
+    "argv": [
+     "x"
+    ],
+    "rc": null,
+    "expect_rc": 0,
+    "state": "not-checked",
+    "excerpt": ""
+   }
+  ],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "checked",
+  "items": [
+   {
+    "kind": "gate-result",
+    "claimed": "g1=0",
+    "observed": "not-checked"
+   }
+  ],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": null
+ }
+}

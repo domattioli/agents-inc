@@ -42,19 +42,19 @@ GEMINI_SETTINGS = ".gemini/settings.json"
 def detected(home: Path) -> tuple[Host, ...]:
     return tuple(host for host in HOSTS if (home / host.root).is_dir())
 
-def block_text(paths: InstallPaths) -> str:
+def block_text(paths: InstallPaths, host: str = "claude") -> str:
     """Heading plus at most 5 body lines (D78 R4). Launcher, health and repair text come from the SessionStart hook;
     the rules come from role_defaults, rendered with the `roles` settings in paths.settings (D80)."""
     roles = role_defaults.load(paths.settings)
+    task_guidance = role_defaults.gate_line(roles) if host == "claude" else "Keep routine work local."
     return "\n".join((
         BEGIN,
-        "## agents-inc delegation (mandatory, every session, every provider)",
-        f"- {role_defaults.ROUTE_LINE}",
+        "## agents-inc delegation",
+        f"- {role_defaults.host_route(host)}",
         f"- {role_defaults.executive_line(roles)}",
         f"- {role_defaults.roles_line(roles)}",
-        f"- {role_defaults.gate_line(roles)}",
-        "- The session hook supplies health status and the quick reference; with no hook (Gemini), run "
-        f"`agents-inc doctor` and read `{paths.current / 'skills/workerbee/QUICKREF.md'}` first.",
+        f"- {task_guidance} {role_defaults.HOST_AUTHORITY_LINE}",
+        f"- Before using governed dispatch, read `{paths.current / 'skills/workerbee/QUICKREF.md'}`.",
         END,
         "",
     ))
@@ -144,6 +144,11 @@ def add_hooks(config: dict, paths: InstallPaths, host: Host, sandbox_exclude: bo
     config = strip_hooks(config, paths, legacy=True)
     hooks = config.setdefault("hooks", {})
     hooks.setdefault("SessionStart", []).append({"hooks": [{"type": "command", "command": hook_command(paths, f"session-start --host {host.name}"), "timeout": 10}]})
+    if host.name == "codex":
+        for event in ("SubagentStart", "SubagentStop"):
+            hooks.setdefault(event, []).append({"hooks": [
+                {"type": "command", "command": hook_command(paths, "native-observed --host codex"), "timeout": 5},
+            ]})
     if host.nudge:
         hooks.setdefault("PreToolUse", []).append({"matcher": "Agent|Task", "hooks": [{"type": "command", "command": hook_command(paths, "agent-nudge"), "timeout": 5}]})
         nudge = hook_command(paths, "agent-nudge")
@@ -225,8 +230,8 @@ def install_host_wiring(paths: InstallPaths, receipt: InstallReceipt, journal=No
     """claude_settings=False (no consent): write nothing to ~/.claude/settings.json; the other hosts and the AGENTS.md
     blocks are still written."""
     owned = [item for item in receipt.owned_paths if item.kind not in {"block", "hooks", "context"}]
-    block = block_text(paths)
     for host in detected(paths.home):
+        block = block_text(paths, host.name)
         target = paths.home / host.instructions
         current = target.read_text() if target.exists() else ""
         updated = upsert_block(current, block)

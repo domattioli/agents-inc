@@ -1,6 +1,6 @@
 # Start here
 
-## Install (0.6.0)
+## Install (0.6.4)
 
 ```bash
 pip install agents-inc
@@ -26,6 +26,35 @@ makes it read-only.
 `agents-inc dispatch` can also run a broker that lets a Codex Lead ask for
 Workers without seeing any credentials (D51). The installer does not manage the
 HTTP bridge or any daemon.
+
+### Choose a delegate
+
+Use the current host's native subagent tool when it offers the requested model
+and permits the task. The host handles approval. Claude Code's agent gate still
+applies, and the mod lists available guest types with `agents-inc native status`.
+In Codex, use agents-inc dispatch only for authorized Claude integration tests.
+See [native delegation](HOW-IT-WORKS.md#native-delegation) for verification and
+ledger details.
+
+### Develop on a machine that runs the install
+
+Install from a release worktree, not from the checkout you edit:
+
+```bash
+git worktree add ../agents-inc-release v0.6.4   # any release tag
+agents-inc repair --source ../agents-inc-release
+```
+
+- After an install from a clean git checkout, `INSTALL_STALE` appears only when
+  `HEAD` moves to a commit whose installed files differ: a commit, checkout,
+  reset or branch switch. Uncommitted edits never stop dispatch. When git cannot
+  run, the check reports not stale.
+- An install from a checkout with uncommitted changes installs them and prints a
+  `WARNING:`. Any further edit in that checkout then makes the install stale,
+  and dispatch stops until `repair`.
+- A `NOTE:` says when `HEAD` is not on a release tag. Neither message stops the install.
+- To upgrade, move the worktree to the new tag
+  (`git -C ../agents-inc-release checkout <tag>`), then run the `repair` line again.
 
 ### Requirements
 
@@ -80,22 +109,26 @@ writes one row to the ledger. Details: `HOW-IT-WORKS.md`, section
 
 ### Watching a delegate work (optional)
 
-Install also adds a small Claude Code add-on, the agents-inc mod. It lets you
-watch a delegate while it works. Start a relay subagent with
-`subagent_type: "agents-inc:relay"`, give it a model and a slots file, and open
-its transcript: short rows appear as the delegate reads, edits and runs
-commands. The final answer is the same report you get without the mod.
+Install also adds a small Claude Code add-on, the agents-inc mod. Its delegate
+models appear as native agent types, such as `agents-inc:luna`, which you call
+with the `Agent` tool. The older relay route (`subagent_type: "agents-inc:relay"`)
+is off by default. It returns only after `agents-inc install --legacy-routes`.
+With that route, a relay subagent shows short rows as the delegate reads, edits
+and runs commands. The final answer is the same report you get without the mod.
 
 - **Install:** `agents-inc install` and `agents-inc repair` add the mod when the
   `claude` command is on your PATH. Add `--no-mod` to skip it. If the step
   fails you get a warning and everything else still works.
-- **Permission:** allow the tool `mcp__agents-inc__run` in your Claude Code
-  permissions, or the relay asks each time.
+- **Permission:** with `--legacy-routes` only, allow the tool
+  `mcp__agents-inc__run` in your Claude Code permissions, or the relay asks each time.
 - **Check:** `agents-inc doctor` prints the warning `MOD_NOT_INSTALLED` when the
   mod is missing. It still says `READY`.
 - **Stop a run:** stop the relay in Claude Code. Or run
   `agents-inc dispatch --cancel <run dir>` from a terminal.
 - **Manual install:** see `mods/agents-inc/README.md`.
+- **Handles:** a guest agent keeps its thread across a Claude Code restart. `agents-inc handles list`
+  shows each handle of the newest session, and `agents-inc handles retire <id>` ends one
+  (ask it for a handoff note first, then paste the note into a new Agent).
 
 - **Audience:** People who have not run the system before.
 - **Style:** Plain language; the other docs are compressed for experienced readers.
@@ -104,8 +137,8 @@ commands. The final answer is the same report you get without the mod.
 ## What this is
 
 - **Delegation system**
-  - **Purpose:** Gets several AI models to do work cheaply without trusting any model blindly.
-  - **Division of labor:** A capable model supervises while cheaper models handle narrow jobs such as reading a long document, extracting every date from files, or writing a first draft.
+  - **Purpose:** Gets several AI models to do work without trusting any model blindly.
+  - **Division of labor:** A Lead model supervises while Workers handle narrow jobs such as reading a long document, extracting every date from files, or writing a first draft.
   - **Core problem:** Deciding whether returned work is correct.
 
 ## The two pieces

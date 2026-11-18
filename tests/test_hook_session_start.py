@@ -48,6 +48,40 @@ class SessionStartWarningsTest(unittest.TestCase):
     def test_stale_warning_explains_itself(self):
         self.assertIn("installed bundle differs from the source checkout", self._text(("INSTALL_STALE",)))
 
+    def test_stored_state_is_marked_not_verified_now_with_age(self):
+        from agents_inc.install.doctor import DoctorItem
+        item = DoctorItem("install-match", False, "record", "pass", "read from source-git.json", 3 * 3600 + 5)
+        paths = InstallPaths.for_home(Path("/nonexistent-home"))
+        report = DoctorReport(True, (), None, (), (item,))
+        with mock.patch.object(hook, "check_install", return_value=report), \
+                mock.patch("agents_inc.install.update_check.notice", return_value=None):
+            text = json.loads(hook.session_start(paths, "claude"))["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("install-match", text)
+        self.assertIn("not verified now", text)
+        self.assertIn("age 3h", text)
+
+    def test_untested_required_item_is_not_ready_and_names_the_check(self):
+        from agents_inc.install.doctor import DoctorItem
+        item = DoctorItem("dispatch-path", True, "not-tested", "could-not-test", "no route to api.anthropic.com", None)
+        paths = InstallPaths.for_home(Path("/nonexistent-home"))
+        report = DoctorReport(False, (), None, (), (item,))
+        with mock.patch.object(hook, "check_install", return_value=report), \
+                mock.patch("agents_inc.install.update_check.notice", return_value=None):
+            text = json.loads(hook.session_start(paths, "claude"))["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("doctor: READY", text)
+        self.assertIn("dispatch-path", text)
+        self.assertIn("agents-inc doctor", text)
+
+    def test_claude_text_names_delegateagent_for_codex_rungs(self):
+        text = self._text(())
+        self.assertIn("astra, sol, terra and luna run through the DelegateAgent MCP tool", text)
+        self.assertIn("read-only", text)
+        self.assertNotIn("DelegateAgent MCP tool", self._text(("WB_CLI_NOT_FOUND",)))
+        self.assertNotIn("DelegateAgent MCP tool", self._text((), host="codex"))
+
+    def test_nothing_stored_adds_no_mark(self):
+        self.assertNotIn("not verified now", self._text(()))
+
     def test_plain_host_gets_the_same_text(self):
         self.assertIn("WARNING: INSTALL_STALE", self._text(("INSTALL_STALE",), host="codex"))
 
@@ -58,35 +92,36 @@ if __name__ == "__main__":
 
 
 class RouteRuleTest(SessionStartWarningsTest):
-    """Token bench dry run 2026-10-22: a session told 'opus, sonnet, haiku' used native Agent subagents
-    because the nudge approved any Claude rung. The texts now say the route is always dispatch."""
-
-    def test_nudge_does_not_approve_claude_rungs_via_agent(self):
-        self.assertNotIn("only if routing selects a Claude rung", hook.NUDGE)
-        self.assertIn("agents-inc dispatch", hook.NUDGE)
-        self.assertIn("picks the rung, not the route", hook.NUDGE)
+    def test_claude_prefers_host_permitted_native_route(self):
+        self.assertIn("Use Claude Code Agent", self._text(()))
+        self.assertIn("Use Claude Code for any required approvals", hook.NUDGE)
+        self.assertNotIn("picks the rung, not the route", hook.NUDGE)
 
     def test_session_start_carries_route_rule(self):
         self.assertIn(hook.ROUTE_RULE, self._text(()))
 
     def test_nudge_and_route_rule_allow_small_native_workhorse_edit(self):
-        # D78 R3: edits of 3 or fewer tool calls may go to a native sonnet subagent; scouts stay read-only.
         for text in (hook.NUDGE, hook.ROUTE_RULE):
-            self.assertIn("read-only foreground scout", text)
             self.assertIn("3 or fewer tool calls on a native workhorse subagent (model sonnet)", text)
-            self.assertIn("run one check", text)
+            self.assertIn("Verify the result yourself", text)
 
     def test_claude_session_drops_quickref_read_except_direct_mcp_run(self):
-        # D78 R4: the PreToolUse hook injects QUICKREF on Agent, Task and Bash dispatch (D53).
+        # D78 R4: the PreToolUse hook injects QUICKREF on governed dispatch (D53).
         text = self._text(())
         self.assertNotIn("before the first dispatch", text)
         self.assertIn("only before a direct mcp__agents-inc__run call", text)
 
     def test_codex_session_keeps_quickref_read(self):
-        # Codex has no PreToolUse hook, so nothing injects QUICKREF there.
+        # Codex does not install a QUICKREF injection hook.
         self.assertIn("QUICKREF.md before the first dispatch", self._text((), host="codex"))
+
+    def test_codex_prefers_native_route_when_session_allows_it(self):
+        text = self._text((), host="codex")
+        self.assertIn("Use Codex native subagents", text)
+        self.assertIn("Use agents-inc dispatch only for authorized Claude integration tests", text)
+        self.assertNotIn(hook.ROUTE_RULE, text)
 
     def test_codex_missing_is_explained_not_a_bare_warning(self):
         text = self._text(("WB_CLI_NOT_FOUND",))
         self.assertNotIn("WARNING: WB_CLI_NOT_FOUND", text)
-        self.assertIn("Claude rungs dispatch normally", text)
+        self.assertIn("check native availability in the host", text)

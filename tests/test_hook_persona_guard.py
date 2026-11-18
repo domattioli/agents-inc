@@ -15,8 +15,8 @@ from unittest import mock
 from agents_inc.install import hook, host_wiring
 from agents_inc.install.paths import InstallPaths
 
-REASON = ("FR-002: Agent/Task descriptions cannot begin with a Codex persona name. For Codex execution, "
-          "dispatch through agents-inc; Agent/Task creates Claude subagents. If this names a product, "
+REASON = ("FR-002: Agent/Task descriptions must identify the actual delegate. For Codex execution, "
+          "use the matching registered guest type or a separately authorized route. If this names a product, "
           "repository, person, or supervised worker, put the actual Claude rung first and mention that "
           "name later. Renaming does not change the execution model.")
 DENY = ["terra: implement X", "Luna - triage logs", "sol reviews spec", "ASTRA: review hook", "sol/review"]
@@ -63,9 +63,10 @@ class PersonaDenyTest(_Home):
         for i, desc in enumerate(DENY + COLLISIONS):
             with self.subTest(desc=desc):
                 result, _ = self.run_hook("agent-nudge", payload(desc, session=f"d{i}"))
-                self.assertEqual(result, {"hookSpecificOutput": {
-                    "hookEventName": "PreToolUse", "permissionDecision": "deny",
-                    "permissionDecisionReason": REASON}})
+                out = result["hookSpecificOutput"]  # spec 042: the old reason is the prefix, the refusal text follows
+                self.assertEqual((out["hookEventName"], out["permissionDecision"]), ("PreToolUse", "deny"))
+                self.assertTrue(out["permissionDecisionReason"].startswith(REASON))
+                self.assertIn("refused: hook-persona", out["permissionDecisionReason"])
 
     def test_allow_fixtures_are_not_denied(self):
         for i, desc in enumerate(ALLOW):
@@ -106,6 +107,16 @@ class PersonaDenyTest(_Home):
         for subagent in ("luna-brain:luna", "x-agents-inc:luna"):
             with self.subTest(subagent=subagent):
                 data = payload("luna: count lines")
+                data["tool_input"]["subagent_type"] = subagent
+                result, _ = self.run_hook("agent-nudge", data)
+                self.assertEqual(self.decision(result), "deny")
+
+    def test_guest_type_cannot_carry_another_models_persona(self):
+        """A registered guest type exempts only its own persona: "sol: review" on the luna guest type is denied."""
+        for desc, subagent in (("sol: review", "agents-inc:luna"), ("SOL: review", "agents-inc:luna"),
+                               ("astra: review", "agents-inc:sol"), ("luna: count", "agents-inc:gemini-flash")):
+            with self.subTest(desc=desc, subagent=subagent):
+                data = payload(desc, session=f"m-{subagent}-{desc}")
                 data["tool_input"]["subagent_type"] = subagent
                 result, _ = self.run_hook("agent-nudge", data)
                 self.assertEqual(self.decision(result), "deny")

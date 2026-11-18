@@ -4,6 +4,7 @@ import argparse, datetime, json, os, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 from .. import datafiles
 from .bundle import activate, stage_bundle
+from . import source_git
 from .discovery import install_skill_links, restore_skill_links
 from .doctor import check_install, luna_line
 from .host_wiring import install_alias_links, install_host_wiring, remove_host_wiring, unwire_hooks, HOSTS
@@ -91,8 +92,10 @@ def _packaged_source(tmp: Path) -> Path:
 
 MOD_PLUGIN, MOD_MARKETPLACE = "agents-inc@agents-inc-local", "agents-inc-local"
 # Pane mods (name, plugin, marketplace): a live pane per delegate model, and the agent tree. On by default with the install; each is skipped when the release does not ship it.
-PANE_MODS = (("delegate-pane", "delegate-pane@delegate-pane-local", "delegate-pane-local"),
-             ("agents-manager", "agents-manager@agents-manager-local", "agents-manager-local"))
+PANE_MODS = (("delegate-pane", "delegate-pane@delegate-pane-local", "delegate-pane-local"),)
+# Spec 040: agents-manager and luna-pane folded into delegate-pane. Old machines still carry them; install migrates them away.
+RETIRED_PANE_MODS = (("agents-manager@agents-manager-local", "agents-manager-local"),
+                     ("luna-pane@luna-pane-local", "luna-pane-local"))
 
 def _claude(home: Path, *argv, timeout=60):
     """Run the Claude CLI quietly against the install's own HOME; returns the CompletedProcess, or None when it cannot run.
@@ -156,9 +159,27 @@ def install_pane_mods(paths: InstallPaths, notices: list) -> None:
         warn = _apply_mod(paths, mod, plugin, market, listed,
                           f"warning: `claude {{argv}}` failed ({{rc}}{{why}}); the {name} pane may be out of date, delegation still works")
         if warn: notices.append(warn)
+    _retire_pane_mods(paths, notices, listed)
+
+def _retire_pane_mods(paths: InstallPaths, notices: list, listed) -> None:
+    """Uninstall retired plugins only when listed; remove retired marketplaces only when registered. A failure is a notice."""
+    try: known = json.loads((paths.home / ".claude/plugins/known_marketplaces.json").read_text())
+    except (OSError, ValueError): known = {}
+    known = known if isinstance(known, dict) else {}
+    if listed is None:
+        listed = _claude(paths.home, "plugin", "list")
+        if listed is None: return
+    for plugin, market in RETIRED_PANE_MODS:
+        in_list = plugin in (listed.stdout or "")
+        if not in_list and market not in known: continue
+        argvs = ((("plugin", "uninstall", plugin),) if in_list else ()) + ((("plugin", "marketplace", "remove", market),) if market in known else ())
+        for argv in argvs:
+            done = _claude(paths.home, *argv)
+            if done is None or done.returncode != 0:
+                notices.append(f"notice: retired pane mod cleanup `claude {' '.join(argv)}` failed ({'unavailable' if done is None else done.returncode}); remove it by hand")
 
 MOD_UNINSTALL_ARGVS = (("plugin", "uninstall", MOD_PLUGIN), ("plugin", "marketplace", "remove", MOD_MARKETPLACE),
-                       *[a for _, p, m in PANE_MODS for a in (("plugin", "uninstall", p), ("plugin", "marketplace", "remove", m))])
+                       *[a for p, m in (*((p, m) for _, p, m in PANE_MODS), *RETIRED_PANE_MODS) for a in (("plugin", "uninstall", p), ("plugin", "marketplace", "remove", m))])
 
 def uninstall_mod(paths: InstallPaths) -> list:
     notices = []
@@ -166,6 +187,19 @@ def uninstall_mod(paths: InstallPaths) -> list:
         done = _claude(paths.home, *argv)
         if done is not None and done.returncode != 0: notices.append(f"warning: `claude {' '.join(argv)}` failed ({done.returncode})")
     return notices
+
+def _repair(args):
+    """Spec 047 B3: after a successful install, print host CLI and pin warnings (read-only; pins never edited).
+    A failed install prints its own error alone."""
+    rc = install(args)
+    if rc == 0:
+        from . import doctor
+        try:
+            for line in doctor.cli_warnings(_paths(), live=True): print(f"WARNING: {line}")
+        except Exception as exc:  # a check must never turn a good repair into a failure
+            print(f"WARNING: host CLI check skipped: {exc}")
+    return rc
+
 
 def install(args):
     """Install from --source, or from the installed package's own data when --source is omitted.
@@ -250,7 +284,10 @@ def _install(args, source: Path):
         TransactionJournal.recover(paths.journal)
         journal = TransactionJournal(paths.journal).begin("install")
         try:
+            # #174: git state before staging; None for a packaged or non-git source, or on any git failure
+            git_state = source_git.source_state(source) if getattr(args, "source", None) else None
             staged = stage_bundle(source, paths)
+            if git_state is not None: notices.extend(source_git.source_warnings(Path(args.source).resolve(), git_state))
             codex = None
             if not getattr(args, "without_codex", False):
                 try: codex = resolve_executable("codex", os.environ.get("PATH"))
@@ -273,6 +310,7 @@ def _install(args, source: Path):
             # Unowned cache for doctor's hook-drift check; not journaled, kept by uninstall.
             paths.state.mkdir(parents=True, exist_ok=True)
             (paths.state / "source-checkout").write_text((str(Path(args.source).resolve()) if getattr(args, "source", None) else PACKAGED_SOURCE) + "\n")
+            source_git.save_record(paths.state, git_state, staged.digest)  # #174: release, HEAD, bundle cleanliness
             # Receipt last: journal recovery of a "receipt" op unlinks the file, so any
             # failure before this point must leave the previous receipt in place.
             had_prior = _save_prior_receipt(paths)
@@ -364,26 +402,70 @@ def uninstall(paths: InstallPaths, receipt: InstallReceipt) -> set[Path]:
             try: empty.rmdir()
             except OSError: break
         return retained
+def _handles(args) -> int:
+    """Spec 048: list or retire the persisted delegate handles of one session. Never contacts a delegate."""
+    root = Path(args.cwd) / ".scratch"
+    agents = sorted(d for d in root.glob("agents-inc-*") if d.is_dir() and (not args.agent or d.name == f"agents-inc-{args.agent}"))
+    session = args.session
+    if not session:
+        dirs = [s for a in agents for s in a.iterdir() if s.is_dir()]
+        if not dirs:
+            print(f"agents-inc handles: no session directory under {root}/agents-inc-*/", file=sys.stderr); return 1
+        session = max(dirs, key=lambda d: d.stat().st_mtime).name
+    files = [a / session / "handles.json" for a in agents if (a / session / "handles.json").is_file()]
+    if not files:
+        print(f"agents-inc handles: no handles.json for session {session} under {root}", file=sys.stderr); return 1
+    stores = []
+    for f in files:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            handles = data["handles"]
+            if data.get("version") != 1 or not isinstance(handles, dict): raise ValueError("unrecognised layout")
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            print(f"agents-inc handles: cannot read {f}: {e}", file=sys.stderr); return 1
+        stores.append((f, data))
+    if args.verb == "retire":
+        if not args.id: print("agents-inc handles: retire needs a handle id", file=sys.stderr); return 1
+        for f, data in stores:
+            if args.id in data["handles"]:
+                data["handles"][args.id]["state"] = "retired"
+                tmp = f.with_name(f.name + ".tmp")
+                tmp.write_text(json.dumps(data, indent=2), encoding="utf-8"); os.replace(tmp, f)
+                print(f"handle {args.id} retired. Ask it for a handoff note first if you have not, then start a new Agent and paste the note into its prompt. Nothing was sent to the delegate.")
+                return 0
+        print(f"agents-inc handles: no handle {args.id} in session {session}", file=sys.stderr); return 1
+    rows = [h for _, data in stores for h in data["handles"].values() if isinstance(h, dict)]
+    if args.json:
+        print(json.dumps({"session": session, "handles": rows})); return 0
+    for h in rows:
+        print(f"{h.get('id')}  {h.get('provider')}/{h.get('nickname')}  {h.get('state')}  chars {h.get('charsSent')}/{h.get('ceiling')}  restarts {h.get('restarts')} ({h.get('lastRestartReason') or 'none'})  thread {h.get('thread')}")
+    return 0
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="agents-inc")
     subs = parser.add_subparsers(dest="command", required=True)
     p = subs.add_parser("install"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES); p.add_argument("--role", action="append", metavar="KEY=VALUE", help="store one roles item in the agents-inc settings file (VALUE default removes it); `agents-inc doctor` shows the effective values (D80)");p.add_argument("--legacy-routes", action=argparse.BooleanOptionalAction, default=None, help="keep the relay agent, mcp__agents-inc__run and @alias routes (off by default; the choice persists across repair)")
     p = subs.add_parser("run"); p.add_argument("--model", required=True); p.add_argument("--effort", default="medium"); p.add_argument("--cwd", required=True); p.add_argument("--tools", action="store_true"); p.add_argument("--no-tools", action="store_true"); p.add_argument("--host-tools", action="store_true", help="tools off; the caller's host runs the tools the model names (the agents-inc:luna type)"); p.add_argument("--write", action="store_true"); p.add_argument("--network", action="store_true"); p.add_argument("--run-dir"); p.add_argument("--lead", metavar="RUN_DIR"); p.add_argument("--home-repo"); p.add_argument("--thread", metavar="FILE", help="keep one Codex thread in FILE: start it when missing or empty, resume it otherwise"); p.add_argument("--timeout", type=float, metavar="SECONDS", help="kill Codex after SECONDS and exit 124 (the agents-inc:luna step limit)")
-    p = subs.add_parser("dispatch"); p.add_argument("--slots"); p.add_argument("--model"); p.add_argument("--effort"); p.add_argument("--cwd"); p.add_argument("--tier", choices=("grunt",)); p.add_argument("--run-dir"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--resume"); p.add_argument("--message"); p.add_argument("--home-repo"); p.add_argument("--serve", metavar="RUN_DIR"); p.add_argument("--poll-interval", type=float, default=1.0); p.add_argument("--idle-timeout", type=float, default=600.0); p.add_argument("--cancel", metavar="RUN_DIR"); p.add_argument("--wait", nargs=2, metavar=("RUN_DIR", "REQUEST_ID")); p.add_argument("--timeout", type=float, default=600.0)
+    p = subs.add_parser("mcp", help="workspace-bound MCP server"); p.add_argument("--cwd", required=True); p.add_argument("--allow-writes", action="store_true", help="permit write tasks and host gate commands")
+    p = subs.add_parser("dispatch"); p.add_argument("--rules", action="store_true", help="list every refusal rule id and statement"); p.add_argument("--print-template", action="store_true", help="print a worked slots file"); p.add_argument("--slots"); p.add_argument("--model"); p.add_argument("--effort"); p.add_argument("--cwd"); p.add_argument("--tier", choices=("grunt",)); p.add_argument("--run-dir"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--resume"); p.add_argument("--message"); p.add_argument("--home-repo"); p.add_argument("--serve", metavar="RUN_DIR"); p.add_argument("--poll-interval", type=float, default=1.0); p.add_argument("--idle-timeout", type=float, default=600.0); p.add_argument("--cancel", metavar="RUN_DIR"); p.add_argument("--wait", nargs=2, metavar=("RUN_DIR", "REQUEST_ID")); p.add_argument("--timeout", type=float, default=600.0)
     p = subs.add_parser("events", help="follow or redact live delegate events (spec 027)"); p.add_argument("verb", choices=("follow", "redact")); p.add_argument("run_dir", nargs="?")
     p = subs.add_parser("doctor"); p.add_argument("--json", action="store_true"); p.add_argument("--live-model"); p.add_argument("--probe", action="store_true", help="also run the tool-use probe for each free guest agent model (one free request each)")
     p = subs.add_parser("repair"); p.add_argument("--source"); p.add_argument("--yes", action="store_true", help="write ~/.claude/settings.json without asking"); p.add_argument("--no-sandbox-exclude", action="store_true", help="add no sandbox.excludedCommands entries"); p.add_argument("--adopt-existing-workerbee", action="store_true"); p.add_argument("--without-codex", action="store_true"); p.add_argument("--no-host-wiring", action="store_true"); p.add_argument("--no-mod", action="store_true"); p.add_argument("--agent-gate", choices=host_hook.AGENT_GATE_MODES); p.add_argument("--role", action="append", metavar="KEY=VALUE", help="store one roles item in the agents-inc settings file (VALUE default removes it); `agents-inc doctor` shows the effective values (D80)");p.add_argument("--legacy-routes", action=argparse.BooleanOptionalAction, default=None, help="keep the relay agent, mcp__agents-inc__run and @alias routes (off by default; the choice persists across repair)")
     p = subs.add_parser("unwire"); p.add_argument("--host", choices=("claude",), default="claude")
-    p = subs.add_parser("hook"); p.add_argument("event", choices=("session-start", "agent-nudge", "agent-done")); p.add_argument("--host", choices=("claude", "codex", "gemini"))
+    p = subs.add_parser("hook"); p.add_argument("event", choices=("session-start", "agent-nudge", "agent-done", "native-observed")); p.add_argument("--host", choices=("claude", "codex", "gemini"))
     p = subs.add_parser("ledger", add_help=False); p.add_argument("rest", nargs=argparse.REMAINDER)
     p = subs.add_parser("models"); p.add_argument("verb", nargs="?", choices=("bump", "chain", "probe")); p.add_argument("alias", nargs="?"); p.add_argument("slug", nargs="?"); p.add_argument("extra", nargs="*"); p.add_argument("--unpin", action="store_true"); p.add_argument("--clear", action="store_true")
     p = subs.add_parser("report", help="draft a bug report or feature request for agents-inc; --submit files it"); p.add_argument("kind", choices=("bug", "feature")); p.add_argument("--title", required=True); p.add_argument("--body", required=True, help="text, or - to read stdin"); p.add_argument("--submit", action="store_true")
     p = subs.add_parser("luna", help="the native agents-inc:luna subagent type (spec 028)"); p.add_argument("verb", choices=("status", "on", "off", "begin", "end")); p.add_argument("--json", action="store_true"); p.add_argument("--session"); p.add_argument("--agent"); p.add_argument("--cwd", default="."); p.add_argument("--outcome", choices=("done", "failed", "quota-paused", "aborted")); p.add_argument("--usage", help="JSON object of step usage sums (end)"); p.add_argument("--task", help="the Agent description (begin)"); p.add_argument("--all", action="store_true", help="status of every native type (the mod reads this once at session start)")
     p = subs.add_parser("native", help="guest agent types: native subagent types answered by a non-Claude model (spec 038)"); p.add_argument("verb", choices=("status", "on", "off", "allow", "begin", "end", "step")); p.add_argument("target", nargs="?", help="nickname or all (on|off); provider (allow)"); p.add_argument("--model"); p.add_argument("--provider"); p.add_argument("--workspace"); p.add_argument("--write-dir", action="append", help="a directory the free model may write (allow; repeatable; default .scratch)"); p.add_argument("--json", action="store_true"); p.add_argument("--session"); p.add_argument("--agent"); p.add_argument("--cwd", default="."); p.add_argument("--outcome", choices=("done", "failed", "quota-paused", "aborted")); p.add_argument("--usage"); p.add_argument("--task"); p.add_argument("--timeout", type=float, metavar="SECONDS", help="step: give up on the provider after SECONDS (exit 124)"); p.add_argument("--thread", metavar="FILE", help="step: accepted and ignored; stateless models resend the whole conversation")
+    p = subs.add_parser("handles", help="list or retire persisted delegate handles (spec 048)"); p.add_argument("verb", choices=("list", "retire")); p.add_argument("id", nargs="?"); p.add_argument("--agent"); p.add_argument("--session"); p.add_argument("--cwd", default="."); p.add_argument("--json", action="store_true")
     p = subs.add_parser("narrate", help="speak a short digest of each new Claude Code assistant message (prototype)"); p.add_argument("verb", choices=("on", "off", "status", "run")); p.add_argument("--summarizer", choices=("luna", "local"), default="luna"); p.add_argument("--voice", default="Samantha"); p.add_argument("--transcript"); p.add_argument("--decide-only", action="store_true"); p.add_argument("--once", action="store_true"); p.add_argument("--dry-run", action="store_true")
     subs.add_parser("rollback"); p = subs.add_parser("uninstall"); p.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv); paths = _paths()
     try:
+        if args.command == "handles": return _handles(args)
+        if args.command == "mcp":
+            from . import public_mcp
+            return public_mcp.serve(Path(args.cwd), args.allow_writes, sys.stdin, sys.stdout)
         if args.command == "install": return install(args)
         if args.command == "luna":
             from . import luna_native  # works before the receipt check: the mod asks at every session start
@@ -402,6 +484,9 @@ def main(argv=None):
         if args.command == "narrate":
             from .. import narrate  # works before the receipt check: the flag file and watcher need no install receipt
             return narrate.run_cli(args, paths.home)
+        if args.command == "dispatch" and (args.rules or args.print_template):
+            from . import rules  # reads nothing: works before the receipt check
+            sys.stdout.write(rules.rules_listing() if args.rules else rules.slots_template()); return 0
         if args.command == "dispatch":
             from . import dispatch  # works from a source checkout; Codex launch loads the receipt itself
             if args.cancel: return dispatch.cancel_run(args.cancel)
@@ -411,6 +496,7 @@ def main(argv=None):
                 from .doctor import stale_refusal
                 refusal = stale_refusal(paths)
                 if refusal: print(refusal, file=sys.stderr); return 1
+                dispatch.source_uncommitted_note(paths)  # FR-021a: one warning on stderr, never blocks
             return dispatch.run(args)
         if args.command == "events":
             from .. import live_rows  # works before the receipt check, like dispatch
@@ -438,16 +524,20 @@ def main(argv=None):
             if args.probe:
                 from . import native_probe
                 native_probe.run(paths, None)
-            report = check_install(paths, args.live_model)
+            report = check_install(paths, args.live_model, live_versions=True)  # spec 047: CLI versions, 24 h record
             if args.json:
                 print(json.dumps(report.as_dict()))
             else:
-                print(" ".join(report.codes or ("READY",)))
+                if report.codes: print(" ".join(report.codes))
+                elif report.untested: print("NOT READY: not tested now: " + ", ".join(report.untested))  # FR-018: never READY on an untested path
+                else: print("READY")
                 if "WB_REPAIR_FAILED" in report.codes:
                     try: info = json.loads(paths.state.joinpath(REPAIR_MARKER).read_text())
                     except (OSError, ValueError): info = {}
                     print(f"WB_REPAIR_FAILED: last {info.get('command', 'repair')} failed at {info.get('at', '?')}: {info.get('error', '?')}; run agents-inc repair from a normal terminal")
                 print("agent gate: {} ({})".format(*host_hook.agent_gate_mode(paths)))
+                from .doctor import item_lines
+                for il in item_lines(report): print(il)
                 from .. import role_defaults  # D80: effective role items and where each came from
                 roles = role_defaults.load(paths.settings)
                 for rl in role_defaults.show_lines(roles): print(rl)
@@ -496,7 +586,7 @@ def main(argv=None):
             for line in uninstall_mod(paths): print(line)
             if retained: print("WB_CONFIG_CONFLICT: retained modified artifacts", file=sys.stderr); [print(p, file=sys.stderr) for p in sorted(retained)]; return 1
             return 0
-        if args.command == "repair": return install(args)
+        if args.command == "repair": return _repair(args)
         if args.command == "rollback":
             if not receipt.prior_release: raise RuntimeError("no predecessor release")
             if Path(receipt.prior_release).name == receipt.release_hash:

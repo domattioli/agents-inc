@@ -53,16 +53,20 @@ See `docs/CONTRIBUTING.md` for the docker flow.
 
 ## Project rules
 
+Help the operator complete authorized work. Weigh harm from action and needless delay. Preserve existing work, resolve routine choices without asking again, and verify in proportion to the consequences. Use the host for required permissions and respect its decisions. If a step is blocked, explain why and continue independent work. The supervisor handles missing delegate grants within the original task authority.
+
+Use an available native subagent when the session permits delegation and offers the requested model. In Codex, reserve agents-inc dispatch for authorized Claude integration tests and use Haiku for live Claude tests. If a delegate is unavailable, continue independent work and report any unmet review requirement.
+
 - Incremental spend is capped at $0 per task. Pause and report quota exhaustion. Do not add a paid API fallback.
-- Claude is the required provider; Codex is optional. Optional providers may handle only allowed Grunt work. Current optional-provider routing is limited to `extract` and `summarize` tasks.
+- Governed dispatch requires Claude. Optional providers may handle only allowed Grunt work in that route. Current optional-provider routing is limited to `extract` and `summarize` tasks.
 - Confidential inputs may reach optional providers only after explicit per-workspace authorization.
 - A worker never accepts its own output. Use deterministic verification, then a reviewer; the reviewer comes from a different vendor for canon edits and irreversible changes, and may share the vendor for routine code (D46). Record the result in the ledger.
 - `WORKERBEES_GOVERNANCE` defaults to `off`. Do not describe the governed path as enabled by default.
 - Optional provider keys go through the hidden local prompt. Never put a key in a command argument or model prompt. The non-coder key store is `~/.config/workerbees/.env` with mode `0600`; operator storage rules are in `docs/DECISIONS.md`.
-- The 14-field delegation prompt contract lives in `skills/workerbee/SKILL.md` Step 11. Apply it to every dispatch that touches this repository, including dispatches from another repository.
+- The 14-field governed dispatch prompt contract lives in `skills/workerbee/SKILL.md` Step 11 and applies to dispatches from any repository. Use a bounded native brief with the requested result, authorized access, context, and acceptance check.
 - Third-party wording skills (`caveman`, `structured-gist`, `write-like-scientist`, `handoff-lint`) are optional user-scope installs, never vendored (D42). Installed: invoke them with a real Skill call. Absent: state one line such as `caveman NOT installed -> checked by hand`, apply the rules by hand, and continue. Never claim activation without a successful call.
 - Handoff lint gate (D41, conditional per D42): before any dispatch, run `python3 skills/workerbee/scripts/check_dispatch_prompt.py <prompt>` (mandatory). Add `--with-handoff-lint` to also run the optional `handoff-lint` tool; when it is absent, check H1 to H6 by hand. Apply the same gate in the report direction (`--profile report`) before verifying a delegate's claims. The gate lints and rejects; it never rewrites text.
-- Roles by rung (D78): Workhorse (sonnet, terra) is the default for anything that writes. Work that needs design or scope judgment, review, or gates belongs at Orchestrator (opus, sol). The haiku and luna grunts are read-only. Free-model coding is limited to small, narrow diffs with fixed scope.
+- Roles by rung (D78): Workhorse (sonnet, terra) is the default for anything that writes. Work that needs design or scope judgment, review, or gates belongs at Orchestrator (opus, sol). Haiku and luna may write when the operator authorizes the task and the dispatch grants the necessary permissions. Free-model coding is limited to small, narrow diffs with fixed scope.
 - A failed check means a supervisor verified returned output against the dispatch gate and found it red. Two failed checks for the same task and delegate trigger escalation by one rung with the same vendor. A quota pause counts as one failed attempt. A Lead may assign work with a recorded gate reason. A delegate's own result does not count.
 
 When `CODEX_BRIDGE_MODE=ultra`:

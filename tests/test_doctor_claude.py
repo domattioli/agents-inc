@@ -16,6 +16,7 @@ from tests.test_install_doctor import DoctorWarningsTest
 
 HAS_CLAUDE = lambda *a, **k: "/usr/bin/claude"  # noqa: E731
 SANDBOX_OK = lambda: True  # noqa: E731
+NET_OK = lambda: True  # noqa: E731  # the dispatch-path probe must not depend on the host network
 
 
 class ClaudeDoctorTest(unittest.TestCase):
@@ -28,13 +29,13 @@ class ClaudeDoctorTest(unittest.TestCase):
         self.assertFalse(report.ready)
 
     def test_present_claude_is_ready(self):
-        report = check_install(self.paths, models=[], which=HAS_CLAUDE, sandbox_probe=SANDBOX_OK)
+        report = check_install(self.paths, models=[], which=HAS_CLAUDE, sandbox_probe=SANDBOX_OK, net_probe=NET_OK)
         self.assertNotIn("WB_CLAUDE_NOT_FOUND", report.codes)
         self.assertTrue(report.ready, report)
 
     def test_nested_sandbox_is_a_warning_only(self):
         with mock.patch.object(doctor.sys, "platform", "darwin"):
-            report = check_install(self.paths, models=[], which=HAS_CLAUDE, sandbox_probe=lambda: False)
+            report = check_install(self.paths, models=[], which=HAS_CLAUDE, sandbox_probe=lambda: False, net_probe=NET_OK)
         self.assertIn("WB_SANDBOX_NESTED", report.warnings)
         self.assertNotIn("WB_SANDBOX_NESTED", report.codes)
         self.assertTrue(report.ready)
@@ -62,7 +63,7 @@ class ClaudeDoctorTest(unittest.TestCase):
                 mock.patch.object(doctor, "build_codex_argv", return_value=["codex"]), \
                 mock.patch.dict(os.environ, base):
             report = check_install(self.paths, live_model="luna", runner=runner, models=[],
-                                   which=HAS_CLAUDE, sandbox_probe=SANDBOX_OK)
+                                   which=HAS_CLAUDE, sandbox_probe=SANDBOX_OK, net_probe=NET_OK)
         env = seen["env"]
         self.assertTrue({"HOME", "USER", "PATH"} <= set(env), env)
         self.assertFalse([k for k in env if re.search("KEY|TOKEN|SECRET", k, re.IGNORECASE)])

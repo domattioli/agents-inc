@@ -32,8 +32,8 @@ export function stepTimeoutS(raw: string | undefined): number {
 const MODEL_LINE = /You are powered by the model|The exact model ID is/
 // luna asked "May I run these five requested wc commands?" and "Proceed?" on later steps, after a first step that
 // worked (macOS stress, 2026-11-11, tools.9 and par.4): the rule rides every prompt, the delta header included.
-const NO_ASK = 'Nobody can answer a question here: never ask one and never ask for confirmation or permission. ' +
-  'Decide yourself and act now.\n'
+const NO_ASK = 'This worker cannot receive conversational answers. Carry out the authorized task without asking again; ' +
+  'use the host tool permission flow when required. Respect denials and report a blocker; never bypass them.\n'
 // The host's instructions carry session-start steps for the main session ("Call Skill caveman", a handoff check);
 // luna asked whether to follow them instead of the task (rollout 01a1cb50-d730, 2026-11-11).
 const SUBAGENT_NOTE = 'You are a subagent. Session-start steps in the instructions (a required Skill call, a handoff ' +
@@ -95,7 +95,7 @@ const header = (a: Adapter, slug: string) =>
   'You drive an agent loop with real tools. To run a tool, name it in "tools"; the host runs it and its result arrives ' +
   'in the next step. Bash, Read and every other catalog tool work this way, so never answer that you cannot run one.\n' +
   a.toolHome +
-  'Example, to run a shell command: {"say": "", "tools": [{"name": "Bash", "input": {"command": "ls"}}]}\n' +
+  'Example, to run a shell command: {"say": "Listing the files.", "tools": [{"name": "Bash", "input": {"command": "ls"}}]}\n' +
   a.identity(slug) +
   a.ownTools +
   'Your reply is the JSON object itself, written as your final message text. Every tool in the catalog below is real and available: call it ' +
@@ -105,9 +105,10 @@ const header = (a: Adapter, slug: string) =>
   'A Read result starts each line with its line number and a tab: the last of those numbers is the line count of the part ' +
   'read. To count a file\'s lines, Read it whole (no offset or limit) or run wc -l.\n' +
   'A task is done only when every step it names has run: keep requesting tools until each result the report needs is in.\n' +
+  `A tool result over ${RESULT_CAP} characters is cut to its first ${RESULT_CAP}: read files about 150 lines at a time with Read offset and limit, never a whole large file, and never repeat a tool call whose result is already in the conversation.\n` +
   'Act on the latest messages; earlier ones are history.\n' + NO_ASK + SUBAGENT_NOTE +
   'Reply with exactly one JSON object and nothing else:\n' +
-  '{"say": "<short text, may be empty>", "tools": [{"name": "<tool from the catalog>", "input": {...}}]}\n' +
+  '{"say": "<one short line on what you are doing now; never empty when you call a tool>", "tools": [{"name": "<tool from the catalog>", "input": {...}}]}\n' +
   'Use "tools": [] only when you have nothing to call.\n'
 const HANDBACK_RULES =
   'When the task is done, call SubagentHandback with your full report.\n' +
@@ -170,10 +171,18 @@ type Cli = {
   ui: { log: (message: string, options: { to: 'debug' }) => unknown }
   session: { id: () => unknown }
 }
-export type Status = { offered: boolean; slug: string; reason?: string; write_dirs?: string[]; tools?: boolean }
+export type Status = { offered: boolean; slug: string; reason?: string; write_dirs?: string[]; tools?: boolean; max_input_chars?: number }
 type Ran = { outcome: 'done' | 'failed' | 'quota-paused' | 'aborted'; usage: Usage }
 // Per subagent: the thread file it keeps, whether a run has used it, and how many api messages the model has seen.
-type AgentState = { n: number; used: boolean; sent: number }
+type RestartReason = 'compaction' | 'failed-step' | 'refusal' | 'thread-missing'
+type AgentState = {
+  n: number; used: boolean; sent: number
+  // Spec 048 handle record, persisted per session in handles.json.
+  provider: string; nickname: string; slug: string | null
+  charsSent: number; state: 'live' | 'retired'; restarts: number; lastRestartReason: RestartReason | null
+  history: string[]; fingerprint: string; fingerprintLen: number; fingerprintChanged: boolean; threadTotal: Usage | null
+}
+const CEILING = 800000 // characters sent to one thread, every guest (spec 048 FR-006)
 const ZERO: Usage = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 }
 let toolTypes: string | undefined // text of the engine-written built-in tool argument types, read once
 
@@ -206,6 +215,9 @@ const debugOn = (nick: string) =>
   (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[`AGENTS_INC_${nick.toUpperCase()}_DEBUG`] === '1'
 
 const cap = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n[truncated ${s.length - n} chars]` : s)
+// #187: a tool result is cut to its head; the model is told so, and how to read the rest in pieces that fit.
+export const capResult = (s: string, n = RESULT_CAP) =>
+  s.length > n ? `${s.slice(0, n)}\n[truncated ${s.length - n} chars: this result was cut at ${n} chars, head only. Read about 150 lines at a time with offset and limit, or narrow with grep, to see the rest.]` : s
 
 // A field's `/** doc */` cut to its first sentence and FIELD_DOC_CAP chars; the field itself stays.
 const FIELD_DOC_CAP = 160
@@ -272,7 +284,7 @@ export function render(messages: readonly Msg[]): string {
         if (toolNames.get(b.tool_use_id) === 'Read' && (input.offset !== undefined || input.limit !== undefined)) {
           text += `\n[partial Read (offset ${input.offset ?? 'none'}, limit ${input.limit ?? 'none'}): these lines are part of the file; the last line number is not the file's line count]`
         }
-        out.push(`tool result${b.is_error ? ' (error)' : ''}: ${cap(text, RESULT_CAP)}`)
+        out.push(`tool result${b.is_error ? ' (error)' : ''}: ${capResult(text)}`)
       }
       else out.push(`${m.role}: [${b.type}]`)
     }
@@ -423,6 +435,8 @@ type LoopState = {
   begun: Map<string, Promise<void>> // per agent: the begin call
   ran: Map<string, Ran> // per agent: what its steps cost and how the last one ended
   runTimeoutFlag: boolean // false once the installed runtime refused the timeout flag
+  handlesLoaded: boolean // handles.json was read for this session (spec 048)
+  warned: boolean // one handle-store warning per session
 }
 const states = new Map<Adapter, LoopState>()
 function stateFor(adapter: Adapter): LoopState {
@@ -432,7 +446,7 @@ function stateFor(adapter: Adapter): LoopState {
     S = {
       agent, types: [`agents-inc:${agent}`], log: `agents-inc ${agent}:`, quota: `${agent} quota-paused`,
       ids: new Set(), agents: new Map(), threadTotals: new Map(), cwd: '', sessionId: 'session', slug: agent,
-      offered: false, chatOnly: false, writeDirs: [], dirs: new Map(), begun: new Map(), ran: new Map(), runTimeoutFlag: true,
+      offered: false, chatOnly: false, writeDirs: [], dirs: new Map(), begun: new Map(), ran: new Map(), runTimeoutFlag: true, handlesLoaded: false, warned: false,
     }
     states.set(adapter, S)
   }
@@ -442,6 +456,101 @@ function stateFor(adapter: Adapter): LoopState {
 // The dir is git-ignored; agents-inc creates it. A fresh thread after a failed resume gets the suffix -2, -3...
 const threadPath = (S: LoopState, agentId: string, n: number) =>
   `${S.cwd || '.'}/.scratch/agents-inc-${safe(S.agent)}/${safe(S.sessionId)}/${safe(agentId)}${n > 1 ? `-${n}` : ''}.thread`
+
+// Spec 048: the per-session handle store, beside the thread files. Every failure is swallowed after one warning (FR-011).
+const handlesPath = (S: LoopState) => `${S.cwd || '.'}/.scratch/agents-inc-${safe(S.agent)}/${safe(S.sessionId)}/handles.json`
+type HandleIO = { fs: { read: (p: string) => Promise<unknown>; write: (p: string, c: string) => Promise<unknown> }; ui: Cli['ui'] }
+const newAgentState = (adapter: Adapter, S: LoopState): AgentState => ({
+  n: 1, used: false, sent: 0, provider: adapter.provider, nickname: S.agent, slug: null, charsSent: 0, state: 'live',
+  restarts: 0, lastRestartReason: null, history: [], fingerprint: '', fingerprintLen: 0, fingerprintChanged: false, threadTotal: null,
+})
+function warnOnce($: HandleIO, S: LoopState, why: unknown) {
+  if (S.warned) return
+  S.warned = true
+  try { $.ui.log(`${S.log} handle store ${handlesPath(S)}: ${String((why as Error)?.message ?? why)}; continuing without it`, { to: 'debug' }) } catch { /* never block a step */ }
+}
+async function readHandles($: HandleIO, S: LoopState): Promise<Record<string, Record<string, unknown>>> {
+  try {
+    const raw = await $.fs.read(handlesPath(S))
+    if (typeof raw !== 'string' || raw.trim() === '') return {}
+    const d = JSON.parse(raw) as { version?: unknown; handles?: unknown }
+    if (d.version !== 1 || typeof d.handles !== 'object' || d.handles === null) throw new Error('unrecognised handles.json')
+    return d.handles as Record<string, Record<string, unknown>>
+  } catch (err) {
+    warnOnce($, S, err)
+    return {}
+  }
+}
+// First step of a session: seed S.agents from the file; every step: let the file's `state` win. Never throws.
+async function loadHandles($: HandleIO, S: LoopState, adapter: Adapter): Promise<void> {
+  try {
+    const file = await readHandles($, S)
+    for (const [id, h] of Object.entries(file)) {
+      const have = S.agents.get(id)
+      if (have) {
+        if (h.state === 'retired') have.state = 'retired'
+        continue
+      }
+      if (S.handlesLoaded) continue
+      const st = newAgentState(adapter, S)
+      const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d)
+      Object.assign(st, {
+        n: Math.max(1, num(h.n, 1)), used: h.used === true, sent: num(h.seen, 0), charsSent: num(h.charsSent, 0),
+        provider: typeof h.provider === 'string' ? h.provider : st.provider, nickname: typeof h.nickname === 'string' ? h.nickname : st.nickname,
+        slug: typeof h.slug === 'string' ? h.slug : null, state: h.state === 'retired' ? 'retired' : 'live', restarts: num(h.restarts, 0),
+        lastRestartReason: (['compaction', 'failed-step', 'refusal', 'thread-missing'] as const).find(r => r === h.lastRestartReason) ?? null,
+        history: Array.isArray(h.history) ? h.history.map(String) : [], fingerprint: typeof h.fingerprint === 'string' ? h.fingerprint : '',
+        fingerprintLen: num(h.fingerprintLen, 0), fingerprintChanged: h.fingerprintChanged === true,
+        threadTotal: typeof h.threadTotal === 'object' && h.threadTotal !== null ? (h.threadTotal as Usage) : null,
+      })
+      if (st.used && adapter.kind === 'thread') {
+        // $.fs has only read and write: a missing thread file reads as empty.
+        const tp = threadPath(S, id, st.n)
+        const body = await $.fs.read(tp).catch(() => '')
+        if (typeof body !== 'string' || body === '') restartAgent(st, S, id, 'thread-missing', true)
+        else if (st.threadTotal) S.threadTotals.set(tp, st.threadTotal)
+      }
+      S.agents.set(id, st)
+    }
+  } catch (err) {
+    warnOnce($, S, err)
+  }
+  S.handlesLoaded = true
+}
+async function saveHandles($: HandleIO, S: LoopState): Promise<void> {
+  try {
+    const file = await readHandles($, S)
+    const handles: Record<string, unknown> = { ...file }
+    for (const [id, st] of S.agents) {
+      if (file[id]?.state === 'retired') st.state = 'retired'
+      handles[id] = {
+        id, provider: st.provider, nickname: st.nickname, slug: st.slug, thread: threadPath(S, id, st.n), cwd: S.cwd,
+        charsSent: st.charsSent, seen: st.sent, ceiling: CEILING, state: st.state, restarts: st.restarts,
+        lastRestartReason: st.lastRestartReason, history: st.history, fingerprint: st.fingerprint, fingerprintLen: st.fingerprintLen,
+        fingerprintChanged: st.fingerprintChanged, threadTotal: st.threadTotal, n: st.n, used: st.used,
+      }
+    }
+    await $.fs.write(handlesPath(S), JSON.stringify({ version: 1, handles }, null, 2))
+  } catch (err) {
+    warnOnce($, S, err)
+  }
+}
+// A new thread for the handle: FR-009 counters and reason; the old thread ref goes to history.
+function restartAgent(st: AgentState, S: LoopState, id: string, reason: RestartReason, resetSent = false) {
+  st.history.push(threadPath(S, id, st.n))
+  st.n++
+  st.used = false
+  if (resetSent) st.sent = 0
+  st.charsSent = 0
+  st.restarts++
+  st.lastRestartReason = reason
+}
+// FNV-1a 32-bit over UTF-16 code units: 8 hex, no crypto (spec 048 FR-008).
+function fnv1a(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0
+  return h.toString(16).padStart(8, '0')
+}
 
 // The adapter's status|begin|end verbs (`agents-inc luna ...` for luna).
 async function verbCli($: Cli, adapter: Adapter, args: string[], cwd?: string): Promise<{ code: number | null; out: string; err: string }> {
@@ -526,15 +635,49 @@ export async function registerAgent($: Register$, adapter: Adapter, e: { cwd: st
     // No tools and no permissionMode: the agent inherits the parent's, like any native subagent.
     await $.agent.register({
       name: S.agent,
-      description: S.chatOnly ? `${adapter.description(status.slug)} Chat only, no tools: its tool-protocol probe failed, so it answers from the conversation alone.` : adapter.description(status.slug),
+      description: (S.chatOnly ? `${adapter.description(status.slug)} Chat only, no tools: its tool-protocol probe failed, so it answers from the conversation alone.` : adapter.description(status.slug)) + limitsNote(status),
       prompt: AGENT_PROMPT,
-      model: 'haiku', // placeholder: turn.step never calls it for this agent
+      model: status.slug, // the window header names it; the engine accepts any string at register (probe), and turn.step never calls it for this agent
     })
     S.offered = true
   } catch (err) {
     $.ui.log(`${S.log} not registered: $.agent.register failed: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
   }
 }
+
+// #188: the context cap and the result cut, in the type description, so the dispatcher sizes the task before launch.
+export const limitsNote = (s: Pick<Status, 'max_input_chars'>) =>
+  typeof s.max_input_chars === 'number' && s.max_input_chars > 0
+    ? ` Context cap ${Math.round(s.max_input_chars / 1000)}K chars for the whole conversation (about ${Math.max(1, Math.floor(s.max_input_chars / RESULT_CAP))} file reads); tool results over ${RESULT_CAP / 1000}K chars are cut. Keep the task small and name line ranges for large files.`
+    : ''
+
+// #189: a Read, Grep or Glob call identical to one already answered in the conversation, with no write or command between.
+const READS = new Set(['Read', 'Grep', 'Glob'])
+const CHANGES = new Set(['Write', 'Edit', 'NotebookEdit', 'Bash'])
+export function repeatedReads(reply: Reply | string | null, messages: readonly unknown[]): { name: string; input: string; cut: boolean }[] {
+  if (reply === null || typeof reply === 'string') return []
+  const seen = new Map<string, string>() // key -> tool_use id
+  const lens = new Map<string, number>()
+  for (const m of messages as Msg[]) {
+    for (const b of Array.isArray(m.content) ? m.content : []) {
+      if (b.type === 'tool_use') {
+        const name = String(b.name)
+        if (CHANGES.has(name)) seen.clear()
+        else if (READS.has(name)) seen.set(`${name} ${JSON.stringify(b.input ?? {})}`, String(b.id))
+      } else if (b.type === 'tool_result') lens.set(String(b.tool_use_id), resultText(b.content).length)
+    }
+  }
+  const out: { name: string; input: string; cut: boolean }[] = []
+  for (const t of reply.tools) {
+    const id = seen.get(`${t.name} ${JSON.stringify(t.input ?? {})}`)
+    if (id !== undefined) out.push({ name: t.name, input: JSON.stringify(t.input ?? {}), cut: (lens.get(id) ?? 0) > RESULT_CAP })
+  }
+  return out
+}
+const repeatPush = (rep: readonly { name: string; input: string; cut: boolean }[]) =>
+  `Tool call repeated: ${rep.map(r => `${r.name} ${r.input}`).join('; ')} already ran and its result is in the conversation above. ` +
+  (rep.some(r => r.cut) ? `That result was cut at ${RESULT_CAP} chars, so you saw only its start: read about 150 lines at a time with Read offset and limit, or use grep to find the lines you need. ` : 'Use that result; do not run the call again. ') +
+  'Reply with exactly one JSON object.\n'
 
 const FILE_WRITERS: Readonly<Record<string, string>> = { Write: 'file_path', Edit: 'file_path', NotebookEdit: 'notebook_path' }
 // Lexical path resolution against the agent cwd (the mod has no filesystem stat, so symlinks are not followed).
@@ -644,6 +787,16 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     if (!stateFor(adapter).offered) return yield* next(e)
     const S = stateFor(adapter)
     await ensureBegin($, adapter, id, taskText((await $.session.messages({ agentId: id, as: 'api' }).catch(() => [])) as Msg[]))
+    await loadHandles($ as unknown as HandleIO, S, adapter)
+    const bound = S.agents.get(id)
+    if (bound && (bound.state === 'retired' || bound.provider !== adapter.provider || bound.nickname !== S.agent)) {
+      const text = bound.state === 'retired'
+        ? `${S.log} handle ${id} is retired; start a new Agent and paste the handoff note into its prompt. Step not sent.`
+        : `${S.log} handle ${id} is bound to ${bound.provider}/${bound.nickname}, not ${adapter.provider}/${S.agent}; step not sent.`
+      yield { kind: 'text', index: 0, text }
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+      return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null }
+    }
 
     const t0 = await $.clock.now()
     // Shown live, not recorded: the window has something to show while luna works.
@@ -796,10 +949,11 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     let lastOut = ''
     const more = (text: string) => (stateless ? `${full()}\nYour previous reply:\n${lastOut || '(empty)'}\n${text}` : text)
 
-    const st = S.agents.get(id) ?? { n: 1, used: false, sent: 0 }
+    const st = S.agents.get(id) ?? newAgentState(adapter, S)
     S.agents.set(id, st)
+    let bumpedAt = 0 // `chars` when the thread last restarted: charsSent counts what the current thread received
     // A compacted conversation holds fewer messages than luna has seen: the thread no longer matches it, so start over.
-    if (st.used && messages.length < st.sent) Object.assign(st, { n: st.n + 1, used: false, sent: 0 })
+    if (st.used && messages.length < st.sent) restartAgent(st, S, id, 'compaction', true)
     let resumed = st.used && !stateless
     const sentBefore = st.sent
     let prompt = resumed ? `${deltaHeader(adapter)}${render(messages.slice(st.sent)) || '(nothing new)'}\n` : full()
@@ -809,8 +963,8 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     let run = yield* ask(prompt, threadPath(S, id, st.n), allowed)
     if (run.failed && run.retry !== false) {
       // A thread that failed may be half-written: start another one with the whole conversation.
-      st.n++
-      st.used = false
+      restartAgent(st, S, id, 'failed-step')
+      bumpedAt = chars
       resumed = false
       prompt = run.asked ? adapter.pushes.asked + full() : full()
       chars += prompt.length
@@ -835,8 +989,8 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
       // A refusal can stick to its thread: luna answered "I can't run Bash from this interface" to the push and then to
       // an unrelated follow-up (follow scenario, spec 028 Docker run). One fresh thread gets one more try.
       if (!run.failed && skipsTools(run.reply, false, taskText(messages), names) && refuses(run.reply)) {
-        st.n++
-        st.used = false
+        restartAgent(st, S, id, 'refusal')
+        bumpedAt = chars
         resumed = false
         prompt = full()
         chars += prompt.length
@@ -862,6 +1016,16 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
       const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
       if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
     }
+    // #189: a repeated read gets one push naming why; a second repeat stands (the host runs it, the guard never loops).
+    if (!run.failed && !S.chatOnly) {
+      const rep = repeatedReads(run.reply, messages)
+      if (rep.length > 0) {
+        prompt = more(repeatPush(rep))
+        chars += prompt.length
+        const again = yield* ask(prompt, threadPath(S, id, st.n), allowed)
+        if (!again.failed && again.reply !== null && typeof again.reply !== 'string' && (again.reply.tools.length > 0 || again.reply.say)) run = again
+      }
+    }
     // D76 condition 3: a free model's file-writing call outside the recorded write directories never reaches the host.
     // The model reads the refusal and gets one more try; a second violation is dropped and the step reports the refusal.
     if (!run.failed && adapter.auth === 'key-store') {
@@ -885,7 +1049,17 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     const reply = run.reply
     if (typeof reply !== 'string' && reply !== null) st.sent = messages.length
     const ms = (await $.clock.now()) - t0
-    $.ui.log(`${S.log} step ${e.index} of ${id} took ${ms} ms, prompt ${chars} chars, ${resumed ? 'resumed' : 'fresh'} thread, system ${system.length} catalog ${catalog(offeredTools, types, hand).length} conversation ${render(sentMessages).length} chars, ${names.length} tools, handback ${hand ? 'on' : 'off'}, messages ${messages.length} sent ${sentBefore}, codex_tools ${acc.tools.length ? acc.tools.join(' ') : 'none'}, usage ${acc.usage ? `in ${acc.usage.input_tokens} cached ${acc.usage.cached_input_tokens} out ${acc.usage.output_tokens}` : 'none'}`, { to: 'debug' })
+    // Spec 048 FR-006/FR-008: characters on this thread, the system fingerprint and the changed flag.
+    const sysText = (S.chatOnly ? chatHeader(adapter, S.slug) : header(adapter, S.slug)) + system + catalog(offeredTools, types, hand)
+    const fp = fnv1a(sysText)
+    const fpFlag = st.fingerprint === '' ? 'first' : st.fingerprint === fp ? 'no' : 'yes'
+    st.charsSent = stateless ? prompt.length : st.charsSent + (chars - bumpedAt)
+    st.fingerprintChanged = fpFlag === 'yes'
+    st.fingerprint = fp
+    st.fingerprintLen = sysText.length
+    if (!run.failed && !wasAborted && acc.slug && !st.slug) st.slug = acc.slug
+    st.threadTotal = S.threadTotals.get(threadPath(S, id, st.n)) ?? st.threadTotal
+    $.ui.log(`${S.log} step ${e.index} of ${id} took ${ms} ms, prompt ${chars} chars, ${resumed ? 'resumed' : 'fresh'} thread, system ${system.length} catalog ${catalog(offeredTools, types, hand).length} conversation ${render(sentMessages).length} chars, ${names.length} tools, handback ${hand ? 'on' : 'off'}, messages ${messages.length} sent ${sentBefore}, codex_tools ${acc.tools.length ? acc.tools.join(' ') : 'none'}, usage ${acc.usage ? `in ${acc.usage.input_tokens} cached ${acc.usage.cached_input_tokens} out ${acc.usage.output_tokens}` : 'none'}, sys-fp ${fp} len ${sysText.length} changed ${fpFlag} sent ${resumed ? 'no' : 'yes'}`, { to: 'debug' })
     const tokens = acc.usage
     const failure = run.failed ? (run.fail ?? `${S.agent} failed: run failed`) : typeof reply === 'string' ? `${S.agent} failed: unparsable reply` : null
     const before = S.ran.get(id)?.usage ?? ZERO
@@ -907,11 +1081,16 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
         }
       : null
 
+    await saveHandles($ as unknown as HandleIO, S)
     if (reply === null) return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: turnUsage }
 
     const out: Reply = failure !== null ? handback({ say: failure, tools: [] }, hand) : handback(reply as Reply, hand)
     let index = 1 // block 0 is the live thinking line
-    if (out.say) yield { kind: 'text', index: index++, text: out.say }
+    // FR-006: at or over the ceiling the result carries one advisory line; the handle is never retired automatically.
+    const say = st.charsSent >= CEILING
+      ? `${out.say}${out.say ? '\n' : ''}[agents-inc ${S.agent}] handle ${id} has been sent ${st.charsSent} chars (ceiling ${CEILING}): ask it for a handoff note, then start a new Agent with the note.`
+      : out.say
+    if (say) yield { kind: 'text', index: index++, text: say }
     for (const [n, tool] of out.tools.entries()) {
       yield { kind: 'tool', index, id: `${S.agent}_${e.turnId}_${e.index}_${n}`, name: tool.name }
       yield { kind: 'input', index, json: JSON.stringify(tool.input) }
@@ -919,7 +1098,7 @@ export function registerLoops(on: Parameters<Register>[0], adapters: readonly Ad
     }
     const stopReason = out.tools.length > 0 ? 'tool_use' : 'end_turn'
     yield { kind: 'stop', stopReason, usage: turnUsage }
-    return { turnId: e.turnId, index: e.index, answer: out.say, toolUses: out.tools, stopReason, usage: turnUsage }
+    return { turnId: e.turnId, index: e.index, answer: say, toolUses: out.tools, stopReason, usage: turnUsage }
   })
 }
 

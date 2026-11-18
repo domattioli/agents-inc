@@ -25,6 +25,37 @@ bridge/daemon lifecycle is unsupported by this installer.
   - **Prerequisite**
     - Newcomers should read `START-HERE.md` first.
 
+## Native delegation
+
+The active host's tool list and model catalog determine availability. Use the
+host's spawn, messaging, wait and cancel tools when offered. Task authorization
+determines what the delegate may do. The host decides whether a tool action needs
+approval. Agents-inc's native guidance and observation hooks issue no
+permission decisions for allowed calls. Claude's explicit enforce gate and guest
+eligibility rules continue to apply.
+
+Use a fresh context for independent tasks. Brief the goal, relevant files or
+facts, permitted access, and the acceptance check. Reuse the delegate for a
+related follow-up and send the changes. If the requested model or feature is
+missing, continue any independent work and report the unmet requirement.
+A different route requires its own authority. A host denial ends that action.
+
+The local host ledger is append-only. The supervisor runs deterministic checks
+and obtains any required independent review before recording an explicit verdict
+with `agents-inc ledger append --node-id <id> --verdict pass|fail`.
+
+| Route | Host ledger evidence |
+|---|---|
+| Claude Agent/Task | Tool-call ID, task description, requested or host-resolved model, agent ID when supplied, foreground return, and any final-request token counts. A background launch alone stays dispatched. |
+| Claude registered guest | Guest lifecycle records include the model, task, available usage and end status, including aborts when reported. |
+| Codex native | Trusted `SubagentStart` and `SubagentStop` hooks record the host agent ID, session, model and observed state where provided. These events lack the task brief and run-wide usage. A missing stop remains pending. |
+| Gemini native | Use the host's own evidence. Agents-inc installs no native lifecycle recorder for Gemini. |
+
+A return does not set a verification verdict. Hosts that skip a hook can leave
+an incomplete record. Claude's final-request usage stays separate from totals.
+See the [Codex hook event reference](https://learn.chatgpt.com/docs/hooks) and
+[Claude Code hook reference](https://code.claude.com/docs/en/hooks#agent).
+
 ## System
 
 - Delegation system
@@ -169,7 +200,7 @@ scripts/watch.sh <stderr>
   - **Review**
     - Use `--sandbox read-only` for review-only work.
   - **Caller sandbox**
-    - `agents-inc dispatch` refuses to start from inside the Claude Code Bash sandbox or a Codex sandbox, because that sandbox blocks the provider API. It exits 69 with `detail=caller-sandboxed`. Rerun it outside the sandbox, for example by adding `"agents-inc *"` to `sandbox.excludedCommands` (D65).
+    - `agents-inc dispatch` refuses to start from inside the Claude Code Bash sandbox or a Codex sandbox, because that sandbox blocks the provider API. It exits 69 with `detail=caller-sandboxed`. A Codex Desktop caller is detected before checkout scripts are pinned and reports `caller-sandboxed-codex`; rerun it with host-approved elevation or in a normal terminal. In Claude Code, `agents-inc install` adds `"agents-inc dispatch *"` to `sandbox.excludedCommands` (D65), and repair replaces the older broad entry.
 
 ## Irreversible actions
 
@@ -346,7 +377,7 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
 ## Governed pool
 
 - Routing and policy
-  - Four rungs; Gemini, Mistral and OpenRouter only at Grunt and only for `extract` and `summarize`. [../workerbees/router.py](../workerbees/router.py) enforces it from [../workerbees/routing.json](../workerbees/routing.json) before dispatch.
+  - Four rungs; Gemini, Mistral and OpenRouter only at Grunt and only for `extract` and `summarize`. [../agents_inc/router.py](../agents_inc/router.py) enforces it from [../agents_inc/routing.json](../agents_inc/routing.json) before dispatch.
 - Roles
   - The CEO is the operator; the CoS is the session the operator talks to. The Lead is the top-ranked model the operator names for a run and reports to the CoS once, at the end. A Worker is any agent that reports to a Lead.
 - Escalation
@@ -357,13 +388,13 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
   - Only the CoS commits and pushes.
   - A Worker sees only its own slice.
 - Verification order
-  1. **Verifier** ([../workerbees/verifier.py](../workerbees/verifier.py)): deterministic, no model call; quote accuracy, file existence, hash match, arithmetic. About 100–500 ms, $0. FAIL stops and returns to a human.
-  2. **Reviewer** ([../workerbees/reviewer.py](../workerbees/reviewer.py)): semantic review by a different vendor. About 2–20 s. Returns PASS, FAIL or `same_vendor`; `same_vendor` makes no call and means a person must review.
-  3. **Ledger** ([../workerbees/ledger.py](../workerbees/ledger.py)): append-only dual write, `~/.workerbees/ledger.jsonl` and `~/.workerbees/ledger.db`. About 10–50 ms per node.
-  - Decision: ACCEPTED when all gates pass, otherwise NEEDS_REVIEW ([../workerbees/pipeline.py](../workerbees/pipeline.py)).
+  1. **Verifier** ([../agents_inc/verifier.py](../agents_inc/verifier.py)): deterministic, no model call; quote accuracy, file existence, hash match, arithmetic. About 100–500 ms, $0. FAIL stops and returns to a human.
+  2. **Reviewer** ([../agents_inc/reviewer.py](../agents_inc/reviewer.py)): semantic review by a different vendor. About 2–20 s. Returns PASS, FAIL or `same_vendor`; `same_vendor` makes no call and means a person must review.
+  3. **Ledger** ([../agents_inc/ledger.py](../agents_inc/ledger.py)): append-only dual write, `~/.workerbees/ledger.jsonl` and `~/.workerbees/ledger.db`. About 10–50 ms per node.
+  - Decision: ACCEPTED when all gates pass, otherwise NEEDS_REVIEW ([../agents_inc/pipeline.py](../agents_inc/pipeline.py)).
   - Illustrative 500-word summary: Worker haiku 2 s + $0.01, verifier 0.2 s, reviewer terra 8 s + $0.04, ledger 0.05 s; about 10 s + $0.05 in total.
 - Schema
-  - The config schema still requires a Claude and a Codex model name at every tier. Making either subscription optional at schema level is a goal, not current behavior ([../workerbees/config_schema.py](../workerbees/config_schema.py), [../workerbees/keys.py](../workerbees/keys.py)).
+  - The config schema still requires a Claude and a Codex model name at every tier. Making either subscription optional at schema level is a goal, not current behavior ([../agents_inc/config_schema.py](../agents_inc/config_schema.py), [../agents_inc/keys.py](../agents_inc/keys.py)).
 
 ## Models: pins, drift and sync
 
@@ -376,7 +407,8 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
   - Mode lives in `~/.config/agents-inc/settings.json` as `model_updates`: `approve` (default) or `auto`. `--scheduled` applies under `auto` and otherwise parks the update in `~/.config/agents-inc/pending-model-update.json`; `--approve` applies it. `--set-mode` and `--get-mode` change and read the mode.
   - Claude aliases are bare (`opus`, `sonnet`, `haiku`), so new Claude releases arrive through Claude Code itself.
 - Doctor
-  - `agents-inc doctor` prints the status on line 1 and one `WARNING:` line per warning. Warnings never change the status. `MODEL_DRIFT <alias>: pinned <slug>, newest <slug>` means the catalog lists a newer slug. `INSTALL_STALE` means the installed release differs from the checkout it was installed from; run `agents-inc repair --source <checkout>`. `WB_CLI_TEMP_PATH` means the recorded `codex` path is temporary or a shim.
+  - `agents-inc doctor` prints the status on line 1 and one `WARNING:` line per warning. Warnings never change the status. `MODEL_DRIFT <alias>: pinned <slug>, newest <slug>` means the catalog lists a newer slug. `INSTALL_STALE` means the installed release differs from the checkout it was installed from; run `agents-inc repair --source <checkout>`. After an install from a git checkout whose bundle paths were clean, only HEAD moving to a commit whose bundle paths differ counts (a commit, checkout, reset or branch switch); uncommitted and untracked files do not. After an install with uncommitted bundle changes, any further edit counts. When git cannot run, the check reports not stale. `WB_CLI_TEMP_PATH` means the recorded `codex` path is temporary or a shim.
+  - Host CLI and catalog warnings (spec 047, D52.1). `HOST_CLI_OUTDATED <cli> <installed> < <latest>` means a newer Codex or Claude Code CLI is published; the line names the update command. `CODEX_CATALOG_FOREIGN` means `models_cache.json` was written by a different Codex version than the one installed, so doctor makes no drift claim; update the CLI, then run `codex debug models`. `PIN_NOT_IN_CATALOG <alias>` means the installed CLI's catalog does not list the pinned model, so every call to that alias will fail. `(catalog version unknown)` after a `MODEL_DRIFT` line means doctor could not tell which Codex version wrote the catalog. `host-cli-version: could-not-test` means the latest version could not be looked up (offline); it never changes READY. Doctor and repair look up versions at most once a day; session start only reads the stored result.
 - Roster
   - The installer creates an empty `~/.config/agents-inc/roster.json`. Model aliases there or in `AGENTS_INC_MODEL_MAP` (JSON object or file path) override the built-in slugs.
 - DelegateAgent MCP server
@@ -391,7 +423,7 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
 - Free-model counts
   - `PYTHONPATH=. python3 -m agents_inc.free_health rate-limits` lists calls and 429 responses per model, counted from 2026-09-29 ([BENCH.md](BENCH.md)).
 - Governance flag
-  - `WORKERBEES_GOVERNANCE` defaults to `off` ([../workerbees/gateway.py](../workerbees/gateway.py)).
+  - `WORKERBEES_GOVERNANCE` defaults to `off` ([../agents_inc/gateway.py](../agents_inc/gateway.py)).
 - Legacy free-tier scripts
   - `gask.sh`, `mask.sh` and `oask.sh` work when governance is off, are refused in governed lanes, and are planned to fold into the governed dispatcher. Each reports to `agents_inc.free_health`. `oask.sh` saves every reply to one file, so never run OpenRouter calls in parallel.
 - Artifacts
@@ -493,3 +525,21 @@ curl -X POST http://127.0.0.1:8787/prompt \
 - `../skills/workerbee/SKILL.md` contains the supervision discipline.
 - `../skills/codex-bridge/reference/routing-policy.md` contains routing.
 - `../skills/codex-bridge/reference/budget-mode.md` contains budget mode.
+
+### Workspace-bound MCP adapter
+
+`agents-inc mcp --cwd /absolute/workspace` starts a stdio MCP server for a trusted
+local client. It exposes `submit`, `status`, `result`, `cancel`, and `follow_up`.
+The server binds all submissions to that workspace and calls the same
+`agents-inc dispatch` command used at the terminal. Each submission must set
+`TASK_ACCESS` to `read` or `write`. Read-only Codex workers can use tools inside their read-only workspace profile and may write their scratch directory; Claude workers have no shell. Without `--allow-writes`, the server rejects
+write tasks and host command gates. With that flag, the client may request writes
+and gate commands; grant access only to a trusted client. Write scopes must be
+workspace-relative concrete paths. The dispatch snapshot checks scope after a
+run; it is not a filesystem sandbox, and a gate runs on the host.
+
+The server runs one job at a time to avoid overlapping scope checks in its workspace. Jobs and their identifiers belong to the server process. After it exits, a new
+server cannot resume those identifiers; the dispatcher retains its own run
+artifacts under the private temporary directory printed by the process. This
+adapter is separate from the Lead's credential-blind MCP broker and does not
+replace its narrower authority model. A sandbox can still block provider access.

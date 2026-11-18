@@ -147,6 +147,42 @@ class StdioTests(unittest.TestCase):
         self.assertTrue(res.get("isError"))
         self.assertIn("codex login", res["content"][0]["text"])
 
+    def test_exit_124_is_timeout_not_login(self):
+        res = self._call(mode="timeout", effort="medium")
+        self.assertTrue(res.get("isError"))
+        text = res["content"][0]["text"]
+        self.assertIn("timed out after 300s (effort medium)", text)
+        self.assertIn("conversation_id T-NEW", text)
+        self.assertNotIn("codex login", text)
+
+    def test_mcp_server_auth_line_gets_no_login_hint(self):
+        res = self._call(mode="mcpauth")
+        self.assertTrue(res.get("isError"))
+        self.assertNotIn("codex login", res["content"][0]["text"])
+
+    # ---- spec 047 FR-007: a model the client cannot use is not a login failure ----
+
+    def test_model_rejected_names_update_not_login(self):
+        res = self._call(mode="modelreject", model="astra")
+        self.assertTrue(res.get("isError"))
+        text = res["content"][0]["text"]
+        self.assertIn("not supported by this Codex client", text)
+        self.assertIn("npm install -g @openai/codex@latest", text)
+        self.assertIn("agents-inc models", text)
+        self.assertNotIn("codex login", text)
+
+    def test_metadata_warning_alone_is_a_normal_result(self):
+        res = self._call(mode="metadatawarn", model="astra")
+        self.assertFalse(res.get("isError"))
+        self.assertIn("answer", res["content"][0]["text"])
+        self.assertNotIn("not supported", res["content"][0]["text"])
+
+    def test_description_states_read_only_and_limits(self):
+        req = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        desc = self._run([req])[0]["result"]["tools"][0]["description"]
+        for s in ("read-only", "writes no files", "no network", "agents-inc dispatch", "300s", "900s", "1800s"):
+            self.assertIn(s, desc)
+
     def test_missing_codex_names_the_cli(self):
         res = self._call(path_dirs=[])
         self.assertTrue(res.get("isError"))
@@ -171,6 +207,13 @@ class InProcessTests(unittest.TestCase):
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
+
+    def test_auth_line_mentioning_mcp_keeps_login_hint(self):  # spec 047 G5
+        mod = self._load()
+        self.assertTrue(mod._codex_auth_failed(
+            "ERROR codex_login: 401 unauthorized fetching https://mcp.example.com/token; run login"))
+        self.assertFalse(mod._codex_auth_failed(
+            "ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(api.githubcopilot.com token)"))
 
     def _timeout_for(self, effort):
         mod = self._load()

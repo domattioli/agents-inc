@@ -1,6 +1,6 @@
 #!/bin/bash
 # Fake codex for spec 031 tests. Records argv to $FAKE_CODEX_LOG (one arg per line, then ---).
-# FAKE_CODEX_MODE: ok | empty | auth | fail | sleep | resume-mismatch
+# FAKE_CODEX_MODE: ok | empty | auth | fail | sleep | resume-mismatch | timeout | mcpauth | modelreject | metadatawarn
 if [[ -n "${FAKE_CODEX_LOG:-}" ]]; then
     { printf '%s\n' "$@"; echo '---'; } >> "$FAKE_CODEX_LOG"
 fi
@@ -28,6 +28,22 @@ case "$mode" in
     fail)
         echo "boom" >&2
         exit 2 ;;
+    timeout|mcpauth)
+        echo "{\"type\":\"thread.started\",\"thread_id\":\"$tid\"}"
+        echo "ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(api.githubcopilot.com token)" >&2
+        [[ "$mode" == "timeout" ]] && exit 124
+        exit 1 ;;
+    modelreject|metadatawarn)
+        # Spec 047: real stderr from codex-cli 0.159.2 on 2026-11-18 (modelreject); the metadata warning alone
+        # precedes runs that succeed on fallback metadata (metadatawarn).
+        echo "{\"type\":\"thread.started\",\"thread_id\":\"$tid\"}"
+        echo "warning: Model metadata for 'gpt-6.2-astra' not found" >&2
+        if [[ "$mode" == "metadatawarn" ]]; then
+            [[ -n "$out" ]] && echo "answer" > "$out"
+            exit 0
+        fi
+        echo 'ERROR: {"status":400,"error":{"message":"The '"'"'gpt-6.2-astra'"'"' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}' >&2
+        exit 1 ;;
     sleep)
         sleep "${FAKE_CODEX_SLEEP:-1}"
         exit 0 ;;

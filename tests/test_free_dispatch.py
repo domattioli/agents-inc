@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from agents_inc.install import dispatch, free_launch
-from tests.test_dispatch_cli import STATUS_RE, CliBase, _fake_launch
+from tests.test_dispatch_cli import assert_status_output, CliBase, _fake_launch
 
 FAKES = Path(__file__).resolve().parent / "fixtures" / "fake_wrappers"
 RENDER_DIR = Path(__file__).resolve().parents[1] / "skills" / "workerbee" / "scripts"
@@ -37,9 +37,8 @@ class FreeBase(CliBase):
             patcher = mock.patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        env = mock.patch.dict(os.environ, {"FAKE_LOG": str(self.log), "FAKE_REPLY": "ok reply", "FAKE_RC": "0"})
-        env.start()
-        self.addCleanup(env.stop)
+        # CliBase.tearDown restores os.environ; a patch.dict cleanup here would run after it and leak HOME (#185).
+        os.environ.update({"FAKE_LOG": str(self.log), "FAKE_REPLY": "ok reply", "FAKE_RC": "0"})
         self.n = 0
 
     def _free_slots(self, **extra) -> Path:
@@ -124,7 +123,7 @@ class RunTest(FreeBase):
                 self.log.unlink(missing_ok=True)
                 rc, out, err, run_dir = self._go(slug)
                 self.assertEqual(rc, 0, out + err)
-                self.assertRegex(out.strip(), STATUS_RE)
+                assert_status_output(self, out)
                 self.assertIn("outcome=green", out)
                 calls = self._calls()
                 self.assertEqual(len(calls), 1)
@@ -163,11 +162,20 @@ class RunTest(FreeBase):
         self.assertEqual(spec["fan_out"], {"width": 0, "total": 0, "depth": 0})
         self.assertNotIn("workers_spawned_attempts", spec)
 
-    def test_no_gates_is_unverified_exit_zero(self):
+    def test_no_gates_is_unverified_exit_four(self):
         rc, out, err, run_dir = self._go("ministral-3b-latest", self._free_slots(GATES=[]))
-        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(rc, 4, out + err)
         self.assertIn("outcome=unverified reason=no-gates", out)
         self.assertNotIn("outcome=green", out)
+
+    def test_empty_reply_is_red_no_report_with_or_without_gates(self):
+        rc, out, err, run_dir = self._go("ministral-3b-latest", self._free_slots(GATES=[]), env={"FAKE_REPLY": ""})
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("outcome=red reason=no-report", out)
+        gate = {"argv": [sys.executable, "-c", "pass"]}
+        rc, out, err, run_dir = self._go("ministral-3b-latest", self._free_slots(GATES=[gate]), env={"FAKE_REPLY": ""})
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("outcome=red reason=no-report", out)
 
     def test_failing_report_gate_is_red_gate_failed(self):
         rc, out, err, run_dir = self._go("gemini-3.8-flash", env={"FAKE_REPLY": "something else"})
@@ -183,11 +191,11 @@ class RunTest(FreeBase):
         self.assertTrue(excerpt.endswith("/" + run_dir.name + "/stdout.md"), excerpt)  # excerpt path prefix is redacted
         self.assertEqual(spec["gate_results"][0]["argv"][-1], "{report}")
 
-    def test_gate_writing_into_repo_is_red_gate_wrote(self):
+    def test_gate_writing_into_repo_is_unverified_scope_foreign_change(self):
         gate = {"argv": ["sh", "-c", "echo pwned > gate_wrote.txt"]}
         rc, out, err, run_dir = self._go("codestral-latest", self._free_slots(GATES=[gate]))
-        self.assertEqual(rc, 1, out + err)
-        self.assertIn("snapshot=CHANGED:gate_wrote.txt outcome=red reason=gate-wrote", out)
+        self.assertEqual(rc, 4, out + err)
+        self.assertIn("snapshot=CHANGED:gate_wrote.txt outcome=unverified reason=scope-foreign-change", out)
         self.assertIn("after gates:", (run_dir / "verify.txt").read_text())
 
     def test_wrapper_failure_is_red_rc_nonzero(self):

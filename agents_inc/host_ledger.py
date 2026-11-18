@@ -64,10 +64,13 @@ def dispatch_row(payload) -> dict | None:
         return None
 
     if tool_name in ("Agent", "Task"):
-        if tool_input.get("subagent_type") in NATIVE_LUNA_TYPES:
+        subagent_type = tool_input.get("subagent_type")
+        if isinstance(subagent_type, str) and subagent_type in NATIVE_LUNA_TYPES:
             return None  # `agents-inc luna begin` writes this agent's own row (spec 028 FR-026); a second one would say claude
         provider = "claude"
-        model = tool_input.get("model") or "unknown"
+        response = payload.get("tool_response")
+        response = response if isinstance(response, dict) else {}
+        model = response.get("resolvedModel") or tool_input.get("model") or "unknown"
         task = tool_input.get("description")
     elif tool_name.endswith("__DelegateAgent"):
         provider = "codex"
@@ -84,7 +87,7 @@ def dispatch_row(payload) -> dict | None:
 
     session = payload.get("session_id")
     cwd = payload.get("cwd")
-    return {
+    row = {
         "id": tool_use_id,
         "run_id": session if isinstance(session, str) and session else "unknown",
         "model": model,
@@ -109,6 +112,23 @@ def dispatch_row(payload) -> dict | None:
         "source": "host-hook",
         "timestamp": ledger._now_iso(),
     }
+    if provider == "claude":
+        agent_id = response.get("agentId")
+        if isinstance(agent_id, str) and agent_id:
+            row["agent_id"] = agent_id
+        if response.get("status") == "completed":
+            row["status"] = "returned"
+            count = _token_counter(response.get("usage"))
+            final_usage = {key: count(key) for key in (
+                "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+            ) if count(key) is not None}
+            if final_usage:
+                # Claude's Agent result reports the last request, so keep it out of run-wide counters.
+                row["final_request_usage"] = final_usage
+            duration = _token_counter({"ms": response.get("totalDurationMs")})("ms")
+            if duration is not None:
+                row["seconds"] = duration / 1000
+    return row
 
 
 def dispatch_run_row(spec: dict, task: str | None) -> dict:
@@ -168,6 +188,28 @@ def dispatch_return_row(spec: dict) -> dict:
         "cache_read": count("cache_read"), "cache_write": count("cache_write"), "files_created": None,
         "verdict": {"green": "pass", "red": "fail"}.get(outcome), "cwd": spec.get("cwd"), "source": "dispatch",
         "timestamp": ledger._now_iso(),
+        **_measured_fields(spec),
+    }
+
+
+def _measured_fields(spec: dict) -> dict:
+    """Spec 042 contracts/return-row.md: the measured fields of a return row, read from the run spec. Absent parts stay
+    empty (old runs, refusals before a gate), so a reader of older rows sees the same keys either way."""
+    scope, claims = spec.get("scope"), spec.get("claims")
+    return {
+        "dispatch_row_id": spec["run_id"],
+        "exit_code": spec.get("exit_code"),
+        "state": spec.get("state"),
+        "gate_results": [{"id": g.get("id"), "argv0": (g.get("argv") or [""])[0], "state": g.get("state"),
+                          "rc": g.get("rc"), "reason": g.get("reason")} for g in spec.get("gate_results") or []],
+        "scope": ({"state": scope.get("state"), "foreign_count": len(scope.get("foreign") or []),
+                   "in_scope_count": len(scope.get("in_scope") or []),
+                   **{k: len(scope[f]) for k, f in (("unreadable_count", "unreadable"), ("unbaselined_count", "unbaselined"))
+                      if scope.get(f)}} if scope else None),
+        "claims": ({"state": claims.get("state"), "unsupported": claims.get("unsupported", 0),
+                    "items": claims.get("items") or [], "omitted": claims.get("omitted") or [],
+                    "weak": claims.get("weak") or [],
+                    **({"not_checked": claims["not_checked"]} if claims.get("not_checked") else {})} if claims else None),
     }
 
 
@@ -220,6 +262,32 @@ def record_hook_dispatch(state, payload) -> bool:
         _append_row(state, row)
         return True
     except Exception:
+        return False
+
+
+def record_codex_subagent(state, payload: dict) -> bool:
+    """Record observed Codex lifecycle events without inferring acceptance or reading transcripts."""
+    event = payload.get("hook_event_name")
+    if event not in ("SubagentStart", "SubagentStop"):
+        return False
+    status = "dispatched" if event == "SubagentStart" else "returned"
+    agent_id, session = payload.get("agent_id"), payload.get("session_id")
+    if not status or not all(isinstance(value, str) and value for value in (agent_id, session)):
+        return False
+    model = payload.get("model")
+    cwd = payload.get("cwd")
+    agent_type = payload.get("agent_type")
+    row = {
+        "id": agent_id, "run_id": session, "model": model if isinstance(model, str) else None,
+        "tier": _tier("codex", model) if isinstance(model, str) else None, "provider": "codex",
+        "status": status, "source": "native-codex-hook", "verdict": None,
+        "cwd": cwd if isinstance(cwd, str) else None,
+        "agent_type": agent_type if isinstance(agent_type, str) else None, "timestamp": ledger._now_iso(),
+    }
+    try:
+        _append_row(state, row)
+        return True
+    except OSError:
         return False
 
 

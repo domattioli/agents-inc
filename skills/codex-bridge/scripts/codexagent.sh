@@ -91,11 +91,6 @@ else
     codex "${CODEX_ARGV[@]}" 2>"$STDERR_FILE" >"$JSONL_FILE" || CODEX_EXIT=$?
 fi
 
-if [[ $CODEX_EXIT -ne 0 ]]; then
-    cat "$STDERR_FILE" >&2
-    exit $CODEX_EXIT
-fi
-
 THREAD_ID="$(head -n 5 "$JSONL_FILE" | python3 -c '
 import json, sys
 for line in sys.stdin:
@@ -107,6 +102,15 @@ for line in sys.stdin:
         print(tid)
         break
 ' || true)"
+
+if [[ $CODEX_EXIT -ne 0 ]]; then
+    cat "$STDERR_FILE" >&2
+    # A known thread id lets the caller resume after a timeout (exit 124).
+    if [[ -n "$THREAD_ID" ]]; then
+        echo "CONVERSATION_ID=$THREAD_ID" >&2
+    fi
+    exit $CODEX_EXIT
+fi
 
 if [[ -n "$RESUME_ID" && "$THREAD_ID" != "$RESUME_ID" ]]; then
     echo "Error: conversation $RESUME_ID not found; Codex started a new thread" >&2

@@ -10,6 +10,8 @@ EOF
 project=$(basename "$project_dir" 2>/dev/null)
 SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)
 CACHE="${HOME}/.claude/statusline-domi-cache.json"
+# Per-session cache: concurrent sessions must not overwrite each other's session_id (SESS showed a dash).
+if [ -n "$sid" ]; then mkdir -p "${HOME}/.claude/statusline-cache" 2>/dev/null && CACHE="${HOME}/.claude/statusline-cache/${sid}.json"; fi
 
 # Plan-limit readings for agents (they never see the stdin payload). Atomic write; skipped when absent.
 if [ -n "$cl5_raw$cl7_raw" ]; then
@@ -47,14 +49,15 @@ if [ -f "$CACHE" ] && [ -n "$sid" ]; then
   cache_sid=$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CACHE" 2>/dev/null | head -1)
   [ "$age" -lt 60 ] && [ "$cache_sid" = "$sid" ] && run_collector=0
 fi
+[ "$run_collector" -eq 1 ] && find "${HOME}/.claude/statusline-cache" -name "*.json" -mtime +7 -delete 2>/dev/null
 if [ "$run_collector" -eq 1 ] && [ -n "$sid" ] && [ -f "$SELF_DIR/statusline.d/collect_usage.py" ]; then
   if command -v timeout >/dev/null 2>&1; then runner=timeout
   elif command -v gtimeout >/dev/null 2>&1; then runner=gtimeout
   else runner=""; fi
   cl5_reset_arg=""
   [ -n "$cl5_reset" ] && cl5_reset_arg="--claude-h5-resets-at $cl5_reset"
-  if [ -n "$runner" ]; then "$runner" 5s python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" $cl5_reset_arg >/dev/null 2>&1 || true
-  else python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" $cl5_reset_arg >/dev/null 2>&1 || true; fi
+  if [ -n "$runner" ]; then "$runner" 5s python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" --out "$CACHE" $cl5_reset_arg >/dev/null 2>&1 || true
+  else python3 "$SELF_DIR/statusline.d/collect_usage.py" --session-id "$sid" --transcript "$tpath" --session-start "$session_start" --project-dir "$project_dir" --current-claude-model "$cur_id_raw" --out "$CACHE" $cl5_reset_arg >/dev/null 2>&1 || true; fi
 fi
 
 # Deterministic time-throttled background usage-DB ingest (not LLM-triggered; fire-and-forget, never blocks render).
@@ -76,8 +79,8 @@ dump=$(jq -r '
  "PWT\t"+([("claude","openai","free") as $p|("h5","d1","d7","d28","all") as $w|(.provider_windows[$p][$w].tokens|s)]|join("\t")),
  "PWC\t"+([("claude","openai","free") as $p|("h5","d1","d7","d28","all") as $w|(.provider_windows[$p][$w].cost|s)]|join("\t")),
  "HIST\t"+([(.history_days.claude|s),(.history_days.openai|s),(.history_days.free|s)]|join("\t")),
- (.models|to_entries[]|.key as $id|.value as $v|"MODEL\t"+([$id,($v.session.tokens|s),($v.session.cost|s),($v.d1.tokens|s),($v.d1.cost|s),($v.d7.tokens|s),($v.d7.cost|s),($v.d28.tokens|s),($v.d28.cost|s),($v.all.tokens|s),($v.all.cost|s),($v.h5.tokens|s),($v.session.tokens_noncache|s)]|join("\t"))),
- ((.free_top4_d7//[])[]|"FREE\t"+([(.model//""),(.tokens//0),(.session.tokens//0),((.session.equiv_cost//.session.cost)|s),(.d7.tokens//0),((.d7.equiv_cost//.d7.cost)|s),(.h5.tokens//0),(.d1.tokens//0),(.d1.equiv_cost|s),(.d28.tokens//0),(.d28.equiv_cost|s),(.all.tokens//0),(.all.equiv_cost|s),(.h5.equiv_cost|s)]|join("\t")))
+ (.models|to_entries[]|.key as $id|.value as $v|"MODEL\t"+([$id,($v.session.tokens|s),($v.session.cost|s),($v.d1.tokens|s),($v.d1.cost|s),($v.d7.tokens|s),($v.d7.cost|s),($v.d28.tokens|s),($v.d28.cost|s),($v.all.tokens|s),($v.all.cost|s),($v.h5.tokens|s),($v.session.tokens_noncache|s),($v.h5.cost|s),($v.pace.usd_per_day|s),($v.pace.days|s),($v.pace.hist_days|s),($v.pace.all_cost|s)]|join("\t"))),
+ ((.free_top4_d7//[])[]|"FREE\t"+([(.model//""),(.tokens//0),(.session.tokens//0),((.session.equiv_cost//.session.cost)|s),(.d7.tokens//0),((.d7.equiv_cost//.d7.cost)|s),(.h5.tokens//0),(.d1.tokens//0),(.d1.equiv_cost|s),(.d28.tokens//0),(.d28.equiv_cost|s),(.all.tokens//0),(.all.equiv_cost|s),(.h5.equiv_cost|s),(.pace.usd_per_day|s),(.pace.days|s),(.pace.hist_days|s),(.pace.all_cost|s)]|join("\t")))
 ' "$CACHE" 2>/dev/null)
 sncache=(— — — — — — — —); mtok=(0 0 0 0 0 0 0 0 0 0 0 0); mcost=(— — — — — — — — — — — —)
 h5tok=(0 0 0 0 0 0 0 0 0 0 0 0); h5cost=(— — — — — — — — — — — —)  # 0-3 ANT, 4-7 OAI, 8-11 FREE top4 (ALL)
@@ -89,6 +92,7 @@ hist_c=—; hist_o=—; hist_f=—
 pwt=(); pwc=()  # provider_windows: 15 each, claude/openai/free x h5 d1 d7 d28 all; empty = absent
 fmod=("" "" "" ""); ftok=(0 0 0 0); fstok=(0 0 0 0); fscost=(— — — —); fdtok=(0 0 0 0); fdcost=(— — — —); ci=0; oi=0; fi=0
 mids=("" "" "" "" "" "" "" "")  # ANT 0-3, OAI 4-7: exact model ids
+ppd=(— — — — — — — — — — — —); pdy=(— — — — — — — — — — — —); phs=(— — — — — — — — — — — —); pal=(— — — — — — — — — — — —)  # per-row pace block: usd_per_day, days, hist_days, all_cost (— = absent or null)
 while IFS=$'\t' read -r kind a b c d e f g h i j k l m n o p q r s t u v w x y z; do
  case "$kind" in
  META) gen_at=$k; cache_sid_now=$z; ch5_raw=$a; ch5_reset=$b; cd7_raw=$d; cd7_reset=$e; claude_h5_cost=$q; openai_h5_cost=$s; claude_all_tok=$t; claude_all_cost=$u; openai_all_tok=$v; openai_all_cost=$w; free_all_tok=$x; free_all_cost=$y; : "$c" "$f" "$g" "$h" "$i" "$j" "$l" "$m" "$n" "$o" "$p" "$r";;
@@ -97,14 +101,14 @@ while IFS=$'\t' read -r kind a b c d e f g h i j k l m n o p q r s t u v w x y z
  HIST) hist_c=$a; hist_o=$b; hist_f=$c;;
  MODEL) # exact ids from the cache, ranked by the collector: first 4 claude-* rows -> ANT (0-3), first 4 others -> OAI (4-7)
   case "$a" in claude*) if [ "$ci" -lt 4 ]; then x=$ci; ci=$((ci+1)); else x=; fi;; *) if [ "$oi" -lt 4 ]; then x=$((oi+4)); oi=$((oi+1)); else x=; fi;; esac
-  [ -n "$x" ] && { mids[x]=$a; mtok[x]=$b; mcost[x]=$c; d1tok[x]=$d; d1cost[x]=$e; dtok[x]=$f; dcost[x]=$g; motok[x]=$h; mocost[x]=$i; altok[x]=$j; alcost[x]=$k; h5tok[x]=${l:-0}; sncache[x]=${m:-—}; };;
- FREE) [ "$fi" -lt 4 ] && { fmod[fi]=$a; ftok[fi]=$b; fstok[fi]=$c; fscost[fi]=$d; fdtok[fi]=$e; fdcost[fi]=$f; x=$((fi+8)); mtok[x]=$c; mcost[x]=$d; dtok[x]=$e; dcost[x]=$f; h5tok[x]=${g:-0}; d1tok[x]=${h:-0}; d1cost[x]=${i:-—}; motok[x]=${j:-0}; mocost[x]=${k:-—}; altok[x]=${l:-0}; alcost[x]=${m:-—}; h5cost[x]=${n:-—}; fi=$((fi+1)); };;
+  [ -n "$x" ] && { mids[x]=$a; mtok[x]=$b; mcost[x]=$c; d1tok[x]=$d; d1cost[x]=$e; dtok[x]=$f; dcost[x]=$g; motok[x]=$h; mocost[x]=$i; altok[x]=$j; alcost[x]=$k; h5tok[x]=${l:-0}; sncache[x]=${m:-—}; h5cost[x]=${n:-—}; ppd[x]=${o:-—}; pdy[x]=${p:-—}; phs[x]=${q:-—}; pal[x]=${r:-—}; };;
+ FREE) [ "$fi" -lt 4 ] && { fmod[fi]=$a; ftok[fi]=$b; fstok[fi]=$c; fscost[fi]=$d; fdtok[fi]=$e; fdcost[fi]=$f; x=$((fi+8)); mtok[x]=$c; mcost[x]=$d; dtok[x]=$e; dcost[x]=$f; h5tok[x]=${g:-0}; d1tok[x]=${h:-0}; d1cost[x]=${i:-—}; motok[x]=${j:-0}; mocost[x]=${k:-—}; altok[x]=${l:-0}; alcost[x]=${m:-—}; h5cost[x]=${n:-—}; ppd[x]=${o:-—}; pdy[x]=${p:-—}; phs[x]=${q:-—}; pal[x]=${r:-—}; fi=$((fi+1)); };;
  esac
 done <<EOF
 $dump
 EOF
 # No cache at all: placeholder roster (dashes). Cache without enough models: blank rows.
-if [ -z "$dump" ]; then mids=(claude-fable-5-1 claude-opus-5-5 claude-sonnet-5-5 claude-haiku-4-5 gpt-6-astra gpt-6.1-sol gpt-6.1-terra gpt-6-luna)
+if [ -z "$dump" ]; then mids=(claude-fable-5-1 claude-opus-5-5 claude-sonnet-5-5 claude-haiku-4-5 gpt-6.2-astra gpt-6.2-sol gpt-6.1-terra gpt-6-luna)
 else for k in 0 1 2 3 4 5 6 7; do [ -n "${mids[k]}" ] || { mtok[k]=—; mcost[k]=—; h5tok[k]=—; h5cost[k]=—; d1tok[k]=—; d1cost[k]=—; dtok[k]=—; dcost[k]=—; motok[k]=—; mocost[k]=—; altok[k]=—; alcost[k]=—; }; done; fi
 : "${ch5_reset:-}" "${cd7_reset:-}" "${dur_ms:-}" "${ftok[0]}" "${total_cost:-}"
 
@@ -132,7 +136,7 @@ ecost(){ cost "$1"; }
 NOW=$(date +%s)
 # Data trust. cache_ok=0: no readable cache, every figure is unknown and shows a dash.
 # sess_ok=0: SESS and TPM show a dash when the cache belongs to another session, the payload has no session id, or the cache is over 5 min old.
-# win_stale=1: the cache is over 5 min old, so the window cells keep their numbers but render dim.
+# win_stale=1: the cache is over 5 min old, so the window cells keep their numbers but render dim, and the TPM cell shows the cache age (AGE <n><unit>) when cache_ok=1.
 cache_ok=1; sess_ok=1; win_stale=0
 [ -n "$dump" ] || cache_ok=0
 case "${gen_at:-}" in ""|*[!0-9]*) gen_age=999999;; *) gen_age=$((NOW-gen_at));; esac
@@ -175,27 +179,41 @@ level(){ case "$1" in ""|—|null|*[!0-9.]*) printf %s "$CD";; *) ramp_color "$(
 # Model-name tier scale: teal lightness (blue-green, separate from the cyan->magenta pressure ramp). Top tier brightest.
 teal_color(){ local t=$1; fg "$((60+70*t/1000))" "$((120+125*t/1000))" "$((130+75*t/1000))"; }
 CT1=$(teal_color 1000); CT2=$(teal_color 750); CT3=$(teal_color 500); CT4=$(teal_color 250); CT5=$(teal_color 0)
-# Colour rules (SPEC.md "Token colour model"). Window order SESS 5H 1D 7D 30D ALL; value i of a call belongs to column (i mod 6).
+# Colour rules (SPEC.md "Token colour model"). Window order SESS 5H 1D 7D 28D ALL; value i of a call belongs to column (i mod 6).
 # Both helpers: missing, zero, negative or non-numeric ("—", "null", "") -> NA (renders CD) and is left out of the column's set.
-# Tokens, sharecols: LOG share of the column max. Set = the 12 model cells only (Σ cells leave the set; they use pacecols). permille = clamp(int(1000*(1+log10(v/max)/3)),0,1000); v>=max -> exactly 1000 (float guard).
+# Tokens, sharecols: LOG share of the column max. Used for the ALL column only (model cells in SESS to 28D use modelpace, Σ and dollar cells use pacecols). Set = the 12 model cells (Σ cells leave the set). permille = clamp(int(1000*(1+log10(v/max)/3)),0,1000); v>=max -> exactly 1000 (float guard).
 # sharecols <values...> -> one permille / NA per value.
 sharecols(){ printf '%s\n' "$@" | awk '{i=NR-1;c=i%6;v=$0;if(v==""||v~/[^0-9.eE+-]/||v+0<=0){ok[i]=0;next}v+=0;ok[i]=1;x[i]=v;if(!(c in mx)||v>mx[c])mx[c]=v}
  END{for(j=0;j<NR;j++){if(!ok[j]){print "NA";continue}m=mx[j%6];if(x[j]>=m)t=1000;else t=1000*(1+log(x[j]/m)/log(10)/3);if(t>1000)t=1000;if(t<0)t=0;print int(t)}}'; }
-# Pace, pacecols <sess_s> <min_since_midnight> <history_days a,b,c> <18 values>: pace colour per provider against its own history (SPEC.md "Dollar cells", "Σ token cells").
-# Values: 3 providers x 6 windows (SESS 5H 1D 7D 30D ALL), CSUM dollars or TSUM tokens.
+# Pace (Σ and dollar cells), pacecols <sess_s> <min_since_midnight> <history_days a,b,c> <18 values>: pace colour per provider against its own history (SPEC.md "Dollar cells", "Σ token cells").
+# Values: 3 providers x 6 windows (SESS 5H 1D 7D 28D ALL), CSUM dollars or TSUM tokens.
 # No noise floor: only a zero, missing or non-numeric cell is NA, or every cell of a provider whose d28 is zero.
-# history_days = days of history per provider (— or empty = unknown -> 28). days = clamp(history, 1, 28). d28 = the provider's 30D cell.
-# 30D cell: if raw history_days > 28 and ALL > 0, expected = ALL*28/history, r = 30D/expected, same log2 map; else N. ALL cell: N.
-# expected = d28 * window_hours / (days*24); permille = clamp(500 + 500*log2(value/expected), 0, 1000). Window hours: 5H 5, 1D hours since midnight (floor 6), 7D min(168, days*24), SESS = duration (under 30 min -> NA).
-# Prints one token per value: permille, NA (dim: zero, unknown, or d28 zero), or N (neutral: ALL always; 30D when history <= 28 or unknown).
-pacecols(){ local ss=$1 mm=$2 hd=$3; shift 3; printf '%s\n' "$@" | awk -v ss="$ss" -v mm="$mm" -v hd="$hd" 'BEGIN{split(hd,H,",")}{v[NR-1]=$0}
+# history_days = days of history per provider (— or empty = unknown -> 28). days = clamp(history, 1, 28). d28 = the provider's 28D cell.
+# 28D cell: if raw history_days > 28 and ALL > 0, expected = ALL*28/history, r = 28D/expected, same log2 map; else N. ALL cell: N.
+# expected = d28 * window_hours / (days*24); permille = clamp(500 + 250*log2(value/expected), 0, 1000): r <= 0.25 cyan, r = 1 mid blend, r >= 4 magenta (one range for model, Σ and dollar cells). Window hours: 5H 5, 1D hours since midnight (floor 6), 7D min(168, days*24), SESS = duration (under PACE_SESS_FLOOR_S, 5 min -> NA).
+# Prints one token per value: permille, NA (dim: zero, unknown, or d28 zero), or N (neutral: ALL always; 28D when history <= 28 or unknown).
+# SESS pace floor (operator, 2026-11-18): a session younger than this many seconds renders CD in SESS pace cells (pacecols and modelpace).
+PACE_SESS_FLOOR_S=300
+pacecols(){ local ss=$1 mm=$2 hd=$3; shift 3; printf '%s\n' "$@" | awk -v ss="$ss" -v mm="$mm" -v hd="$hd" -v sf="$PACE_SESS_FLOOR_S" 'BEGIN{split(hd,H,",")}{v[NR-1]=$0}
  END{for(j=0;j<NR;j++){g=int(j/6);c=j%6;if(c==5){print "N";continue}
    x=v[j];d=v[g*6+4];if(x==""||x~/[^0-9.eE+-]/||d==""||d~/[^0-9.eE+-]/){print "NA";continue}
    x+=0;d+=0;if(x<=0||d<=0){print "NA";continue}
    hr=28;if(H[g+1]!=""&&H[g+1]!~/[^0-9.eE+-]/)hr=H[g+1]+0;dy=hr;if(dy>28)dy=28;if(dy<1)dy=1
-   if(c==4){a=v[g*6+5];if(hr<=28||a==""||a~/[^0-9.eE+-]/||a+0<=0){print "N";continue}r=x/(a*28/hr);t=500+500*log(r)/log(2);if(t>1000)t=1000;if(t<0)t=0;print int(t);continue}
-   if(c==0){if(ss<1800){print "NA";continue}h=ss/3600}else if(c==1)h=5;else if(c==2)h=(mm/60<6)?6:mm/60;else h=(dy*24<168)?dy*24:168
-   r=x/(d*h/(dy*24));t=500+500*log(r)/log(2);if(t>1000)t=1000;if(t<0)t=0;print int(t)}}'; }
+   if(c==4){a=v[g*6+5];if(hr<=28||a==""||a~/[^0-9.eE+-]/||a+0<=0){print "N";continue}r=x/(a*28/hr);t=500+250*log(r)/log(2);if(t>1000)t=1000;if(t<0)t=0;print int(t);continue}
+   if(c==0){if(ss<sf){print "NA";continue}h=ss/3600}else if(c==1)h=5;else if(c==2)h=(mm/60<6)?6:mm/60;else h=(dy*24<168)?dy*24:168
+   r=x/(d*h/(dy*24));t=500+250*log(r)/log(2);if(t>1000)t=1000;if(t<0)t=0;print int(t)}}'; }
+# Model cells (SESS 5H 1D 7D 28D), modelpace <sess_s> <min_since_midnight> <12 rows of "c0 c1 c2 c3 c4 usd_per_day days hist_days all_cost">: cost-weighted pace against the row's own or family baseline (cache pace block).
+# c0..c4 = the row's dollar cells SESS 5H 1D 7D 28D. r = cell cost / expected cost; expected = usd_per_day * window_hours / 24, same window hours as pacecols (5H 5, 1D hours since midnight floor 6, 7D min(168, days*24), SESS duration).
+# 28D: expected = all_cost * 28 / hist_days; neutral (N) when hist_days <= 28. Zero, missing or null cost, null pace, SESS under PACE_SESS_FLOOR_S (5 min) -> NA (grey). Same map as pacecols: permille = clamp(500 + 250*log2(r), 0, 1000).
+# Prints 5 tokens per row, row-major: permille, NA or N. The ALL column is not a pace cell (it keeps sharecols).
+modelpace(){ local ss=$1 mm=$2; shift 2; printf '%s\n' "$@" | awk -v ss="$ss" -v mm="$mm" -v sf="$PACE_SESS_FLOOR_S" 'function ok(v){return v!=""&&v!~/[^0-9.eE+-]/}
+ {for(c=0;c<5;c++){x=$(c+1);u=$6;dy=$7;hs=$8;al=$9
+  if(!ok(x)||x+0<=0){print "NA";continue}
+  if(c==4){if(!ok(hs)){print "NA";continue}if(hs+0<=28){print "N";continue}if(!ok(al)||al+0<=0){print "NA";continue}e=al*28/hs}
+  else{if(!ok(u)||u+0<=0||!ok(dy)){print "NA";continue}dd=dy+0;if(dd>28)dd=28;if(dd<1)dd=1
+   if(c==0){if(ss<sf){print "NA";continue}h=ss/3600}else if(c==1)h=5;else if(c==2)h=(mm/60<6)?6:mm/60;else h=(dd*24<168)?dd*24:168
+   e=u*h/24}
+  t=500+250*log(x/e)/log(2);if(t>1000)t=1000;if(t<0)t=0;print int(t)}}'; }
 ramp_t(){ case "$1" in NA) _c=$CD;; *) ramp_c "$1";; esac; }
 # Tier color: classify by model display name (case-insensitive substring match)
 tier_color(){ local name="$1" lower; lower=" $(printf '%s' "$name" | LC_ALL=C tr '[:upper:]-_:/' '[:lower:]    ') "  # ids -> words, padded so " pro " matches as a word
@@ -242,7 +260,9 @@ fi
 git_val="${bra_dirty_c}$(pad_left 3 "$bra_dirty")${R} ${bra_ahead_c}$(pad_left 3 "$bra_ahead")${R}"
 ctx=$(pct "$ctx_raw");cl5=$(pct "$cl5_raw");cl7=$(pct "$cl7_raw");ch5=$(pct "${ch5_raw:-}");cd7=$(pct "${cd7_raw:-}")
 # Context bar scaled to autoCompactWindow
-ac_win=$(jq -r 'if .autoCompactEnabled == false then "" else (.autoCompactWindow // "") end' "$HOME/.claude/settings.json" 2>/dev/null)
+# /autocompact writes modelSettings.<model-id>.autoCompactWindow (number or "auto"); it wins over the top-level key. "auto" = no scaling.
+ac_mid=${cur_id_raw%%\[*}; case "$ac_mid" in *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ac_mid=${ac_mid%-*};; esac
+ac_win=$(jq -r --arg id "$ac_mid" 'if .autoCompactEnabled == false then "" else ((.modelSettings[$id] // {}) as $m | (if ($m|has("autoCompactWindow")) then $m.autoCompactWindow else .autoCompactWindow end) // "" | if type=="number" then tostring else "" end) end' "$HOME/.claude/settings.json" 2>/dev/null)
 cw=${ctx_size%%.*}; case "$cw" in ''|*[!0-9]*) cw=200000;; esac
 cap=$cw
 if [ -n "$ac_win" ] && [ "$ac_win" -gt 0 ] 2>/dev/null && [ "$ac_win" -lt "$cw" ]; then cap=$ac_win
@@ -305,7 +325,7 @@ cpu_val_pct=$(get_cpu_info)
 IFS=$'\t' read -r cpu_val cpu_pct <<< "$cpu_val_pct"
 cpu_val=$(pad_left 15 "$cpu_val")
 # Model tables (col4 ANT, col5 OAI): 6 rows = 4 models, Σ tokens, Σ $.
-# Row layout: name left-justified to 10, then SESS 1D 7D 30D ALL tokens, each right-justified in 5 (35 total).
+# Row layout: name left-justified to 10, then SESS 1D 7D 28D ALL tokens, each right-justified in 5 (35 total).
 # Column labels live in the top border (see hdr below).
 # Display names come from the exact model id: claude-opus-5-5 -> "Opus 5.5", gpt-5.6-sol -> "GPT-5.6 Sol". Unknown ids pass through.
 # OAI's longest (GPT-5.6 Terra, 13) sets that table's name column to 13.
@@ -318,7 +338,7 @@ model_label(){ local id=${1%%\[*} f re1='^claude-([a-z]+)-([0-9]+)(-([0-9]+))?$'
  elif [ -n "$id" ]; then _lbl=$id; else _lbl=—; fi
  _lbl=${_lbl:0:$onw}; }
 fsum(){ awk 'BEGIN{t=0;n=0}{for(i=1;i<=NF;i++)if($i!="—"&&$i!="null"&&$i!=""){t+=$i;n++}}END{if(n)printf "%.4f",t;else printf "—"}' <<<"$*"; }
-# Heat: the 12 model cells share one log-share scale per window column; sigma cells use pace (pacecols).
+# Heat: the ALL column of the 12 model cells shares one log-share scale; the window columns use pace (modelpace); sigma cells use pace (pacecols).
 MH=(); TH=(); _hv=()
 for k in 0 1 2 3 4 5 6 7 8 9 10 11; do _hv+=("${mtok[k]}" "${h5tok[k]}" "${d1tok[k]}" "${dtok[k]}" "${motok[k]}" "${altok[k]}"); done
 # o = offset into the per-model arrays (0 ANT, 4 OAI, 8 FREE). Sigma and $ = provider totals (provider_windows,
@@ -339,19 +359,23 @@ for o in 0 4 8; do
   if [ "$w" != mcost ]; then wi=$((${#CSUM[@]}%6-1)); pv=${pwc[pb+wi]:-—}; pwnum "$pv" && v=$(pwmax "$pv" "$v"); fi
   CSUM+=("$v"); done
 done
-# Model cells: one sharecols (log share) call over the 72 model values.
-for x in $(sharecols "${_hv[@]}"); do ramp_t "$x"; MH+=("$_c"); done
-# Σ and $ cells (provider totals): pace colour per provider (pacecols) on TSUM tokens and CSUM dollars; 30D neutral. ALL cells get log share across the 3 providers.
+# Model cells: one sharecols (log share) call over the 72 model values; only the ALL column (i mod 6 = 5) takes its colour. Window columns are set by modelpace below.
+_i=0; for x in $(sharecols "${_hv[@]}"); do if [ $((_i%6)) -eq 5 ]; then ramp_t "$x"; MH+=("$_c"); else MH+=("$CD"); fi; _i=$((_i+1)); done
+# Σ and $ cells (provider totals): pace colour per provider (pacecols) on TSUM tokens and CSUM dollars; 28D neutral. ALL cells get log share across the 3 providers.
 _sd=${dur_ms%%.*}; _sd=$((${_sd:-0}/1000)); [ "$sess_ok" -eq 0 ] && _sd=0
 read -r _hh _mn <<<"$(date +'%H %M')"; _mm=$((10#$_hh*60+10#$_mn))
 _hd="${hist_c},${hist_o},${hist_f}"
 CH=(); for x in $(pacecols "$_sd" "$_mm" "$_hd" "${CSUM[@]}"); do if [ "$x" = N ]; then CH+=("$CN"); else ramp_t "$x"; CH+=("$_c"); fi; done
-TH=(); for x in $(pacecols "$_sd" "$_mm" "$_hd" "${TSUM[@]}"); do if [ "$x" = N ]; then TH+=("$CN"); else ramp_t "$x"; TH+=("$_c"); fi; done
+# Σ token cells follow the Σ dollar cells (pace quantity is dollars for every pace cell); ALL cells are overwritten below.
+TH=("${CH[@]}")
+# Model cells SESS 5H 1D 7D 28D: pace on the row's dollars against its own or family baseline (cache pace block). 12 rows x 5 windows.
+_mr=(); for k in 0 1 2 3 4 5 6 7 8 9 10 11; do _mr+=("${mcost[k]} ${h5cost[k]} ${d1cost[k]} ${dcost[k]} ${mocost[k]} ${ppd[k]} ${pdy[k]} ${phs[k]} ${pal[k]}"); done
+_i=0; for x in $(modelpace "$_sd" "$_mm" "${_mr[@]}"); do _j=$(( (_i/5)*6 + _i%5 )); if [ "$x" = N ]; then MH[_j]=$CN; else ramp_t "$x"; MH[_j]=$_c; fi; _i=$((_i+1)); done
 # ALL cells: log share across the 3 providers (sharecols column 5 = indices 5, 11, 17).
 _as=($(sharecols "${TSUM[@]}")); _ac=($(sharecols "${CSUM[@]}")); for i in 5 11 17; do ramp_t "${_as[i]}"; TH[i]=$_c; ramp_t "${_ac[i]}"; CH[i]=$_c; done
 # hc <heat-array-name> <index> <text>: color one 5-wide right-justified value.
 hc(){ local a="$1[$2]" t=$3; printf '%s%*s%s%s' "${!a}" "$((5-${#t}))" '' "$t" "$R"; }
-# tokB: tok (k/M) below 100M, billions from 100M (13B, 1.1B, .52B, .10B), 4 chars max. Used for 7D/30D/ALL.
+# tokB: tok (k/M) below 100M, billions from 100M (13B, 1.1B, .52B, .10B), 4 chars max. Used for 7D/28D/ALL.
 tokB(){ local n=${1%%.*}; case "$n" in ""|—|null|*[!0-9]*) printf '—'; return;; esac; [ "$n" -lt 100000000 ] && { tok "$n"; return; }
  awk -v n="$n" 'BEGIN{v=n/1e9;if(v>=9.95)printf "%dB",v+0.5;else if(v>=0.995)printf "%.1fB",v;else printf ".%02dB",int(v*100+0.5)}'; }
 mrow(){ local c=$1 l=$2 o=$3 b=$(( $3*6 )) F=${4:-tokB}; printf '%s%s%s%s%s%s%s%s%s' "$c" "$l" "$R$(printf '%*s' $((${NW:-12}-${#l})) '')" "$(hc MH $b "$(tok "${mtok[o]}")")" "$(hc MH $((b+1)) "$(tok "${h5tok[o]}")")" "$(hc MH $((b+2)) "$(tok "${d1tok[o]}")")" "$(hc MH $((b+3)) "$($F "${dtok[o]}")")" "$(hc MH $((b+4)) "$($F "${motok[o]}")")" "$(hc MH $((b+5)) "$($F "${altok[o]}")")"; }
@@ -443,7 +467,7 @@ else sess_time="${sess_s}s"; fi
 # CLK: hue ramp, log scale (SPEC.md CLK). permille = clamp(int(500+500*log(s/3600)/log(6)),0,1000); 600 s -> 0, 3600 s -> 500, 21600 s -> 1000; s<=0 -> 0.
 _clkp=$(awk -v s="$sess_s" 'BEGIN{if(s<=0){print 0;exit}t=500+500*log(s/3600)/log(6);if(t<0)t=0;if(t>1000)t=1000;print int(t)}'); ramp_c "$_clkp"; sess_color=$BOLD$_c
 # Top border carries the col4/col5 column labels. Col4 starts at inner offset 58, col5 at 94.
-thdr(){ local L o="═ $1 $(rep ═ $((${2:-12}-3-${#1})))"; for L in SESS 5H 1D 7D 30D ALL; do o+="$(rep ═ $((5-${#L})))$L"; done; printf '%s' "$o"; }  # 42 visible
+thdr(){ local L o="═ $1 $(rep ═ $((${2:-12}-3-${#1})))"; for L in SESS 5H 1D 7D 28D ALL; do o+="$(rep ═ $((5-${#L})))$L"; done; printf '%s' "$o"; }  # 42 visible
 # FREE has no countdown/bar cell, so its name column shrinks to the longest name (min 7 for the "═ FREE " header); Σ/$ sit under the last letter.
 fnw=7; for k in 0 1 2 3; do [ -n "${fmod[k]}" ] && { x=$(fname "${fmod[k]}"); [ "${#x}" -gt "$fnw" ] && fnw=${#x}; }; done; ws[3]=$((fnw+30))
 # sess_name: this session's name for the top-left slot (copy-paste address for other agents). STATUSLINE_SESSION_NAME overrides; else walk $PPID up <=6 hops to ~/.claude/sessions/<pid>.json, else match sessionId (payload session_id or transcript basename). ascii, trunc 14 cols, empty -> STATUS.
@@ -456,7 +480,7 @@ printf '%s╔%s╗%s\n' "$CB" "$hdr" "$R"
 # ANT+OAI session burn rate: (Claude + OpenAI session tokens) / session minutes.
 # Model rows 1-4
 # FREE table: top-4 free models by all-time tokens, same layout as ANT/OAI; no plan limits so Σ/$ name cells are plain.
-# Free volumes are small, so 7D/30D/ALL stay in k/M (tokB would floor them all to .01B).
+# Free volumes are small, so 7D/28D/ALL stay in k/M (tokB would floor them all to .01B).
 free_rows=(); for k in 0 1 2 3; do [ -n "${fmod[k]}" ] && free_rows[k]=$(NW=$fnw mrow "$(tier_color "${fmod[k]}")" "$(fname "${fmod[k]}")" "$((k+8))" tok); done
 free_rows[4]=$(NW=$fnw tsum 12 -); free_rows[5]=$(NW=$fnw csum 12 ecost -)
 row 1 CLK "$(printf '%-5s ' "$sess_time")${R}$(sub2 DSK "$dsk_pct")" "$sess_color" '' "${ant_rows[0]}" "$R" '' "${oai_rows[0]}" "$R" '' "${free_rows[0]}" "$R"
@@ -476,7 +500,10 @@ if [ "$tpm_raw" = — ]; then tpm_c=$CD; else tpm_c=$(awk -v v="$tpm_raw" 'BEGIN
 if [ "$cache_ok" -eq 1 ]; then tok_all=$(tok6 "$all_tokens"); dol_all=$(cost "$all_cost"); else tok_all=—; dol_all=—; fi
 tok_c=$CD; dol_c=$CD
 if [ "$cache_ok" -eq 1 ]; then tok_c=$CN; dol_c=$CN; fi
-c1_tpm=$(pad 10 "$(kv TPM "$tpm_c" "$(tok "$tpm_raw")")")
+# Spec 042 FR-030 (operator ruling 2026-11-16): a stale but readable cache replaces the TPM dash with its age, grey, same width.
+age_txt(){ local s=$1; if [ "$s" -ge 86400 ]; then _age="$((s/86400))d"; elif [ "$s" -ge 3600 ]; then _age="$((s/3600))h"; elif [ "$s" -ge 60 ]; then _age="$((s/60))m"; else _age="${s}s"; fi; }
+if [ "$cache_ok" -eq 1 ] && [ "$win_stale" -eq 1 ] && [ "$gen_age" -ne 999999 ] && [ "$gen_age" -ge 0 ]; then age_txt "$gen_age"; c1_tpm=$(pad 10 "$(kv AGE "$CD" "$_age")")
+else c1_tpm=$(pad 10 "$(kv TPM "$tpm_c" "$(tok "$tpm_raw")")"); fi
 c1_atok=$(pad 10 "$(kv TOK "$tok_c" "$tok_all")")
 c1_acost=$(pad 10 "$(kv DOL "$dol_c" "$dol_all")")
 row 4 '' "${c1_tpm}$(sub2 GPU "$gpu_pct")" "$R" '' "${ant_rows[3]}" "$R" '' "${oai_rows[3]}" "$R" '' "${free_rows[3]}" "$R"

@@ -53,7 +53,7 @@ Vendor gate: non-Claude debater needs `workerbee` Step 0.5 gate line (normally (
    CONSTRAINTS: allowed sources, effort, caveman level.
    DONE: both final blocks agree on every question, or `DEADLOCK: <item>`.
    OUT OF SCOPE: no file edits, no commands, nothing beyond the debate question.
-   STOP ON BLOCK: if a hook or classifier blocks or denies an action, stop and hand back; never switch to another tool to work around it.
+   STOP ON BLOCK: never switch tools to route around a denied task operation; stop and hand back when a block prevents the task; an incidental denial (e.g. cache dir): skip it, continue, report it.
 5. **R1 blind, parallel.** Neither sees other.
 6. **Between rounds, moderator:** grep every cite; settle cheap safe facts (`--help`, one-line probe, file read) → MODERATOR NOTES `[verified]` atop relay + list open disputes. Turns fact-fights into judgment-fights.
 7. **R2:** relay peer's latest verbatim. Reply = AGREE/DISPUTE/CONCEDE per item + full PROPOSED CONSENSUS. Concede on evidence only.

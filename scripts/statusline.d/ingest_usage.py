@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Ingest Claude & delegated usage from two sources into a single SQLite database.
+Ingest Claude, delegated, and native guest usage into a single SQLite database.
 Incremental & idempotent via (mtime, size) tracking on source files.
 
 Sources:
   A) ~/.claude/projects/**/*.jsonl — Claude API transcripts (backend='claude')
-  B) ~/.codex-bridge/usage.jsonl — Delegated usage (backend='codex'|'gemini')
+  B) ~/.codex-bridge/usage.jsonl — Delegated usage
+  C) ~/.local/state/agents-inc/native-runs/**/events.jsonl — Native guest steps
 
 Schema: usage(uid, ts, day, backend, model, input/output/cache_read/cache_write/reasoning tokens)
 CLI: python3 usage_db.py [--rebuild] [--db PATH]
@@ -234,6 +235,50 @@ def ingest_delegated_usage(db_path):
     conn.close()
     return count_new
 
+def ingest_native_usage(db_path):
+    """Ingest each guest step once; run.end totals repeat the same usage."""
+    pattern = os.path.expanduser('~/.local/state/agents-inc/native-runs/*/*/*/events.jsonl')
+    conn = sqlite3.connect(db_path)
+    count = 0
+    for path in sorted(glob.glob(pattern)):
+        try:
+            stat = os.stat(path)
+            state = conn.execute('SELECT mtime, size FROM ingest_state WHERE path = ?', (path,)).fetchone()
+            if state == (stat.st_mtime, stat.st_size):
+                continue
+            backend = model = None
+            with open(path, encoding='utf-8') as stream:
+                for index, line in enumerate(stream):
+                    try:
+                        envelope = json.loads(line)
+                        event = envelope['event']
+                        if event.get('type') == 'run.start':
+                            backend, model = event.get('provider'), event.get('slug')
+                        elif event.get('type') == 'step' and backend in ('gemini', 'mistral', 'openrouter') and model:
+                            usage = event.get('usage')
+                            if not isinstance(usage, dict):
+                                continue
+                            ts = datetime.fromisoformat(envelope['ts'].replace('Z', '+00:00'))
+                            total = int(usage.get('input_tokens') or 0)
+                            cached = int(usage.get('cached_input_tokens') or 0)
+                            output = int(usage.get('output_tokens') or 0)
+                            if min(total, cached, output) < 0 or cached > total:
+                                continue
+                            uid = 'native:' + hashlib.sha256(f'{path}|{index}'.encode()).hexdigest()
+                            cursor = conn.execute(
+                                'INSERT OR IGNORE INTO usage (uid, ts, day, backend, model, input_tokens, output_tokens, cache_read) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                                (uid, ts.isoformat(), ts.astimezone().date().isoformat(), backend, model, total - cached, output, cached))
+                            count += cursor.rowcount
+                    except (ValueError, TypeError, KeyError, AttributeError):
+                        continue
+            conn.execute('INSERT OR REPLACE INTO ingest_state (path, mtime, size) VALUES (?, ?, ?)',
+                         (path, stat.st_mtime, stat.st_size))
+            conn.commit()
+        except OSError:
+            continue
+    conn.close()
+    return count
+
 def main():
     parser = argparse.ArgumentParser(description='Ingest usage data into SQLite')
     parser.add_argument('--rebuild', action='store_true', help='Drop and rebuild DB')
@@ -247,10 +292,10 @@ def main():
     else:
         init_db(db_path)
 
-    # Ingest both sources
+    # Ingest all sources
     count_claude = ingest_claude_transcripts(db_path)
     count_delegated = ingest_delegated_usage(db_path)
-    count_new = count_claude + count_delegated
+    count_new = count_claude + count_delegated + ingest_native_usage(db_path)
 
     # Count total rows and files
     conn = sqlite3.connect(db_path)

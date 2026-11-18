@@ -330,6 +330,10 @@ NO_TOOL_FEATURES = ("shell_tool", "unified_exec", "code_mode_host", "apps", "bro
                     "goals", "image_generation", "multi_agent", "plugins", "skill_search", "sleep_tool", "tool_suggest",
                     "view_image")
 NO_TOOL_ARGS = [a for f in NO_TOOL_FEATURES for a in ("-c", f"features.{f}=false")]
+# Features that load code outside the Codex sandbox or start sub-agents; off for a tools-on run with no write check.
+EXTENSION_OFF_FEATURES = ("apps", "plugins", "multi_agent", "browser_use", "computer_use", "in_app_browser",
+                          "image_generation")
+EXTENSION_OFF_ARGS = [a for f in EXTENSION_OFF_FEATURES for a in ("-c", f"features.{f}=false")]
 # Codex keeps its JavaScript exec tool even with those features off, and its base instructions teach the model to use it:
 # luna then searched exec for the host's Bash, got "code-mode host is disabled", and answered that it could not run
 # anything (Docker stress run, 2026-10-24). A host-tools run (--host-tools: the agents-inc:luna type, whose host runs the
@@ -364,9 +368,9 @@ HOST_TOOLS_DROP = ("apply_patch_tool_type",)
 # luna still calls request_user_input (426 calls in 15 macOS stress runs, 14/15 pass).
 # #160: a tools-on luna run called request_user_input four times ("unavailable in Default mode") and ended with an
 # empty reply. `codex exec` has no user to answer; the preamble says so, and an empty reply names the cause.
-NO_ASK_PREAMBLE = ("[agents-inc run] This is a non-interactive run: no user can answer questions and request_user_input "
-                   "is unavailable. Never ask for confirmation. Make each decision yourself, do the task, and state any "
-                   "assumption or blocker in your final message.\n\n")
+NO_ASK_PREAMBLE = ("[agents-inc run] This is a non-interactive run: no user can answer conversational questions and "
+                   "request_user_input is unavailable. Carry out authorized work without asking again. Follow the host "
+                   "tool permission flow; respect denials and report any assumption or blocker.\n\n")
 RUI_UNAVAILABLE = "request_user_input is unavailable"
 # Codex 0.159.2 also puts the permission profile in <environment_context> (`<filesystem>... <entry access="read">
 # <special>:root</special>`), which include_permissions_instructions does not drop. luna read it as "read access only to
@@ -472,7 +476,7 @@ def build_codex_argv(executable: Path, model: str, effort: str, cwd: Path, suppo
                      extra_deny: tuple = (), lead_home: Path | None = None, home_repo: str | None = None,
                      json_out: Path | None = None, worker: tuple | None = None, extra_read: tuple = (),
                      network: bool = False, tool_tmp: Path | None = None, host_tools: bool = False,
-                     host_catalog: Path | None = None) -> list[str]:
+                     host_catalog: Path | None = None, no_extensions: bool = False) -> list[str]:
     """host_tools (tool-free runs only): replace Codex's base instructions with NO_TOOL_INSTRUCTIONS and serve the
     stripped catalog (host_catalog, else built from the real Codex home; HostToolsCatalogMissing when absent). json_out adds `--json -o <json_out>` (D54 session capture); worker=(channel_dir, request_id) adds the
     ask_lead MCP server. network (#66) turns on outbound access for tool commands. tool_tmp (#66): a writable
@@ -521,6 +525,8 @@ def build_codex_argv(executable: Path, model: str, effort: str, cwd: Path, suppo
                 + permission_args(cwd, write, write_dir=write_dir, extra_deny=extra_deny, extra_read=extra_read,
                                   network=network, extra_write=() if tool_tmp is None else (tool_tmp,))
                 + (lead_args(model, lead_dir, None, lead_home, home_repo) if lead_dir is not None else []))
+    if no_extensions and tools:  # non-git read-only run: no plugin, app or sub-agent tool (tool-free runs have NO_TOOL_ARGS)
+        argv += EXTENSION_OFF_ARGS
     if worker is not None:
         argv += worker_args(*worker)
     if json_out is not None:
@@ -534,7 +540,7 @@ def build_codex_resume_argv(executable: Path, thread_id: str, message: str, mode
                             extra_deny: tuple = (), json_out: Path | None = None,
                             worker: tuple | None = None, extra_read: tuple = (), network: bool = False,
                             tool_tmp: Path | None = None, host_tools: bool = False,
-                            host_catalog: Path | None = None) -> list[str]:
+                            host_catalog: Path | None = None, no_extensions: bool = False) -> list[str]:
     """D54: `codex exec resume <thread_id> ... <message>` with the same model, effort, -c and permission flags as
     the original run. `exec resume` takes no -C or -s: the caller runs it with cwd set, and `-s <mode>` becomes
     `-c sandbox_mode=<mode>`. The message is the PROMPT positional; a leading space keeps a message that starts
@@ -543,7 +549,8 @@ def build_codex_resume_argv(executable: Path, thread_id: str, message: str, mode
         raise ValueError(f"bad Codex thread id: {thread_id!r}")
     base = build_codex_argv(executable, model, effort, cwd, supported_efforts, model_map, tools, write, write_dir,
                             None, extra_deny, None, None, json_out, worker, extra_read=extra_read, network=network,
-                            tool_tmp=tool_tmp, host_tools=host_tools, host_catalog=host_catalog)
+                            tool_tmp=tool_tmp, host_tools=host_tools, host_catalog=host_catalog,
+                            no_extensions=no_extensions)
     rest, flags, i = base[2:-1], [], 0  # between [exe, "exec"] and the stdin marker "-"
     while i < len(rest):
         if rest[i] == "-C":
@@ -597,7 +604,7 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
               extra_deny: tuple = (), isolate_home: bool = False, thread_out: dict | None = None,
               resume_thread: str | None = None, worker: tuple | None = None, extra_read: tuple = (),
               network: bool = False, timeout_s: float | None = None, on_line=None, host_tools: bool = False,
-              on_start=None) -> int:
+              on_start=None, no_extensions: bool = False) -> int:
     """timeout_s: kill the child's process group after that many seconds and return 124 (None: no deadline).
     on_line (spec 027): called with each JSONL stdout line while the child runs; json mode only.
     thread_out (D54): run with `--json -o`, store the thread id in thread_out["thread_id"], and write the last
@@ -682,14 +689,15 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
             argv = build_codex_resume_argv(executable, resume_thread, prompt, model, effort, cwd, supported_efforts,
                                            model_map, tools, write, write_dir, deny, json_out, worker,
                                            extra_read=extra_read, network=network, tool_tmp=tool_tmp,
-                                           host_tools=host_tools, host_catalog=host_catalog)
+                                           host_tools=host_tools, host_catalog=host_catalog, no_extensions=no_extensions)
             prompt, extra = "", {"cwd": str(cwd)}  # the message rides the PROMPT positional; resume has no -C
         else:
             if tools and worker is None and prompt.strip():  # #160: nobody answers a question in `codex exec`
                 prompt = NO_ASK_PREAMBLE + prompt
             argv = build_codex_argv(executable, model, effort, cwd, supported_efforts, model_map, tools, write, write_dir,
                                     lead_dir, deny, lead_home, home_repo, json_out, worker, extra_read=extra_read,
-                                    network=network, tool_tmp=tool_tmp, host_tools=host_tools, host_catalog=host_catalog)
+                                    network=network, tool_tmp=tool_tmp, host_tools=host_tools, host_catalog=host_catalog,
+                                    no_extensions=no_extensions)
         line_cb = on_line if json_mode else None  # Lead runs (no --json) get lifecycle events only
         if timeout_s:
             result = _run_with_deadline(argv, prompt, env, timeout_s, extra, line_cb, on_start)
@@ -770,7 +778,8 @@ def run_codex(model: str, effort: str, cwd: Path, prompt_stream, receipt, suppor
                 return 75
 
     # Empty output: on success, or (#160) on a failure caused by request_user_input calls, say so with the cause
-    refused_asks = (result.stderr or "").count(RUI_UNAVAILABLE)
+    refused_asks = (result.stderr or "").count(RUI_UNAVAILABLE) + sum(
+        line.count(RUI_UNAVAILABLE) for line in json_errors)
     if not stdout.strip() and result.returncode == 0 and host_tools and not refused_asks and _said_something(result.stdout):
         # macOS stress, 2026-11-11 (3 of 40 runs lost two ways, 2 of them here): luna put its {say, tools} reply in
         # commentary messages and left the final message empty. The step loop already has those messages from the

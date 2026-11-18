@@ -1,118 +1,321 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { PaneAgent, PaneView } from '../types'
+import type { PaneView } from '../types'
+import { ackId, hierarchyLines, layoutFor, stations, statusLine, feed } from './mission'
+import type { State, Station, Delegate } from './mission'
+import { cosRoom, dispatchesOf, encodeCells, frame, FRAME_MS, landings, needsMotion, RASTER_ROWS, rasterColumns } from './frames'
+import type { Return } from './frames'
+import { controlsView, renderRun } from './controls'
+import { applyRunLines } from './controls'
+import { poll } from './poll'
+import { EMPTY, compose, newState, shortModel, normalizeView, resetState, RUN_PANE } from './tree'
+import type { View } from './tree'
 
-// Spec 038 FR-020: the pane lists only native agents (agents-inc:<nickname> subagents, running or finished in this
-// session) and the registered native types. It lists no dispatch run directory: those cannot be opened as a transcript.
+export { mergeAgents } from './poll'
+export { normalizeView } from './tree'
+
+// Spec 040: one pane for the delegates of the session. The map (spec 039) draws every subagent type and each dispatch
+// run directory of this session; the tree, the new-agent form and the message box (hooks/controls.tsx) act on them.
 // A native agent's own transcript is Claude Code's subagent view; the pane names it, it does not copy it.
+// view-5: acks became `<id>@<alertAt>` keys; a view-4 value (plain-id acks) reads as EMPTY and the store record refills it.
+// The state scan wants the atom spelled in each file that reads it, so controls.tsx and register.tsx both declare it.
+const view = atom({ plugin: 'delegate-pane', key: 'view' } as const, EMPTY as any, { shape: 'view-5' })
+
 export const PANE = 'agents-inc-delegates'
-const PREFIX = 'agents-inc:'
-// The legacy relay type (install --legacy-routes) is a route, not a native agent.
-const NOT_NATIVE = new Set(['agents-inc:relay'])
+const TITLE = 'agents-inc'
 const POLL_MS = 1000
-const KEEP = 40
-const EMPTY: PaneView = { types: [], agents: [], note: '' }
+const FEED_MIN = 3
+const FEED_MAX = 10
+// Spec 039 FR-013: session start, acks and subagent alert times are mirrored to $.store under `session:<session id>`,
+// so `claude --resume` (a new process, empty $.state) keeps them. The store keeps the STORE_KEEP most recent sessions.
+const STORE_PREFIX = 'session:'
+const STORE_KEEP = 20
 
-const view = atom({ plugin: 'delegate-pane', key: 'view' } as const, EMPTY, { shape: 'view-3' })
+type Saved = { sessionStart: string; acked: Record<string, string[]>; alertAt: Record<string, number>; savedAt: number }
+const savedOf = (v: View): Omit<Saved, 'savedAt'> => ({ sessionStart: v.sessionStart, acked: v.acked, alertAt: v.alertAt })
 
-export const isNative = (type: unknown): boolean =>
-  typeof type === 'string' && type.startsWith(PREFIX) && !NOT_NATIVE.has(type)
-
-type Listed = { id: string; type?: string; name?: string; description?: string; status?: string }
-
-// Merge one agent.list answer into the session's agents. An agent the engine no longer lists stays, marked finished
-// unless it already ended: the pane keeps every native agent of the session (FR-020).
-export function mergeAgents(prev: PaneAgent[], listed: Listed[]): PaneAgent[] {
-  const now = new Map(listed.filter(a => a && isNative(a.type)).map(a => [a.id, a] as const))
-  const out: PaneAgent[] = prev.map(p => {
-    const a = now.get(p.id)
-    if (!a) return p.status === 'running' ? { ...p, status: 'finished' } : p
-    now.delete(p.id)
-    return { ...p, status: String(a.status ?? p.status), description: String(a.description ?? p.description) }
-  })
-  for (const a of now.values())
-    out.push({ id: a.id, type: String(a.type), description: String(a.description ?? a.name ?? ''), status: String(a.status ?? 'running') })
-  return out.slice(-KEEP)
-}
-
-// The offered types from `agents-inc luna status --json --all` (the one read the agents-inc mod makes too).
-export function offeredTypes(statusJson: string): string[] {
+// Read this session's record from $.store; undefined when there is none or the store or session id is not reachable.
+async function loadSaved($: any): Promise<Saved | undefined> {
   try {
-    const models = (JSON.parse(statusJson) as { models?: unknown }).models
-    if (!Array.isArray(models)) return []
-    return models
-      .filter(m => m && typeof m.nickname === 'string' && m.offered === true)
-      .map(m => PREFIX + String(m.nickname))
+    const id = String(await $.session.id())
+    const rec = (await $.store.get(STORE_PREFIX + id)) as Saved | undefined
+    return rec && typeof rec === 'object' && typeof rec.sessionStart === 'string' ? rec : undefined
   } catch {
-    return []
+    return undefined
   }
 }
 
-export const register: Register = on => {
-  let agents: PaneAgent[] = []
+// Write this session's record and drop all but the STORE_KEEP most recent session records. A store that fails is let
+// go: the pane keeps working from $.state.
+async function save($: any, v: View): Promise<void> {
+  try {
+    const id = String(await $.session.id())
+    const now = Number(await $.clock.now())
+    await $.store.set(STORE_PREFIX + id, { ...savedOf(v), savedAt: now })
+    const keys = ((await $.store.keys()) as string[]).filter(k => k.startsWith(STORE_PREFIX))
+    if (keys.length <= STORE_KEEP) return
+    const aged: Array<[string, number]> = []
+    for (const k of keys) aged.push([k, Number(((await $.store.get(k)) as Saved | undefined)?.savedAt ?? 0)])
+    aged.sort((a, b) => b[1] - a[1])
+    for (const [k] of aged.slice(STORE_KEEP)) await $.store.delete(k)
+  } catch {
+    // nothing to do: $.state still holds the view
+  }
+}
 
-  on('session.start', async ($, e, next) => {
-    agents = []
-    await $.command.register({ name: 'delegate-pane', description: 'Open the agents-inc pane: native agent types and native agents of this session' })
-    let types: string[] = []
-    let note = ''
+// Motion (terminal only): one frame timer while the pane is shown in the terminal grid layout and a station moves.
+// Module state, as the engine wants every $-taking helper declared at the top of the file. `motion.timer` is the only
+// timer; stopMotion cancels it. `off`: a blit was refused, so the pane draws the static map until it is opened again or a terminal render sees a new body width.
+// `seen` and `returns`: the delegate states of the last look and the return pulses still in flight (frames.landings).
+const motion: { timer?: { cancel: () => void }; cols: number; body: number; off: boolean; seen: Record<string, State>; returns: Return[] } = {
+  cols: 0,
+  body: 0,
+  off: false,
+  seen: {},
+  returns: [],
+}
+// The CoS node's label on the Raster: the glossary term and the main session's model when the engine gives one; the
+// model is dropped when it does not fit `room` cells.
+export const cosLabel = (v: View, room = Infinity): string => {
+  const full = v.model ? `CoS · ${v.model}` : 'CoS'
+  return full.length <= room ? full : 'CoS'
+}
+function track(delegates: Delegate[], t: number): void {
+  const r = landings(motion.seen, delegates, motion.returns, t)
+  motion.seen = r.seen
+  motion.returns = r.returns
+}
+function stopMotion(): void {
+  motion.timer?.cancel()
+  motion.timer = undefined
+}
+function startMotion($: any): void {
+  if (motion.timer) return
+  motion.timer = $.clock.every(FRAME_MS, async () => {
+    // the column count this tick blits at; a render may set a new one while the blit is in flight
+    const blitCols = motion.cols
     try {
-      const stream = $.process.spawn({ argv: ['agents-inc', 'luna', 'status', '--json', '--all', '--cwd', e.cwd || '.'], cwd: e.cwd || undefined })
-      let out = ''
-      for (;;) {
-        const n = await stream.next()
-        if (n.done) {
-          if (n.value.code !== 0) note = 'agents-inc status gave no answer; no native types listed'
-          break
-        }
-        if (n.value.stream === 'stdout') out += n.value.text
-      }
-      if (!note) types = offeredTypes(out)
+      const cur = normalizeView(await read($, view))
+      const sts = stations(cur.delegates, cur.acked)
+      const t = Number(await $.clock.now())
+      track(cur.delegates, t)
+      // a return pulse keeps the timer until it lands
+      const dispatches = dispatchesOf(cur.delegates, t)
+      if (!needsMotion(sts, motion.returns, t, dispatches) || !motion.cols) return stopMotion()
+      const cells = encodeCells(frame(sts, t, blitCols, RASTER_ROWS, motion.returns, { cos: cosLabel(cur, cosRoom(blitCols)), dispatches }))
+      const res = await $.ui.blit({ requestId: PANE, key: 'map', columns: blitCols, rows: RASTER_ROWS, cells })
+      if (res?.deny) throw new Error(res.deny)
     } catch {
-      note = 'agents-inc status gave no answer; no native types listed'
+      // Not mounted, another size, or refused: stop and fall back to the static map.
+      stopMotion()
+      // Only a refusal at the size the pane still has turns motion off; after a resize the next render restarts motion.
+      if (blitCols === motion.cols) motion.off = true
+      try {
+        $.ui.invalidate('ui.render')
+      } catch {
+        // nothing more to do
+      }
     }
-    await update($, view, () => ({ types, agents: [], note }))
+  })
+}
 
+// The agent.spawn hook: records the model of every agent that starts, whoever spawns it. It changes neither the event nor
+// the result and never throws into the spawn. AgentSpawnResult.model and .agentId: plugin-authoring types/claude-code.d.ts.
+export const recordSpawn = async (st: { models: Map<string, string> }, e: unknown, next: (e: any) => any) => {
+  const r = await next(e)
+  try {
+    if (r?.agentId && r.model) st.models.set(String(r.agentId), shortModel(String(r.model)))
+  } catch {
+    // the pane learns nothing; the spawn goes on
+  }
+  return r
+}
+
+export const register: Register = on => {
+  const st = newState()
+  on('agent.spawn', ($, e, next) => recordSpawn(st, e, next as any))
+  on('session.start', async ($, e, next) => {
+    resetState(st, e.cwd || '.')
+    stopMotion()
+    motion.off = false
+    motion.body = 0
+    motion.seen = {}
+    motion.returns = []
+    const nowIso = new Date(await $.clock.now()).toISOString()
+    await $.command.register({ name: 'delegate-pane', description: 'Open the agents-inc pane: the delegation tree, the mission map, a new-agent form and a message box' })
+    // sessionStart, acked and finalRuns survive a reload: sessionStart is set once. After `--resume` $.state is empty:
+    // this session's $.store record (FR-013) gives back its start, acks and subagent alert times.
+    const saved = normalizeView(await read($, view)).sessionStart ? undefined : await loadSaved($)
+    const started = await update($, view, v => {
+      const n = normalizeView(v)
+      const restored = !n.sessionStart && saved ? { sessionStart: saved.sessionStart, acked: saved.acked ?? {}, alertAt: saved.alertAt ?? {} } : {}
+      return { ...n, ...restored, treeRows: [], summary: '', delegates: [], mapNote: '', note: '', sessionStart: (restored as any).sessionStart || n.sessionStart || nowIso }
+    })
+    await save($, normalizeView(started as PaneView))
+
+    // One poll a second feeds the tree, the map, the status line and the feed.
     $.clock.every(POLL_MS, async () => {
       try {
-        const merged = mergeAgents(agents, (await $.agent.list()) as Listed[])
-        const same = merged.length === agents.length && merged.every((a, i) => a.status === agents[i].status && a.id === agents[i].id)
-        agents = merged
-        if (!same) await update($, view, v => ({ ...v, agents: merged }))
+        const v = normalizeView(await read($, view))
+        const now = Number(await $.clock.now())
+        const r = await poll($, st, v, now)
+        const treeRows = compose(st)
+        const sig = JSON.stringify([treeRows, st.summary, r.delegates, r.mapNote, r.model, r.runLines])
+        if (sig !== st.lastSig || v.note.startsWith('poll error: ')) {
+          st.lastSig = sig
+          const alertsMoved = JSON.stringify(r.alertAt) !== JSON.stringify(v.alertAt)
+          const next1 = await update($, view, x => {
+            const n = normalizeView(x)
+            return { ...n, treeRows, summary: r.summary, delegates: r.delegates, finalRuns: r.finalRuns, lostRuns: r.lostRuns, alertAt: r.alertAt, mapNote: r.mapNote, model: r.model, seen: r.seen, note: n.note.startsWith('poll error: ') ? '' : n.note }
+          })
+          if (alertsMoved) await save($, normalizeView(next1 as PaneView))
+          await applyRunLines($, r.runLines)
+        }
       } catch (err) {
-        await update($, view, v => ({ ...v, note: `pane error: ${String((err as Error)?.message ?? err)}` }))
+        await update($, view, v => ({ ...normalizeView(v), note: `poll error: ${String((err as Error)?.message ?? err)}` }))
       }
     })
+    // Open at session start; /delegate-pane reopens it. Non-blocking: a refused open must not break the start.
+    motion.off = false
+    try {
+      void Promise.resolve($.ui.open({ id: PANE, title: TITLE })).catch(() => {})
+    } catch {
+      // open refused: the command still opens the pane
+    }
+    return next(e)
+  })
+
+  on('ui.close', ($, e, next) => {
+    if (e.id === PANE) stopMotion()
+    if (String(e.id).startsWith(RUN_PANE)) st.open.delete(String(e.id).slice(RUN_PANE.length))
     return next(e)
   })
 
   on('command.run', { command: 'delegate-pane' }, async $ => {
-    await $.ui.open({ id: PANE, title: 'agents-inc native agents' })
+    motion.off = false
+    await $.ui.open({ id: PANE, title: TITLE })
     return { text: 'agents-inc pane opened.' }
   })
 
-  on('ui.render', { component: 'Pane' }, async ($, e) => {
-    if (String((e as any).requestId ?? '') !== PANE) return undefined
-    const { Box, Text } = $.ui.resolve(e)
-    const v = await read($, view)
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    const rid = String((e as any).requestId ?? '')
+    if (rid.startsWith(RUN_PANE)) return renderRun($, e, st, rid.slice(RUN_PANE.length))
+    if (rid !== PANE) return next(e)
+    const els = $.ui.resolve(e) as any
+    const { Box, Text, Button } = els
+    const v = normalizeView(await read($, view))
+    const columns = Number((e as any).props?.bodyColumns ?? (e as any).viewport?.columns ?? 80)
+    // Feed rows: a third of the pane body, FEED_MIN to FEED_MAX.
+    const bodyRows = Number((e as any).props?.scroll?.bodyRows ?? 24)
+    const feedCap = Math.max(FEED_MIN, Math.min(FEED_MAX, Math.floor(bodyRows / 3)))
+    const layout = layoutFor(columns)
+    const sts = stations(v.delegates, v.acked)
+    const ack = (s: Station) => async () => {
+      const cur = normalizeView(await read($, view))
+      const keys = stations(cur.delegates, cur.acked).find(x => x.category === s.category)?.unacked ?? []
+      // No count trim: a key superseded by a newer event of the same delegate is dropped, so a station holds at most
+      // one key per delegate of this session; the store keeps whole sessions, STORE_KEEP of them.
+      const newIds = new Set(keys.map(ackId))
+      const after = await update($, view, x => {
+        const n = normalizeView(x)
+        const kept = (n.acked[s.category] ?? []).filter(k => !newIds.has(ackId(k)))
+        return { ...n, acked: { ...n.acked, [s.category]: [...kept, ...keys] } }
+      })
+      await save($, normalizeView(after as PaneView))
+    }
+    const title = (s: Station) => (
+      <Text>
+        <Text color={s.lit ? 'green' : undefined} dimColor={!s.lit}>{(s.lit ? '● ' : '○ ') + s.category}</Text>
+        {s.unacked.length ? <Text color="red">{` ${s.unacked.length}✗`}</Text> : null}
+      </Text>
+    )
+    const ackButton = (s: Station) =>
+      s.unacked.length ? (
+        <Button key={'ack-' + s.category} onPress={ack(s)}>
+          <Text color="red">{' ack '}</Text>
+        </Button>
+      ) : null
+    const station = (s: Station) => (
+      <Box key={s.category} flexDirection="column" width={22} borderStyle={s.delegates.length ? 'round' : undefined}>
+        {title(s)}
+        {ackButton(s)}
+      </Box>
+    )
+    // Motion: terminal, at least RASTER_MIN_COLUMNS wide (grid or stacked), Raster in the element table, no refused blit. Otherwise the static map only.
+    // The frame timer is shared by every mounted copy of the pane; only a terminal render may set its width or stop it,
+    // or a desktop or too-narrow render would cancel the animation of the terminal one while an agent still runs (#191).
+    const terminal = (e as any).surface === 'terminal'
+    // A blit in flight during a resize can go out at the old width and be refused. A new width is a new chance: clear
+    // `off` when a terminal render sees another body width than the last one. (The deny reason cannot be told apart:
+    // the engine's types are not in this repo.) A refusal that is not about size is refused again, and `off` returns.
+    if (terminal) {
+      if (motion.body && motion.body !== columns) motion.off = false
+      motion.body = columns
+    }
+    const cols = terminal && !motion.off && els.Raster ? rasterColumns(columns) : 0
+    if (terminal) motion.cols = cols
+    let now = 0
+    try {
+      now = Number(await $.clock.now())
+    } catch {
+      // no clock: the first frame draws at time 0
+    }
+    track(v.delegates, now)
+    const dispatches = dispatchesOf(v.delegates, now)
+    if (terminal) {
+      if (cols && needsMotion(sts, motion.returns, now, dispatches)) startMotion($)
+      else stopMotion()
+    }
+    const raster = cols ? (
+      <els.Raster key="map" columns={cols} rows={RASTER_ROWS} cells={encodeCells(frame(sts, now, cols, RASTER_ROWS, motion.returns, { cos: cosLabel(v, cosRoom(cols)), dispatches }))} />
+    ) : null
+    // CoS, Lead and primary Worker in one or two dim lines, on every surface and layout (the static fallback included).
+    const roles = hierarchyLines(v.delegates, v.model, columns).map((line, k) => <Text key={'roles-' + k} dimColor>{line}</Text>)
+    const map =
+      layout === 'grid' ? (
+        <Box flexDirection="column">
+          {raster}
+          {roles}
+          <Box flexDirection="row">{sts.slice(0, 3).map(station)}</Box>
+          <Box flexDirection="row">{sts.slice(3).map(station)}</Box>
+        </Box>
+      ) : layout === 'stacked' ? (
+        <Box flexDirection="column">
+          {raster}
+          {roles}
+          {sts.map(s => (
+            <Box key={s.category} flexDirection="column">
+              {title(s)}
+              {ackButton(s)}
+            </Box>
+          ))}
+        </Box>
+      ) : (
+        <Box flexDirection="column">
+          {roles}
+          {sts.map(s => (
+            <Box key={s.category} flexDirection="row">
+              <Text>{`${s.category} ${s.delegates.filter(d => d.state === 'running' || d.state === 'review').length}● ${s.unacked.length}✗`}</Text>
+              {ackButton(s)}
+            </Box>
+          ))}
+        </Box>
+      )
     return (
       <Box flexDirection="column">
-        <Text bold>Native agent types</Text>
-        {v.types.length ? v.types.map(t => <Text>{'  ' + t}</Text>) : <Text dimColor>  none registered</Text>}
-        <Text> </Text>
-        <Text bold>Native agents this session</Text>
-        {v.agents.length ? (
-          v.agents.map(a => (
-            <Text>
-              <Text color={a.status === 'running' ? 'green' : undefined}>{a.status === 'running' ? '● ' : '✓ '}</Text>
-              {`${a.type} · ${a.description} · ${a.status}`}
-            </Text>
-          ))
-        ) : (
-          <Text dimColor>  none yet</Text>
-        )}
-        {v.note ? <Text dimColor>{v.note}</Text> : null}
+        <Text bold>Mission map</Text>
+        {map}
+        <Text bold>{statusLine(v.delegates, columns)}</Text>
+        {feed(v.delegates, columns, feedCap).map(row => (
+          <Text key={'feed-' + row.id} color={row.kind === 'running' ? 'yellow' : row.kind === 'failed' ? 'red' : undefined} dimColor={row.kind === 'done' || row.kind === 'paused'}>
+            {row.lead}
+            {row.roleCol ? <Text dimColor>{row.roleCol}</Text> : null}
+            {row.tail}
+          </Text>
+        ))}
+        {v.mapNote ? <Text dimColor>{v.mapNote}</Text> : null}
+        {await controlsView($, els, st, v, columns)}
       </Box>
     )
   })

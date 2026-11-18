@@ -190,7 +190,7 @@ test('tool results are capped and a later user message follows the first', async
   await step($, 'e1')
   const stdin = calls[0].stdin ?? ''
   expect(stdin).toContain('assistant tool call: Read {"file_path":"/work/a.py"}')
-  expect(stdin).toContain('[truncated 10000 chars]')
+  expect(stdin).toContain('[truncated 10000 chars: this result was cut at 20000 chars')
   expect(stdin.indexOf(TASK)).toBeLessThan(stdin.indexOf('Actually count /work/b.py instead.'))
   expect(stdin).toContain('<system-reminder>Your final report is delivered through SubagentHandback</system-reminder>')
 })
@@ -224,8 +224,8 @@ test('the second step sends only the new messages on the same thread', async ($,
   expect(delta).toContain('New messages since your last reply.')
   expect(delta).toContain('tool result: 12 lines')
   // Asks started on later steps (macOS stress, 2026-11-11): the no-ask rule rides the delta prompt too.
-  expect(delta).toContain('never ask one and never ask for confirmation')
-  expect(one.stdin).toContain('never ask one and never ask for confirmation')
+  expect(delta).toContain('use the host tool permission flow when required')
+  expect(one.stdin).toContain('use the host tool permission flow when required')
   expect(one.stdin).toContain('Session-start steps in the instructions')
   expect(delta).not.toContain('System prompt:')
   expect(delta).not.toContain('- Read: Reads a file.')
@@ -319,7 +319,7 @@ test('session.start registers agents-inc:luna only when status says offered', as
   await setup($, on, { agentId: 'o1', replies: [], luna, registered })
   expect(luna[0].argv).toEqual(['agents-inc', 'luna', 'status', '--json'])
   const luna_ = registered.filter(r => (r as { name: string }).name === 'luna') // the relay agent registers beside it
-  expect(luna_).toMatchObject([{ name: 'luna', model: 'haiku' }])
+  expect(luna_).toMatchObject([{ name: 'luna', model: 'gpt-6-luna' }])
   expect(luna_[0]).not.toHaveProperty('tools')
   expect(luna_[0]).not.toHaveProperty('permissionMode')
 })
@@ -417,7 +417,7 @@ test('the step debug line carries the codex tool counts and the thread is per se
   await setup($, on, { agentId: 'g10', replies: [{ out: JSON.stringify({ say: 'x', tools: [] }), err: ['agents-inc run: tools {"request_user_input":2}'] }], logs, writes })
   await step($, 'g10')
   expect(logs.find(l => l.startsWith('agents-inc luna: step 0 of g10'))).toContain('codex_tools {"request_user_input":2}')
-  expect(writes).toEqual([]) // .prompt.txt only with AGENTS_INC_LUNA_DEBUG=1
+  expect(writes.filter(w => !w.endsWith('/handles.json'))).toEqual([]) // .prompt.txt only with AGENTS_INC_LUNA_DEBUG=1; handles.json is spec 048
 })
 
 test('begin runs once per agent before the first step and end adds a changed-tree line', async ($, on) => {

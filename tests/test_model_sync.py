@@ -16,13 +16,18 @@ ROUTING = (
 )
 
 
+INSTALLED = "0.1.0"
+
+
 def _entry(tier):
     return {"vendor": "openai", "provider": "codex", "tier": tier, "status": "available"}
 
 
 def _setup(tmp_path, slugs):
     cache = tmp_path / "models_cache.json"
-    cache.write_text(json.dumps({"models": [{"slug": s, "display_name": s} for s in slugs]}))
+    # Spec 047 D52.1: explicit eligibility fields and a client_version matching INSTALLED (the fake installed codex).
+    cache.write_text(json.dumps({"client_version": INSTALLED, "models": [
+        {"slug": s, "display_name": s, "visibility": "list", "supported_in_api": True} for s in slugs]}))
     routing = tmp_path / "routing.json"
     routing.write_text(ROUTING)
     models = tmp_path / "models.json"
@@ -38,7 +43,7 @@ def _setup(tmp_path, slugs):
 def test_dry_run_reports_and_writes_nothing(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-5.6-sol", "gpt-6.1-sol", "gpt-6-sol"])
     before = (routing.read_text(), models.read_text())
-    lines = model_sync.sync_codex(cache, routing, models, apply=False)
+    lines = model_sync.sync_codex(cache, routing, models, apply=False, installed=INSTALLED)
     assert any("gpt-5.6-sol" in l and "gpt-6.1-sol" in l for l in lines)
     assert (routing.read_text(), models.read_text()) == before
 
@@ -46,19 +51,19 @@ def test_dry_run_reports_and_writes_nothing(tmp_path):
 def test_apply_promotes_highest_version_numerically(tmp_path):
     cache, routing, models = _setup(
         tmp_path, ["gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.10-sol", "gpt-6.9-sol"])
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert '"orchestrator":{"claude": "opus",   "codex": "gpt-6.10-sol"}' in routing.read_text()
 
 
 def test_apply_changes_only_the_codex_slug_bytes(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-6.1-sol"])
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert routing.read_text() == ROUTING.replace("gpt-5.6-sol", "gpt-6.1-sol")
 
 
 def test_apply_clones_models_entry_with_same_tier(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-6.1-sol"])
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     data = json.loads(models.read_text())["models"]
     assert data["gpt-6.1-sol"]["tier"] == "orchestrator"
     assert data["gpt-6.1-sol"]["provider"] == "codex"
@@ -67,28 +72,28 @@ def test_apply_clones_models_entry_with_same_tier(tmp_path):
 
 def test_never_downgrades(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-5.6-astra", "gpt-5.5"])
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert routing.read_text() == ROUTING
 
 
 def test_ignores_non_persona_slugs(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-reserve", "gpt-5.5", "codex-auto-review"])
-    assert model_sync.sync_codex(cache, routing, models, apply=True) == []
+    assert model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED) == []
     assert routing.read_text() == ROUTING
 
 
 def test_idempotent(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-6.1-sol", "gpt-6-luna"])
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     snap = (routing.read_text(), models.read_text())
-    assert model_sync.sync_codex(cache, routing, models, apply=True) == []
+    assert model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED) == []
     assert (routing.read_text(), models.read_text()) == snap
 
 
 def test_missing_cache_raises_clear_error(tmp_path):
     _, routing, models = _setup(tmp_path, [])
     try:
-        model_sync.sync_codex(tmp_path / "nope.json", routing, models, apply=True)
+        model_sync.sync_codex(tmp_path / "nope.json", routing, models, apply=True, installed=INSTALLED)
     except FileNotFoundError:
         return
     raise AssertionError("expected FileNotFoundError")
@@ -97,13 +102,13 @@ def test_missing_cache_raises_clear_error(tmp_path):
 def test_heals_routing_slug_missing_from_models(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-5.6-sol"])
     routing.write_text(ROUTING.replace("gpt-5.6-sol", "gpt-6.1-sol"))
-    lines = model_sync.sync_codex(cache, routing, models, apply=True)
+    lines = model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert any("gpt-6.1-sol" in l for l in lines)
     data = json.loads(models.read_text())["models"]
     assert data["gpt-6.1-sol"]["tier"] == "orchestrator"
     assert data["gpt-6.1-sol"]["provider"] == "codex"
     assert "gpt-5.6-sol" in data
-    assert model_sync.sync_codex(cache, routing, models, apply=True) == []
+    assert model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED) == []
 
 
 # ---- update-approval setting ----
@@ -138,7 +143,7 @@ def test_scheduled_auto_applies(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-6.1-sol"])
     settings, pending = _paths(tmp_path)
     model_sync.set_mode(settings, "auto")
-    status, lines = model_sync.run_scheduled(cache, routing, models, settings, pending)
+    status, lines = model_sync.run_scheduled(cache, routing, models, settings, pending, installed=INSTALLED)
     assert status == "applied" and lines
     assert "gpt-6.1-sol" in routing.read_text()
     assert not pending.exists()
@@ -148,7 +153,7 @@ def test_scheduled_approve_writes_pending_and_changes_nothing(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-6.1-sol"])
     settings, pending = _paths(tmp_path)
     before = (routing.read_text(), models.read_text())
-    status, lines = model_sync.run_scheduled(cache, routing, models, settings, pending)
+    status, lines = model_sync.run_scheduled(cache, routing, models, settings, pending, installed=INSTALLED)
     assert status == "pending" and lines
     assert (routing.read_text(), models.read_text()) == before
     data = json.loads(pending.read_text())
@@ -158,8 +163,8 @@ def test_scheduled_approve_writes_pending_and_changes_nothing(tmp_path):
 def test_approve_applies_and_clears_pending(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-6.1-sol"])
     settings, pending = _paths(tmp_path)
-    model_sync.run_scheduled(cache, routing, models, settings, pending)
-    lines = model_sync.approve_pending(cache, routing, models, pending)
+    model_sync.run_scheduled(cache, routing, models, settings, pending, installed=INSTALLED)
+    lines = model_sync.approve_pending(cache, routing, models, pending, installed=INSTALLED)
     assert lines and "gpt-6.1-sol" in routing.read_text()
     assert not pending.exists()
 
@@ -168,7 +173,7 @@ def test_scheduled_nothing_to_do_clears_stale_pending(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-5.6-sol"])
     settings, pending = _paths(tmp_path)
     pending.write_text('{"lines": ["stale"]}')
-    status, lines = model_sync.run_scheduled(cache, routing, models, settings, pending)
+    status, lines = model_sync.run_scheduled(cache, routing, models, settings, pending, installed=INSTALLED)
     assert status == "none" and lines == []
     assert not pending.exists()
 
@@ -177,7 +182,7 @@ def test_scheduled_nothing_to_do_clears_stale_pending(tmp_path):
 
 def test_equal_versions_do_not_promote(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-6.0-astra"])
-    assert model_sync.sync_codex(cache, routing, models, apply=True) == []
+    assert model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED) == []
     assert routing.read_text() == ROUTING
 
 
@@ -188,7 +193,7 @@ def test_only_tiers_block_is_edited(tmp_path):
              '    "orchestrator":{"claude": "opus",   "codex": "gpt-5.6-sol"}\n'
              '  }\n}\n')
     routing.write_text(decoy)
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert routing.read_text() == decoy.replace('"codex": "gpt-5.6-sol"', '"codex": "gpt-6.1-sol"')
 
 
@@ -222,7 +227,7 @@ def test_existing_models_entry_for_new_slug_is_not_overwritten(tmp_path):
     data = json.loads(models.read_text())
     data["models"]["gpt-6.1-sol"] = dict(_entry("orchestrator"), status="unprobed", marker=1)
     models.write_text(json.dumps(data, indent=2))
-    lines = model_sync.sync_codex(cache, routing, models, apply=True)
+    lines = model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert json.loads(models.read_text())["models"]["gpt-6.1-sol"]["marker"] == 1
     assert not any(l.startswith("models: added") for l in lines)
 
@@ -234,7 +239,7 @@ def test_missing_tier_line_is_reported_and_routing_untouched(tmp_path):
     odd = ('{\n  "tiers": {\n    "orchestrator": {"claude": "opus",\n'
            '                     "codex": "gpt-5.6-sol"}\n  }\n}\n')
     routing.write_text(odd)
-    lines = model_sync.sync_codex(cache, routing, models, apply=True)
+    lines = model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert any("routing line for tier orchestrator not found" in l for l in lines)
     assert routing.read_text() == odd
     assert "gpt-6.1-sol" not in json.loads(models.read_text())["models"]
@@ -247,7 +252,7 @@ def test_heal_without_donor_warns_and_adds_nothing(tmp_path):
     del data["models"]["gpt-5.6-sol"]
     models.write_text(json.dumps(data, indent=2))
     before = models.read_text()
-    lines = model_sync.sync_codex(cache, routing, models, apply=True)
+    lines = model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert lines == ["WARN: no codex donor in tier orchestrator for gpt-7-sol, gpt-7-sol not added to models.json"]
     assert models.read_text() == before
 
@@ -259,14 +264,15 @@ def test_heal_clones_highest_version_donor(tmp_path):
     data["models"]["gpt-5.6-sol"]["marker"] = "old"
     data["models"]["gpt-6.1-sol"] = dict(_entry("orchestrator"), marker="new")
     models.write_text(json.dumps(data, indent=2))
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert json.loads(models.read_text())["models"]["gpt-7-sol"]["marker"] == "new"
 
 
 def test_malformed_cache_entries_are_skipped(tmp_path):
     cache, routing, models = _setup(tmp_path, [])
-    cache.write_text(json.dumps({"models": ["gpt-9-sol", {"slug": 9}, {"no_slug": 1}, {"slug": "gpt-6.1-sol"}]}))
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    cache.write_text(json.dumps({"client_version": INSTALLED, "models": ["gpt-9-sol", {"slug": 9}, {"no_slug": 1},
+                                 {"slug": "gpt-6.1-sol", "visibility": "list", "supported_in_api": True}]}))
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert '"codex": "gpt-6.1-sol"' in routing.read_text()
 
 
@@ -275,14 +281,17 @@ def test_apply_preserves_file_mode(tmp_path):
     import stat
     cache, routing, models = _setup(tmp_path, ["gpt-6.1-sol"])
     os.chmod(routing, 0o640)
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     assert stat.S_IMODE(os.stat(routing).st_mode) == 0o640
     assert "gpt-6.1-sol" in routing.read_text()
 
 
 def _main(tmp_path, *extra):
     settings, pending = _paths(tmp_path)
-    return model_sync.main(["--settings", str(settings), "--pending", str(pending), *extra])
+    from unittest import mock
+    from agents_inc.install import host_cli
+    with mock.patch.object(host_cli, "installed_version", return_value=INSTALLED):
+        return model_sync.main(["--settings", str(settings), "--pending", str(pending), *extra])
 
 
 def test_main_missing_cache_exits_2(tmp_path, capsys):
@@ -371,7 +380,7 @@ def test_apply_keeps_models_json_format_and_only_adds_lines(tmp_path):
         entry["tasks_good"] = ["extract", "summarize"]
     models.write_text(_dump(data) + "\n")
     before = models.read_text().splitlines()
-    model_sync.sync_codex(cache, routing, models, apply=True)
+    model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
     after = models.read_text().splitlines()
     removed = [l[2:] for l in difflib.ndiff(before, after) if l.startswith("- ")]
     added = [l[2:] for l in difflib.ndiff(before, after) if l.startswith("+ ")]
@@ -385,7 +394,7 @@ def test_apply_keeps_models_json_format_and_only_adds_lines(tmp_path):
 
 def test_pinned_persona_not_promoted_or_cloned(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-6.1-sol", "gpt-6-luna"])
-    lines = model_sync.sync_codex(cache, routing, models, apply=True, pinned=["sol"])
+    lines = model_sync.sync_codex(cache, routing, models, apply=True, pinned=["sol"], installed=INSTALLED)
     text = routing.read_text()
     assert '"codex": "gpt-5.6-sol"' in text and '"codex": "gpt-6-luna"' in text  # sol held, luna promoted
     assert "codex sol: pinned, skipped" in lines
@@ -395,7 +404,7 @@ def test_pinned_persona_not_promoted_or_cloned(tmp_path):
 def test_pinned_persona_heal_still_runs(tmp_path):
     cache, routing, models = _setup(tmp_path, ["gpt-9-sol"])
     routing.write_text(ROUTING.replace("gpt-5.6-sol", "gpt-7-sol"))
-    model_sync.sync_codex(cache, routing, models, apply=True, pinned=["sol"])
+    model_sync.sync_codex(cache, routing, models, apply=True, pinned=["sol"], installed=INSTALLED)
     assert '"codex": "gpt-7-sol"' in routing.read_text()
     assert json.loads(models.read_text())["models"]["gpt-7-sol"]["tier"] == "orchestrator"
 
@@ -405,7 +414,7 @@ def test_scheduled_with_only_pinned_updates_is_none(tmp_path):
     settings, pending = _paths(tmp_path)
     settings.write_text('{"model_updates": "auto", "pinned": ["sol"]}')
     before = (routing.read_text(), models.read_text())
-    status, _ = model_sync.run_scheduled(cache, routing, models, settings, pending)
+    status, _ = model_sync.run_scheduled(cache, routing, models, settings, pending, installed=INSTALLED)
     assert status == "none"
     assert (routing.read_text(), models.read_text()) == before and not pending.exists()
 
@@ -437,3 +446,78 @@ def test_set_pinned_keeps_keys_rejects_bad_persona_and_corrupt_file(tmp_path):
 def load_tests(loader, tests, pattern):
     """Expose the module-level test_ functions to `unittest discover` (see _free012.suite)."""
     return suite(globals())
+
+
+# ---- spec 047: trust the cache only when written by the installed codex ----
+
+def test_foreign_cache_skips_promotion_with_one_line(tmp_path):
+    cache, routing, models = _setup(tmp_path, ["gpt-6.2-sol"])
+    data = json.loads(cache.read_text()); data["client_version"] = "0.170.0"; cache.write_text(json.dumps(data))
+    before = routing.read_text(), models.read_text()
+    lines = model_sync.sync_codex(cache, routing, models, apply=True, installed="0.159.2")
+    assert lines == ["model_sync: skipped, models_cache.json from codex 0.170.0, installed 0.159.2"]
+    assert (routing.read_text(), models.read_text()) == before
+    assert not model_sync._has_changes(lines)
+
+
+def test_matching_cache_still_promotes(tmp_path):
+    cache, routing, models = _setup(tmp_path, ["gpt-6.2-sol"])
+    data = json.loads(cache.read_text()); data["client_version"] = "0.170.0"; cache.write_text(json.dumps(data))
+    model_sync.sync_codex(cache, routing, models, apply=True, installed="0.170.0")
+    assert '"codex": "gpt-6.2-sol"' in routing.read_text()
+
+
+def test_never_promotes_to_hidden_or_unsupported_slug(tmp_path):
+    cache, routing, models = _setup(tmp_path, [])
+    cache.write_text(json.dumps({"client_version": "0.1.0", "models": [
+        {"slug": "gpt-9-sol", "visibility": "hide", "supported_in_api": True},
+        {"slug": "gpt-8-sol", "visibility": "list", "supported_in_api": False}]}))
+    assert model_sync.sync_codex(cache, routing, models, apply=True, installed="0.1.0") == []
+    assert '"codex": "gpt-5.6-sol"' in routing.read_text()
+
+
+def _foreign(tmp_path):
+    cache, routing, models = _setup(tmp_path, ["gpt-6.2-sol"])
+    data = json.loads(cache.read_text()); data["client_version"] = "0.170.0"; cache.write_text(json.dumps(data))
+    pending = tmp_path / "pending.json"; pending.write_text('{"lines": ["codex sol: x -> y [dry-run]"]}')
+    return cache, routing, models, pending
+
+
+def test_approve_on_foreign_cache_keeps_pending(tmp_path):  # G2
+    cache, routing, models, pending = _foreign(tmp_path)
+    lines = model_sync.approve_pending(cache, routing, models, pending, installed="0.159.2")
+    assert lines[0].startswith("model_sync: skipped,")
+    assert pending.exists()
+
+
+def test_scheduled_on_foreign_cache_keeps_pending(tmp_path):  # G2
+    cache, routing, models, pending = _foreign(tmp_path)
+    status, lines = model_sync.run_scheduled(cache, routing, models, tmp_path / "settings.json", pending, installed="0.159.2")
+    assert status == "skipped" and pending.exists()
+
+
+def test_cli_approve_on_foreign_cache_exits_nonzero(tmp_path):  # G2
+    from unittest import mock
+    from agents_inc.install import host_cli
+    cache, routing, models, pending = _foreign(tmp_path)
+    with mock.patch.object(host_cli, "installed_version", return_value="0.159.2"):
+        rc = model_sync.main(["--approve", "--cache", str(cache), "--routing", str(routing), "--models", str(models),
+                              "--pending", str(pending), "--settings", str(tmp_path / "settings.json"), "--skip-tables"])
+    assert rc != 0 and pending.exists()
+
+
+def test_unknown_trust_skips_promotion(tmp_path):  # H1: promotion needs a matching catalog
+    cache, routing, models = _setup(tmp_path, ["gpt-6.2-sol"])
+    before = routing.read_text()
+    lines = model_sync.sync_codex(cache, routing, models, apply=True, installed=None)
+    assert lines and lines[0].startswith("model_sync: skipped,") and "codex version unknown" in lines[0]
+    data = json.loads(cache.read_text()); data.pop("client_version"); cache.write_text(json.dumps(data))
+    lines = model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED)
+    assert lines and "catalog version unknown" in lines[0]
+    assert routing.read_text() == before
+
+
+def test_entry_without_eligibility_fields_is_not_promoted(tmp_path):  # H3: same explicit rule as catalog.newest
+    cache, routing, models = _setup(tmp_path, [])
+    cache.write_text(json.dumps({"client_version": INSTALLED, "models": [{"slug": "gpt-9-sol"}]}))
+    assert model_sync.sync_codex(cache, routing, models, apply=True, installed=INSTALLED) == []

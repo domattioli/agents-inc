@@ -1,0 +1,1 @@
+{"v": 1, "seq": 1, "ts": "2099-11-12T12:00:00.000Z", "source": "agents-inc", "event": {"type": "run.start", "run_id": "20991112T120000Z-sonnet-abc123", "model": "sonnet", "kind": "claude"}}

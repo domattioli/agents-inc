@@ -173,7 +173,7 @@ class ModHomeTest(unittest.TestCase):
 
 
 class PaneModsTest(unittest.TestCase):
-    """Pane mods (delegate-pane, agents-manager) install by default and are skipped when the release does not ship them."""
+    """Pane mods (delegate-pane) install by default and are skipped when the release does not ship them."""
 
     def _paths(self, shipped):
         from unittest import mock
@@ -194,15 +194,63 @@ class PaneModsTest(unittest.TestCase):
             cli.install_pane_mods(paths, notices)
         return [list(c.args[0][1:]) for c in run.call_args_list], notices
 
-    def test_both_panes_installed_when_shipped(self):
+    WRITES = ("install", "uninstall", "update", "add", "remove")
+
+    def _writes(self, calls):
+        return [c for c in calls if c[:2] != ["plugin", "list"]]
+
+    def _market(self, paths, *names):
+        plugins = paths.home / ".claude/plugins"
+        plugins.mkdir(parents=True, exist_ok=True)
+        (plugins / "known_marketplaces.json").write_text(json.dumps({n: {"source": {"path": "/x"}} for n in names}))
+
+    def test_clean_machine_installs_only_delegate_pane(self):
         calls, notices = self._run(self._paths(["delegate-pane", "agents-manager"]))
         self.assertIn(["plugin", "install", "delegate-pane@delegate-pane-local"], calls)
-        self.assertIn(["plugin", "install", "agents-manager@agents-manager-local"], calls)
+        self.assertFalse(any("agents-manager" in " ".join(c) or "luna-pane" in " ".join(c) for c in calls))
         self.assertEqual(notices, [])
 
-    def test_unshipped_pane_skipped_and_no_cli_call(self):
+    def test_retired_listed_plugins_are_uninstalled(self):
+        paths = self._paths(["delegate-pane"])
+        calls, notices = self._run(paths, listed="agents-manager@agents-manager-local luna-pane@luna-pane-local")
+        self.assertIn(["plugin", "uninstall", "agents-manager@agents-manager-local"], calls)
+        self.assertIn(["plugin", "uninstall", "luna-pane@luna-pane-local"], calls)
+        self.assertEqual(notices, [])
+
+    def test_retired_marketplace_in_known_file_is_removed(self):
+        paths = self._paths(["delegate-pane"])
+        self._market(paths, "luna-pane-local")
+        calls, _ = self._run(paths)
+        self.assertIn(["plugin", "marketplace", "remove", "luna-pane-local"], calls)
+        self.assertNotIn(["plugin", "marketplace", "remove", "agents-manager-local"], calls)
+        self.assertFalse(any(c[:2] == ["plugin", "uninstall"] for c in calls))
+
+    def test_second_run_makes_no_retirement_calls(self):
+        paths = self._paths([])
+        calls, _ = self._run(paths)
+        self.assertEqual(self._writes(calls), [])
+
+    def test_failed_retired_uninstall_is_a_notice(self):
+        from unittest import mock
+        from agents_inc.install import cli
+        paths = self._paths([])
+        def fake(argv, **kw):
+            if argv[1:3] == ["plugin", "list"]: return subprocess.CompletedProcess(argv, 0, "luna-pane@luna-pane-local", "")
+            return subprocess.CompletedProcess(argv, 1, "", "boom")
+        notices = []
+        with mock.patch.object(cli.shutil, "which", return_value="claude"), mock.patch.object(cli.subprocess, "run", side_effect=fake):
+            cli.install_pane_mods(paths, notices)
+        self.assertEqual(len(notices), 1)
+        self.assertIn("luna-pane@luna-pane-local", notices[0])
+
+    def test_agents_manager_not_in_bundle_allowlist(self):
+        from agents_inc.install import bundle
+        self.assertNotIn("mods/agents-manager", bundle.OPTIONAL_ALLOWLIST)
+        self.assertIn("mods/delegate-pane", bundle.OPTIONAL_ALLOWLIST)
+
+    def test_unshipped_pane_skipped_and_no_write_call(self):
         calls, _ = self._run(self._paths([]))
-        self.assertEqual(calls, [])
+        self.assertEqual(self._writes(calls), [])
 
     def test_installed_pane_is_refreshed_not_readded(self):
         calls, _ = self._run(self._paths(["delegate-pane"]), listed="delegate-pane@delegate-pane-local")

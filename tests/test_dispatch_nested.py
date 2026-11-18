@@ -76,7 +76,7 @@ class NestedBase(GrantsBase):
     def _parts(self, **kw) -> dict:
         """One real Claude Lead dispatch; return what a broker needs to check its parent."""
         rc, out, _ = self._lead(**kw)
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         call = self.calls[0]
         lead = Path(call["lead_dir"])
         return {"call": call, "lead": lead, "run_dir": self._run_dir(), "token": call["token"],
@@ -124,7 +124,7 @@ class LeadSetupTest(NestedBase):
             with self.subTest(why=why):
                 self.tearDown(), self.setUp()
                 rc, out, _ = self._dispatch("opus", **slots)
-                self.assertEqual(rc, 0, out)
+                self.assertEqual(rc, 4, out)
                 spec = self._spec()
                 self.assertEqual(spec["lead_skipped"], why)
                 self.assertNotIn("lead_dir", spec)
@@ -136,7 +136,7 @@ class LeadSetupTest(NestedBase):
 
     def test_no_lead_under_bypass_permissions(self):
         rc, out, _ = self._lead(PERMISSION_MODE="bypassPermissions")
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         spec = self._spec()
         self.assertEqual(spec["lead_skipped"], "bypass-permissions")
         self.assertNotIn("lead_dir", spec)
@@ -289,7 +289,7 @@ class CheckParentTest(NestedBase):
     def test_codex_lead_without_parent_fields_unchanged(self):
         self.tearDown(), self.setUp()
         rc, out, _ = self._dispatch("terra", ALLOWLIST="haiku", FAN_OUT=FAN)
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         call, lead = self.calls[0], Path(self.calls[0]["lead_dir"])
         run = json.loads((lead / "run.json").read_text())
         self.assertNotIn("parent_run_id", run)
@@ -378,6 +378,31 @@ class WorkerRulesTest(NestedBase):
         self.assertTrue(set(lead["parent_disallowed_tools"]) <= set(child["disallowed_tools"]))
         self.assertFalse(any(r in dispatch.LEAD_TOOLS for r in allowed))
 
+    def test_render_refusal_reaches_lead_result(self):
+        with mock.patch.object(dispatch, "render", return_value=(2, "", "slot CONSTRAINTS missing\n")):
+            self._request("rr1")
+            self.assertEqual(self._serve(), 0)
+        res = self._result("rr1")
+        self.assertEqual(res["outcome"], "refused-render")
+        self.assertIn("slot CONSTRAINTS missing", res["status_line"])
+        self.assertIn("slot CONSTRAINTS missing", res["reason_detail"])
+
+    def test_worker_pre_existing_changes_is_broker_owned(self):
+        lead_cmd = (f"snapshot {self.lead}/snapshot.json; verify with `python3 {self.lead}/pre_dispatch_snapshot.py "
+                    f"verify {self.lead}/snapshot.json`")
+        self._request("pe1", PRE_EXISTING_CHANGES=lead_cmd)
+        self.assertEqual(self._serve(), 0)
+        res = self._result("pe1")
+        self.assertNotEqual(res.get("outcome"), "refused-render", res)
+        self.assertEqual(len(self.calls), 1)
+        prompt = self.calls[0]["prompt"]
+        lines = [ln for ln in prompt.splitlines() if "verify with `" in ln]
+        self.assertEqual(len(lines), 1, prompt)
+        self.assertIn("python3 skills/workerbee/scripts/pre_dispatch_snapshot.py verify", lines[0])
+        self.assertNotIn(f"{self.lead}/snapshot.json", lines[0])
+        self.assertNotIn(f"{self.lead}/pre_dispatch_snapshot.py", lines[0])
+        self.assertIn("/workers/pe1/runs/", lines[0])
+
     def test_child_grant_exceeding_parent_refused(self):
         run = self.lead / "run.json"
         spec = json.loads(run.read_text())
@@ -456,7 +481,7 @@ class RecordingTest(NestedBase):
         report = GOOD_REPORT.replace("WORKERS SPAWNED: 0", "WORKERS SPAWNED: 1")
         with mock.patch.dict(os.environ, {"AGENTS_INC_HOME_REPO": str(home)}):
             rc, out, _ = self._lead(report=report)
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         want = [{"request_id": "r1", "child_run_id": "c1", "model": "haiku", "status": "unverified", "outcome": "unverified"}]
         spec = self._spec()
         self.assertEqual((spec["children"], spec["broker_workers_spawned"]), (want, 1))
@@ -473,11 +498,11 @@ class RecordingTest(NestedBase):
 
     def test_resume_lead_reattaches_mcp_config(self):
         rc, out, _ = self._lead()
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         spec, first = self._spec(), self.calls[0]
         with mock.patch.object(dispatch, "launch", side_effect=self._fake()):
             rc, out, _ = self._main("--resume", spec["run_id"], "--message", "go on", "--run-dir", str(self.runs))
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         again = self.calls[1]
         self.assertEqual(again["resume"], "sess-1")
         self.assertEqual(again["lead_dir"], Path(spec["lead_dir"]))
@@ -486,7 +511,7 @@ class RecordingTest(NestedBase):
 
     def test_resume_lead_dir_missing_refused(self):
         rc, out, _ = self._lead()
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 4, out)
         spec = self._spec()
         (Path(spec["lead_dir"]) / "lead_mcp.json").unlink()
         with mock.patch.object(dispatch, "launch", side_effect=self._fake()):

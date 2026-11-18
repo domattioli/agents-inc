@@ -248,10 +248,24 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
-STOP_LINE = ("STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, "
-             "stop and hand back to the dispatcher with the work done so far; never switch to another tool to "
-             "route around the block. A denial of an incidental side effect, such as a cache write, is not a "
-             "block: ignore it and continue.")
+STOP_LINE = ("STOP ON BLOCK: never switch tools to route around a denied task operation. Stop and hand back to "
+             "your supervisor with the work done so far when a hook, permission classifier or sandbox prevents the "
+             "task from being completed. If only an incidental side effect is denied, such as a cache directory you "
+             "cannot create, leave it undone, continue the authorized work, and list each such denial in your report.")  # spec 045 FR-011 (#145), sol review
+
+
+class NoUnconditionalStopCopyTest(unittest.TestCase):
+    """Spec 045 sol review F1: no prompt source carries the old unconditional stop-on-block sentence."""
+    def test_live_sources_drop_the_old_sentence(self):
+        root = Path(__file__).resolve().parent.parent
+        for rel in ("skills/workerbee/slots.md", "skills/workerbee/tests/fixtures/example_slots.json",
+                    "agents_inc/install/mcp_broker.py"):
+            with self.subTest(path=rel):
+                self.assertNotIn("Stop-on-block: if a hook", (root / rel).read_text(encoding="utf-8"))
+
+    def test_slots_md_copy_is_byte_identical(self):
+        root = Path(__file__).resolve().parent.parent
+        self.assertIn("\n" + STOP_LINE + "\n", (root / "skills/workerbee/slots.md").read_text(encoding="utf-8"))
 
 
 class PinnedTest(DispatchBase):

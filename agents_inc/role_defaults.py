@@ -15,7 +15,7 @@ RUNG_ROLES = {
     "executive": "judgment only",
     "orchestrator": "design or scope judgment, review, gates",
     "workhorse": "anything that writes: code, docs, git and PR mechanics",
-    "grunt": "read-only: scouts, summaries, triage; writes no code",
+    "grunt": "scouts, summaries, triage and task-authorized edits",
 }
 # R1: the default rung for any task that writes. A code edit never defaults to the grunt rung.
 WRITE_RUNG = "workhorse"
@@ -29,7 +29,7 @@ SETTINGS_KEY = "roles"
 CLAUDE_RUNG = {"fable": "executive", "opus": "orchestrator", "sonnet": "workhorse", "haiku": "grunt"}
 DEFAULTS = {
     "write_rung": WRITE_RUNG,
-    "grunt_read_only": True,
+    "grunt_read_only": False,
     "executive_judgment_only": True,
     "native_small_edit": True,
     "native_edit_model": NATIVE_EDIT_MODEL,
@@ -111,7 +111,7 @@ def _roles(r: dict | None) -> dict:
 
 def rung_roles(r: dict | None = None) -> dict:
     r, out = _roles(r), dict(RUNG_ROLES)
-    if not r["grunt_read_only"]: out["grunt"] = "scouts, summaries, triage, small mechanical edits"
+    if r["grunt_read_only"]: out["grunt"] = "read-only: scouts, summaries, triage; writes no code"
     if not r["executive_judgment_only"]: out["executive"] = "judgment first; may write when a brief costs more than the edit"
     if r["write_rung"] == "orchestrator":
         out["orchestrator"] = "anything that writes, plus design or scope judgment, review, gates"
@@ -128,7 +128,7 @@ def executive_line(r: dict | None = None) -> str:
 def roles_line(r: dict | None = None) -> str:
     r = _roles(r)
     grunt = ("grunt (haiku, luna) is read-only: scouts, summaries, triage." if r["grunt_read_only"] else
-             "grunt (haiku, luna) does scouts, summaries, triage and small mechanical edits.")
+             "grunt (haiku, luna) may write when authorized by the task and scoped permissions.")
     if r["write_rung"] == "orchestrator":
         return ("Rungs: orchestrator (opus, sol) writes code, docs, git and PRs and does design or scope judgment, "
                 f"review, gates; workhorse (sonnet, terra) writes only when a brief names it; {grunt}")
@@ -136,7 +136,7 @@ def roles_line(r: dict | None = None) -> str:
             f"scope judgment, review, gates; {grunt}")
 
 def native_edit(r: dict | None = None) -> str:
-    """The native small-edit route as one noun phrase, or "" when every edit goes through dispatch."""
+    """The configured Claude native small-edit route, when enabled."""
     r = _roles(r)
     if not r["native_small_edit"]: return ""
     model = r["native_edit_model"]
@@ -146,18 +146,33 @@ def native_edit(r: dict | None = None) -> str:
 def gate_line(r: dict | None = None) -> str:
     r = _roles(r); n = r["small_task_calls"]
     if not r["native_small_edit"]:
-        return (f"Gate: {n} or fewer tool calls, no writes: do it yourself; any edit, and anything larger: "
-                "`agents-inc dispatch`.")
-    model = r["native_edit_model"]
-    return (f"Gate: {n} or fewer tool calls, no writes: do it yourself; {n} or fewer with edits: native "
-            f"{CLAUDE_RUNG[model]} subagent (Claude Code: Agent, model {model}; Codex: native subagent), short brief, "
-            "then one check yourself; larger: `agents-inc dispatch`.")
+        return f"Keep routine reads of {n} or fewer tool calls local. For delegated edits, use authorized dispatch."
+    return (f"Keep routine reads of {n} or fewer tool calls local. In Claude Code, prefer "
+            f"{native_edit(r)} when the gate permits it. Verify the result yourself.")
 
 def show_lines(r: Roles) -> list[str]:
     """One line per item: key=value (default|settings)."""
     return [f"role {k}={json.dumps(r[k])} ({r.sources[k]})" for k in DEFAULTS]
 
-ROUTE_LINE = "Route all delegation through agents-inc; never call another vendor's CLI or API directly; no paid API fallback."
+ROUTE_LINE = (
+    "Use Claude Code Agent when it offers the requested model and the agent gate permits it."
+)
+CODEX_ROUTE_LINE = (
+    "Use Codex native subagents when the session permits delegation and offers the requested model. "
+    "Use agents-inc dispatch only for authorized Claude integration tests."
+)
+GEMINI_ROUTE_LINE = (
+    "Use Gemini native subagents when the session permits delegation and offers the requested model. "
+    "Use governed dispatch only when separately authorized."
+)
+HOST_AUTHORITY_LINE = (
+    "Scope the brief. Let the host handle approvals. Respect denials, continue independent work, and verify results. "
+    "No paid API fallback."
+)
+
+def host_route(host: str) -> str:
+    return {"claude": ROUTE_LINE, "codex": CODEX_ROUTE_LINE, "gemini": GEMINI_ROUTE_LINE}[host]
+
 EXECUTIVE_LINE = executive_line()
 ROLES_LINE = roles_line()
 GATE_LINE = gate_line()

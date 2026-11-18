@@ -538,6 +538,21 @@ def canonical_backend(backend: str) -> str:
     return CANONICAL[backend]
 
 
+def mistral_handle(job: dict[str, Any]) -> str:
+    """The id that keeps one Mistral agent conversation: a resumed job shares its root job's id."""
+    handle = str(job["id"])
+    seen = {handle}
+    parent = job.get("parent_id")
+    while parent and str(parent) not in seen:
+        handle = str(parent)
+        seen.add(handle)
+        try:
+            parent = read_job(handle).get("parent_id")
+        except (OSError, ValueError, SystemExit):
+            break
+    return handle
+
+
 def route_backend(task_class: str) -> str:
     route = SCRIPTS_DIR / "route.sh"
     try:
@@ -577,6 +592,7 @@ def make_command(job: dict[str, Any]) -> list[str]:
         command = [str(SCRIPTS_DIR / "mask.sh"), "--tier", job.get("tier", "code")]
         if job.get("agent"):
             command.append("--agent")
+            command.extend(["--handle", mistral_handle(job)])
         if job.get("reset"):
             command.append("--reset")
     elif backend == "openrouter":

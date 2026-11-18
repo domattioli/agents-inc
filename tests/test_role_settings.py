@@ -55,7 +55,7 @@ class DefaultsTest(_Home):
         self.assertEqual(set(roles.sources.values()), {"default"})
         self.assertEqual(roles.warnings, [])
         self.assertEqual(self.body()[2:5], [f"- {role_defaults.EXECUTIVE_LINE}", f"- {role_defaults.ROLES_LINE}",
-                                            f"- {role_defaults.GATE_LINE}"])
+                                            f"- {role_defaults.GATE_LINE} {role_defaults.HOST_AUTHORITY_LINE}"])
         self.assertIn(hook.ROUTE_RULE, self.session())
         self.assertEqual(self.nudge(), hook.NUDGE)
 
@@ -81,7 +81,7 @@ class OverrideTest(_Home):
     def test_grunt_writes(self):
         self.roles(grunt_read_only=False)
         text = "\n".join(self.body())
-        self.assertIn("grunt (haiku, luna) does scouts, summaries, triage and small mechanical edits", text)
+        self.assertIn("grunt (haiku, luna) may write when authorized by the task and scoped permissions", text)
         self.assertNotIn("grunt (haiku, luna) is read-only", text)
 
     def test_executive_may_write(self):
@@ -90,18 +90,16 @@ class OverrideTest(_Home):
         self.assertIn("judgment first", text)
         self.assertNotIn("judgment only", text)
 
-    def test_no_native_small_edit_sends_every_edit_to_dispatch(self):
+    def test_no_native_small_edit_preserves_dispatch_preference(self):
         self.roles(native_small_edit=False)
-        self.assertIn("any edit, and anything larger: `agents-inc dispatch`", "\n".join(self.body()))
+        self.assertIn("For delegated edits, use authorized dispatch", "\n".join(self.body()))
         for text in (self.session(), self.nudge()):
             self.assertNotIn("native workhorse subagent", text)
-            self.assertIn("agents-inc dispatch", text)
-            self.assertIn("picks the rung, not the route", text)
-        self.assertIn("every edit goes through `agents-inc dispatch`", self.session())
+            self.assertIn("For delegated edits, use authorized dispatch", text)
 
     def test_native_edit_model_and_small_task_calls(self):
         self.roles(native_edit_model="opus", small_task_calls=5)
-        self.assertIn("5 or fewer with edits: native orchestrator subagent (Claude Code: Agent, model opus",
+        self.assertIn("5 or fewer tool calls on a native orchestrator subagent (model opus)",
                       "\n".join(self.body()))
         for text in (self.session(), self.nudge()):
             self.assertIn("5 or fewer tool calls on a native orchestrator subagent (model opus)", text)
@@ -120,7 +118,7 @@ class OverrideTest(_Home):
         (self.home / ".claude").mkdir()
         self.roles(small_task_calls=2)
         install_host_wiring(self.paths, InstallReceipt("a" * 64, Path("/usr/bin/python3"), None), claude_settings=False)
-        self.assertIn("Gate: 2 or fewer tool calls", (self.home / ".claude/AGENTS.md").read_text())
+        self.assertIn("Keep routine reads of 2 or fewer tool calls", (self.home / ".claude/AGENTS.md").read_text())
 
 
 class InvalidTest(_Home):
@@ -145,7 +143,7 @@ class InvalidTest(_Home):
         self.assertEqual((roles["write_rung"], roles.sources["write_rung"]), ("workhorse", "default"))
 
     def test_haiku_with_read_only_grunt_falls_back(self):
-        self.roles(native_edit_model="haiku")
+        self.roles(native_edit_model="haiku", grunt_read_only=True)
         roles = role_defaults.load(self.paths.settings)
         self.assertEqual(roles["native_edit_model"], "sonnet")
         self.assertIn("roles.native_edit_model", roles.warnings[0])

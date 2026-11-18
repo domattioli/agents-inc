@@ -1,0 +1,36 @@
+{
+ "name": "false-14-test-count-no-gate",
+ "report": "done.\n```claims\nfiles_changed: a.py\ngates: g1=0\ntests: g5=3\nstopped: none\n```\n",
+ "run": {
+  "changed": [
+   "a.py"
+  ],
+  "gate_results": [
+   {
+    "id": "g1",
+    "argv": [
+     "pytest"
+    ],
+    "rc": 0,
+    "expect_rc": 0,
+    "state": "passed",
+    "excerpt": "Ran 42 tests\nOK"
+   }
+  ],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "checked",
+  "items": [
+   {
+    "kind": "test-count",
+    "claimed": "g5=3",
+    "observed": "no such gate"
+   }
+  ],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": null
+ }
+}

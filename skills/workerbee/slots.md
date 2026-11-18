@@ -4,9 +4,8 @@ Spec 016. Fill each `{{NAME}}` slot for one dispatch, then append
 `skills/workerbee/header.md` (or a contract-reference line naming it, for a
 delegate that can read files). `agents-inc dispatch --slots <json> --model
 <alias> --dry-run` does both from a JSON object keyed by slot name (the
-renderer by hand, from any directory:
-`python3 ~/.claude/skills/workerbee/scripts/render_dispatch.py --slots
-<json>`); it exits 2
+renderer is not run by hand; print a worked slots file with
+`agents-inc dispatch --print-template`); it exits 2
 naming any required slot that is missing or empty. NOTES defaults to `none`;
 STYLE may stay empty. The renderer strips the header's markdown title and
 authoring comment and emits header text from the CAVEMAN line.
@@ -41,11 +40,11 @@ Worked example (read-only scout, every slot filled; render appends header.md bel
 The example has no GATES (a scout writes nothing). A code task adds `"GATES": [{"argv": ["python3", "-m", "unittest", "tests.test_x"]}]` to the JSON; `cwd`, `timeout_s` and `expect_rc` take their defaults, and the renderer appends one sentence naming the command to SUCCESS GATE. A plain string entry such as `"python3 -m unittest tests.test_x"` is also accepted: the renderer splits it with shlex and no shell runs it.
 
 ```text
-ROLE: Grunt scout (haiku, Agent tool), dispatched by Supervisor (opus) in /path/to/repo.
+ROLE: Grunt scout (haiku, Agent tool), dispatched by the CoS in /path/to/repo.
 REPORTING CHAIN: haiku reports to sonnet; sonnet reports to fable; fable reports to the operator
 TASK: Read-only scout. 1. Read agents_inc/policy.py. 2. List every function name that contains the word route, with file:line. 3. Return the list; write nothing.
-CONSTRAINTS: read-only; no file writes; no network; at most 10 tool calls. Stop-on-block: if a hook or permission classifier blocks a tool call, stop and hand back to the dispatcher; never switch tool to route around it.
-STOP ON BLOCK: if a hook, permission classifier or sandbox blocks a tool call that the task needs, stop and hand back to the dispatcher with the work done so far; never switch to another tool to route around the block. A denial of an incidental side effect, such as a cache write, is not a block: ignore it and continue.
+CONSTRAINTS: read-only; no file writes; no network; at most 10 tool calls. Follow STOP ON BLOCK below.
+STOP ON BLOCK: never switch tools to route around a denied task operation. Stop and hand back to your supervisor with the work done so far when a hook, permission classifier or sandbox prevents the task from being completed. If only an incidental side effect is denied, such as a cache directory you cannot create, leave it undone, continue the authorized work, and list each such denial in your report.
 OUT OF SCOPE: editing any file; judging routing design; running unittest suites.
 FILES IN SCOPE:
 none (read-only scout)
@@ -111,9 +110,9 @@ A `needs-lead` result (MCP) or exit 10 from `--wait` carries a Worker question: 
 Tool names are `mcp__agents_inc__dispatch`, `__status`, `__wait`, `__resume`, `__answer` and must be loaded with `tool_search` first (query `agents_inc`).
 Without `--run-dir`, runs land in `<cwd>/.scratch/agents-inc-runs` when git ignores `.scratch`, so a delegate under acceptEdits can write its own run files.
 A Lead that answers "tool_search is unavailable" or "cannot access" without calling dispatch hit a Codex-side startup flake: rerun it once.
-A Worker report must be plain text, never wrapped in a code fence: handoff-lint skips fenced text, so the broker marks the result red (`report-noncompliant`).
+A Worker report must be plain text, never wrapped in a code fence: handoff-lint skips fenced text, so the format check fails: advisory when gates passed, never red by itself. A missing or empty report is red `no-report`.
 
-Tool grants and outcomes (D58). A Claude delegate gets per-run `--allowedTools` and `--disallowedTools`. Allowed: Read, Glob, Grep, read-only git, the snapshot verifier, each GATES command, each BASH_ALLOW prefix, and the test runners only when FILES_IN_SCOPE names paths. Denied: `git push`, `git commit`, `sudo`, WebFetch, WebSearch, Agent, Task. `agents-inc` is never granted as Bash. A Claude Lead (fable, opus, sonnet; FAN_OUT total and depth above 0, ALLOWLIST names rung-allowed models, PERMISSION_MODE not `bypassPermissions`) also gets exactly five grants, `mcp__agents_inc__dispatch`, `status`, `wait`, `resume` and `answer`, served by the broker over `--mcp-config` (D60); Read and Edit on the broker run directory are denied. A Worker's grants must be a subset of its Lead's, or the run ends `refused-grants`; a Worker's FAN_OUT must be `width 0, total 0, depth 0` (`worker-cannot-lead`). Outcome `green`: the usual checks pass and every GATES command exits as expected. Outcome `red`: a usual check fails, or `gate-failed` (wrong exit code) or `gate-missing` (a gate could not run: missing binary, timeout, refused). Outcome `unverified` (exit 0): the checks pass but there are no GATES, so nothing checked the work. Dispatch never runs FAILURE GATE or SUCCESS GATE text. Gates re-run on every resume turn and also apply to Codex runs. Broker children skip GATES and end `unverified` with reason `gates-skipped-broker`. Red reasons and exits (D64): a red run names its cause in `reason` (`quota-paused`, `blocked`, `timeout`, `rc-nonzero`, `launch-failed`, `snapshot-tampered`, `snapshot-error`, plus the gate reasons) and the status line adds `detail=`. `agents-inc dispatch` exits 0 green or unverified, 1 red, 2 usage, 3 refused, 69 blocked, 75 quota; the broker reports 69 and 75 as red. Every dispatched turn (Claude and Codex) has a deadline, `AGENTS_INC_TURN_TIMEOUT_S` (default 3600, `0` none).
+Tool grants and outcomes (D58). A Claude delegate gets per-run `--allowedTools` and `--disallowedTools`. Allowed: Read, Glob, Grep, read-only git, the snapshot verifier, each GATES command, each BASH_ALLOW prefix, and the test runners only when FILES_IN_SCOPE names paths. Denied: `git push`, `git commit`, `sudo`, WebFetch, WebSearch, Agent, Task. `agents-inc` is never granted as Bash. A Claude Lead (fable, opus, sonnet; FAN_OUT total and depth above 0, ALLOWLIST names rung-allowed models, PERMISSION_MODE not `bypassPermissions`) also gets exactly five grants, `mcp__agents_inc__dispatch`, `status`, `wait`, `resume` and `answer`, served by the broker over `--mcp-config` (D60); Read and Edit on the broker run directory are denied. A Worker's grants must be a subset of its Lead's, or the run ends `refused-grants`; a Worker's FAN_OUT must be `width 0, total 0, depth 0` (`worker-cannot-lead`). Outcome `green`: the usual checks pass and every GATES command exits as expected. Outcome `red`: a usual check fails, or a gate failed (`gate-failed` wrong exit code, `gate-timeout`, `gate-refused`). Claims block (D85, advisory): the renderer asks the delegate to end its report with one fenced `claims` block; gates are numbered `g1`, `g2`, ... in slots order and STOP_RULE is the one rule `s1`; dispatch compares the block with the run and prints `claims=checked:<n> unsupported` plus one `unsupported <kind> claimed=... observed=...` line per mismatch; it never changes the outcome. A declared stop is `unverified` reason `delegate-stopped`. Outcome `unverified` (exit 4): nothing measured the work, for reason `no-gates`, `gate-not-runnable` (a gate could not start), `scope-foreign-change` (a path outside FILES_IN_SCOPE changed), `snapshot-skipped` or `no-changes` (a write task, gates passed, nothing in FILES_IN_SCOPE changed). Dispatch never runs FAILURE GATE or SUCCESS GATE text. Gates re-run on every resume turn and also apply to Codex runs. Broker children skip GATES and end `unverified` with reason `gates-skipped-broker`. Red reasons and exits (D64): a red run names its cause in `reason` (`quota-paused`, `blocked`, `timeout`, `rc-nonzero`, `launch-failed`, `snapshot-tampered`, `snapshot-error`, plus the gate reasons) and the status line adds `detail=`. `agents-inc dispatch` exits 0 green, 1 red, 2 usage, 3 refused, 4 unverified, 69 blocked, 75 quota; the broker reports 69 and 75 as red. Every dispatched turn (Claude and Codex) has a deadline, `AGENTS_INC_TURN_TIMEOUT_S` (default 3600, `0` none).
 
 ## STYLE slot (experimental, #4)
 
@@ -129,3 +128,5 @@ A full grammatical sentence is allowed ONLY where a fragment would lose real pre
 one complete sentence = you failed the task, rewrite it. When you do use a full sentence,
 it should be rare and load-bearing, not a lapse back into prose by default.
 ```
+
+`TASK_ACCESS` may be `read` or `write`: the supervisor declares the operator-authorized access. Read denies worker workspace writes; supervisor gates still run on the host; write requires `FILES_IN_SCOPE`. Omission keeps legacy permissions. The snapshot checks scope after execution.

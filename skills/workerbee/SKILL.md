@@ -2,167 +2,49 @@
 name: workerbee
 version: 1.4.0
 benchmark: unverified_delegate_claims_accepted_per_session
-description: Use before delegating any task, spawning a subagent, or asking another model for a second opinion, and whenever astra, sol, terra, luna, Codex, Gemini, Mistral, or OpenRouter is named. agents-inc routes all delegation across providers; Claude's Agent tool cannot reach non-Claude models. Covers routing, supervision, and verification.
+description: Use before delegating any task, spawning a subagent, or asking another model for a second opinion, and whenever astra, sol, terra, luna, Codex, Gemini, Mistral, or OpenRouter is named. Choose the authorized host-native or governed route, scope the brief, and verify delegate results.
 ---
 
 # workerbee
 
-Discipline for supervising a fleet of cheaper models while staying the
-accountable party for their output. Covers capability tiering, report
-triage, verification, and the honesty rules that keep a delegated result
-worth believing. Replaces per-session re-derivation of "should I trust
-this delegate's GREEN?" — a question that cost three false accepts in one
-session before these rules existed.
-
-This skill is judgment, not plumbing. The dispatch machinery lives in
-the installed `codex-bridge` skill. For Astra, Sol, Terra, or Luna, invoke the
-absolute installed `agents-inc` launcher recorded by installation; Claude's
-`Agent` cannot select those Codex aliases.
-
-## Metadata
-
-- **Category**: Fleet Orchestration / Delegation
-- **Use Case**: Supervising codex/gemini/mistral/OpenRouter delegates in budget mode; deciding tier placement; deciding whether a delegate's reported gate can be believed
-- **Dependencies**: `codex-bridge` skill for actual dispatch (`agent.sh`, `gask.sh`, `mask.sh`, `oask.sh`). No scripts of its own
-- **Scope**: Supervision discipline only. Transport, routing, retries, timeouts and job state belong to `codex-bridge`
-
-
-## Free models (D75)
-
-Free slugs (see `agents_inc/install/free_launch.py`) are dispatchable. Add `TASK_KIND` (extract, summarize, classify) and an explicit public or internal `CLASSIFICATION`. Judge the reply with a `{report}` gate. A free reply is never self-accepted.
-
-## When to Use
-
-- Orchestrating work across non-Claude delegate models in budget mode
-- A delegate reports a gate GREEN and you must decide whether to accept it
-- Choosing which capability tier a task belongs to, or whether to escalate
-- Building a dispatch prompt for a delegate or a review agent
-- Computing or displaying cost/savings across a mixed free-and-paid fleet
-
-## When NOT to Use
-
-- Single-model work with no delegation — there is no fleet to supervise
-- Wiring up transport, provider routing, retries or job state — that is
-  `codex-bridge`, and duplicating it here is how the fleet ended up with
-  two parallel dispatch paths in the first place
-- Domain logic of any kind. This skill has opinions about process, none
-  about your problem
-
-## Failure Mode This Solves
-
-Documented in session `33338e35-4ce9-43db-8cf0-624adf37e136` (2026-09-04/05).
-
-A supervisor delegating heavily accepts delegate self-reports because they
-arrive formatted as evidence. In one session three separate GREEN gates
-were false: an alignment gate that printed the delegate's intended array
-rather than its rendered output (claimed columns `0 12 44 91 124`, measured
-`0 12 49 122 214 329 446`); a harness that passed while row labels silently
-vanished from live output because it measured 4 boundaries on rows holding
-7 items; and a timing claim of `0.664s` that measured `0.461s`. None were
-dishonesty — each was a delegate grading its own work. Separately, a null
-price coerced to zero inflated a reported savings figure ~29x, from a
-defensible `$1.15` to `$33.06`.
+Use [QUICKREF.md](QUICKREF.md) for routine routing and verification. This skill
+adds the governed dispatch prompt contract and troubleshooting.
 
 ## Protocol
 
-### Step 0: Dispatch-worthiness gate — run before writing any prompt
+### Step 0: Decide whether to delegate
 
-A correctly-written dispatch prompt (Step 11: role, reporting chain, verified
-state, constraints, gates, output shape) costs roughly 600-1,200 tokens to
-write plus the delegate's own floor (measured: 3,181 tokens for a one-word
-ultra-tier reply). For a small task that fixed cost exceeds doing the work
-directly. Answer both questions below before writing the prompt.
+Keep short sequential work local when policy permits. Use a delegate for
+independent work with a clear check or where the task requires independent
+review. State the reason out loud only if the route or chain needs explanation.
 
-**Q1 — Volume (D78).** Estimate the direct tool calls this task would take you
-(read / grep / glob / single edit / one command). Count the calls, do not
-estimate the difficulty. Three outcomes:
-- **3 or fewer, writes nothing:** do it yourself in the orchestrating session
-  (a one-file lookup, a single grep).
-- **3 or fewer, edits files:** a native workhorse subagent with a short brief
-  (Claude Code: `Agent` with model `sonnet`; Codex: its native subagent
-  equivalent). No harness ran gates, so the supervisor runs one check itself
-  (the test, or a read of the diff). The agent gate in `enforce` mode denies
-  this route (D61); there, use `agents-inc dispatch`.
-- **More than 3:** `agents-inc dispatch`.
+Prefer a permitted native tool with the requested model. The brief scopes task
+authority. The host owns permissions and lifecycle. If a model is unavailable,
+continue independent work and report any unmet requirement. Use a separately
+authorized route only when policy permits it. Respect host denials.
+Prescribed fleet: when the operator names the fleet shape, state one short
+block first (gate verdict per Step 0, Step 1 rung and MUST 10, delegate count,
+a leaner alternative), then launch as prescribed unless the operator changes
+it; no confirmation step.
 
-The executive (fable, astra; the session that talks to the operator) keeps
-judgment only: operator dialogue, decisions, briefs, verification and final
-acceptance. It delegates all writing and any task a well-briefed orchestrator
-or workhorse delegate can do.
+### Step 0.5: Check provider eligibility
 
-Exceptions that send a small task to `agents-inc dispatch`, each of which
-must be stated out loud when used:
-- the task is one of N≥3 independent tasks being fanned out in parallel;
-- the calls are individually cheap but return large output the orchestrator
-  should not hold in context (log sweeps, whole-file dumps);
-- the work is code writing/editing under a binding coding-dispatch policy
-  for the repo you're operating in, if one exists (dispatch regardless of
-  size in that case).
-
-**Q2 — Affordance.** Does the delegate have the capabilities the task needs?
-
-| delegate | filesystem | shell | repo state |
-|---|---|---|---|
-| Claude subagent (`Agent` tool) | yes | yes | yes |
-| `agent.sh` / codex-bridge runner | yes | yes | yes |
-| `gask.sh` / `mask.sh` / `oask.sh` (bare API) | **no** | **no** | **no** |
-
-A bare-API wrapper sees only the text in the prompt. If the task says
-"grep the repo", "read that file", or "check the branch", either paste the
-real source into the prompt (Step 6) or pick a delegate with filesystem
-access. Dispatching a filesystem task to a bare-API buddy costs a full
-correction round-trip — the failure that produced this gate (MADMESHing,
-2026-09-08: dispatch → "no filesystem" correction → local grep → re-dispatch,
-strictly more expensive than the grep alone).
-
-State the gate result in one line before dispatching, e.g.
-`dispatch gate: ~8 calls, delegate=Agent(fs=yes) → dispatch`.
-
-### Step 0.5: Vendor eligibility gate — non-Claude is off by default
-
-Claude (`Agent` tool) is the default vendor for every dispatch. Codex
-(astra/sol/terra/luna), Gemini, Mistral and OpenRouter are **OFF unless a
-gate below opens.** The ladder in Step 1 is a capability map, not a menu of
-equally-default options — do not pick a vendor row because it is cheaper,
-present, or already wired up.
-
-Open a non-Claude vendor only on one of:
-(a) **Operator asked.** Named the vendor/nickname for this dispatch. A prior
-    session's use is not standing consent.
-(b) **Capability fit.** The task needs something Claude cannot do as well
-    here, stated concretely, not as a preference. Legitimate examples:
-    1M-context single-blob digest (gemini digest); genuine cross-vendor
-    blind second opinion where same-vendor correlation is the thing being
-    avoided; Claude quota-paused (= a failed attempt, per AGENTS.md).
-(c) **Declared budget modality.** The operator has put this run in budget
-    mode. Budget mode opens the free grunts (gpt-5.4-mini, OpenRouter free,
-    Gemini free, Mistral free) for workhorse/grunt slots; it does NOT open
-    paid Codex-account models — those still need (a) or (b).
-
-State the result in one line before dispatching, same shape as Step 0:
-`vendor gate: gate (b) cross-vendor blind review → mistral code` or
-`vendor gate: no gate open → Claude (sonnet)`.
-
-No gate open → dispatch Claude. Cheaper-and-available is not a gate.
-
-**Pairs the operator-named-model rule.** An operator
-naming a model assigns the top-level delegate without locking the subtree —
-go cheaper beneath it freely *within Claude*. This step is the sideways
-constraint on the same tree: a named Claude model does not open a free-grunt
-or Codex sub-delegate by itself; crossing vendors beneath it still needs a
-gate above. Downward is free, sideways is gated.
+The vendor gate for governed dispatch still applies. Claude is the default.
+Use another eligible provider when the operator names it, a concrete capability
+requires it, or budget mode allows a free grunt. Respect workspace data rules
+and available grants. A named model conveys model preference, while the task
+and host determine authority.
 
 ### Step 1: Place the task on the capability ladder
 
-Two vendors, one ladder. Pick the tier the task needs. **Step 0.5 gates which
-vendor column you may use** — the ladder tells you the rung, not the vendor.
+Pick the least expensive eligible rung that can do the task.
 
 | tier | Anthropic | OpenAI | use for |
 |---|---|---|---|
 | executive | fable | astra | judgment only: operator dialogue, decisions, briefs, verification, final acceptance (D78) |
 | orchestrator | opus | sol | briefs that need design or scope judgment, adversarial review, gates |
 | workhorse | sonnet | terra | default for anything that writes: code, docs, git and PR mechanics; supervising a pair |
-| grunt | haiku | luna | read-only: scouts, summaries, triage; writes no code (D78) |
+| grunt | haiku | luna | scouts, summaries, triage and task-authorized edits |
 | grunt | — | oss / free | one-shot text, drafts, sounding boards, well-scoped small coding (high volume of small diffs, never a large or architecturally significant change) |
 
 Rung names follow D27/D36: executive, orchestrator, workhorse, grunt. Older
@@ -176,9 +58,9 @@ which model ids sit on each rung; edit `agents_inc/models.json` or
 | rung | provider | default (routing.json) | all ids (models.json) |
 |---|---|---|---|
 | executive | claude | `fable` | `fable` |
-| executive | codex | `gpt-6-astra` | `gpt-6-astra` |
+| executive | codex | `gpt-6.2-astra` | `gpt-6-astra`, `gpt-6.2-astra` |
 | orchestrator | claude | `opus` | `opus` |
-| orchestrator | codex | `gpt-6.1-sol` | `gpt-5.6-sol`, `gpt-6.1-sol` |
+| orchestrator | codex | `gpt-6.2-sol` | `gpt-5.6-sol`, `gpt-6.1-sol`, `gpt-6.2-sol` |
 | workhorse | claude | `sonnet` | `sonnet` |
 | workhorse | codex | `gpt-6.1-terra` | `gpt-5.6-terra`, `gpt-6.1-terra` |
 | grunt | claude | `haiku` | `haiku` |
@@ -188,15 +70,6 @@ which model ids sit on each rung; edit `agents_inc/models.json` or
 | grunt | ollama | `qwen2.5-coder:3b` | `qwen2.5-coder:3b`, `qwen2.5-coder:7b`, `qwen3:8b` |
 | grunt | openrouter | `openrouter/auto:free` | `cohere/north-mini-code:free`, `dots-studio/dots-3-note-preview:free`, `google/gemma-4-26b-a4b-it:free`, `google/gemma-4-31b-it:free`, `google/lyria-3-clip-preview`, `google/lyria-3-pro-preview`, `liquid/lfm-2.5-2.6b:free`, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`, `nvidia/nemotron-3-ultra-550b-a55b:free`, `nvidia/nemotron-3.5-lightning:free`, `openrouter/auto:free`, `openrouter/free` |
 <!-- END GENERATED tier-table -->
-
-**Relay for chains the tools cannot build.** `agents-inc run` and
-`agents-inc dispatch` cannot spawn Claude `Agent` subagents from inside a Codex
-process (see the one-direction note near the top of this skill). When the
-operator names a chain that cannot be built mechanically, for example a Codex
-supervisor (`terra`) over Claude workers, the supervising session relays: it
-launches the workers itself, forwards their reports to the named Codex
-supervisor as a turn, forwards the supervisor's verdict up, says so to the
-operator in one line, and keeps the authority direction the operator asked for.
 
 **Score the task onto a rung.** Rate five dimensions L1/L2/L3; the rung is
 the highest single score (max, not average). L1 = grunt, L2 = workhorse,
@@ -217,14 +90,14 @@ the other four are L1. No mechanical check alone is not L3: low-stakes prose
 without a check stays L1-L2. File count is not a dimension. Code writing or
 editing goes to workhorse unless the operator directs another rung; a code
 task that needs design or scope judgment goes to orchestrator. The Claude and
-Codex grunts (haiku, luna) are read-only and write no code (D78).
+Haiku and luna may write when the operator authorizes the task and the dispatch grants the necessary scope. The supervisor sets `TASK_ACCESS` to `read` or `write` from that authority and supplies `FILES_IN_SCOPE` for writes. Legacy slots without this field keep their existing permissions.
 Ported from DomI `subagent-dispatch-policy` v1.4.0 (#27).
 
 Coding by free bottom-rung models (not haiku or luna) is scope-gated, not banned: small, narrow, high-volume jobs only. A task needing scope/design judgment is workhorse+, dispatch it there.
 
-Under a mandate, dispatch Codex rows via `agent.sh submit --backend codex --model <slug> --mandate <run_id> --role <rung>`; bare `codex exec` is stateless and must not be used for Executive/Supervisor re-engagement (spec-010, `skills/codex-bridge/SKILL.md` `agent.sh` mandate flags).
+Under a mandate, dispatch Codex rows via `agent.sh submit --backend codex --model <slug> --mandate <run_id> --role <rung>`; bare `codex exec` is stateless and must not be used for Executive/Orchestrator re-engagement (spec-010, `skills/codex-bridge/SKILL.md` `agent.sh` mandate flags).
 
-**Scout = mode, not tier.** Recon before real dispatch (does X exist / what
+**Scout = mode, not rung.** Recon before real dispatch (does X exist / what
 shape / worth it). Text-only recon -> free grunt (OpenRouter free, gemini
 cheap/digest, mistral cheap, gpt-5.4-mini). Recon needs tools (walk repo,
 read tree, run cmd) -> Grunt rung only: haiku or luna; free grunts have no
@@ -234,100 +107,33 @@ report unverified -> re-derive before acting. Ledger: node with edge_type
 `probes`, no lineage row -> never a spawn ancestor. Canon: CONTEXT.md
 Scout rows + DECISIONS D28.
 
-**Escalate on evidence, not on a hunch.** A problem is not ultra-tier
-because it feels hard. It is ultra-tier because a flagship actually failed
+**Escalate on evidence, not on a hunch.** A problem is not Executive-rung
+because it feels hard. It is Executive-rung because a flagship actually failed
 at it, twice, and you can say how.
 
-**Ultra tier has a token floor.** Measured: a one-word reply from
+**Executive rung has a token floor.** Measured: a one-word reply from
 `gpt-6-astra` cost 3,181 tokens. So an ultra model is expensive per call
 regardless of task size. Never make it a default, and never make it
 discover context you already have — pre-load verified facts into its
 prompt so it spends its tokens on judgment instead of exploration.
 
-**Vendor nicknames are not Claude names.** `astra`/`sol`/`terra`/`luna` are
-OpenAI codenames for this operator's Codex account, unrelated to the
-Claude `Agent` tool's `model` param (`opus`/`sonnet`/`haiku`/`fable`).
-Failure mode this closes: told to "fan out an astra", the orchestrator
-checked the `Agent` tool, found no `astra` model, and reported "astra
-isn't available" — wrong; astra is a GPT model dispatched through `codex`,
-not through `Agent`. Session `33338e35-4ce9-43db-8cf0-624adf37e136`
-2026-09-05. Do not assume a vendor nickname is a Claude tier without
-checking Step 1a first.
+#### Step 1a: Choose the host route
 
-**Dispatch names tell the truth.** A Claude `Agent`/`Task` dispatch is named
-with a rung (Grunt, Workhorse, Orchestrator) or a Claude model name (haiku,
-sonnet, opus). A Codex persona name (`astra`, `sol`, `terra`, `luna`) appears
-only on a dispatch that reaches a Codex model through agents-inc. The owned
-`PreToolUse` hook denies an `Agent`/`Task` description that begins with a
-persona name; renaming does not change the execution model. A Claude
-supervisor of a Codex worker puts its own rung first and names the worker
-later: "Workhorse supervises luna parser fix", not "luna: parser fix".
+- Codex uses its native subagent tools when available. Use agents-inc dispatch
+  from Codex only for authorized Claude integration tests.
+- Claude Code uses Agent with an offered Claude model, subject to its agent
+  gate. Registered guests use `subagent_type: agents-inc:<nickname>`. See
+  `agents-inc native status`. Use the guest's actual nickname in descriptions.
+- Gemini uses an offered native subagent when supported by the session.
+- Scripts, automation and broker Workers use governed dispatch within their
+  grants. The relay, Model Context Protocol (MCP) tool and `@alias` routes
+  require `--legacy-routes`.
 
-**Chain resolves by ladder (D46).** The higher rung manages and the lower reports to it; at the same rung, the CoS asks the operator one interactive question to name the Lead, recommended answer first. State the resolved chain in one line only when the result is surprising, with a discrete justification.
+#### Step 1b: Check model availability in the session
 
-#### Step 1a: MODEL ROSTER — nickname → slug → dispatch command
-
-Verified against this machine 2026-09-05 (`which`, config files — do not
-assume, re-verify per Step 1b if stale). Only vendors with a working
-credential or CLI on this machine are listed; do not invent a row for a
-vendor that isn't wired up here.
-
-Route (D79, proposed). Claude Code with the agents-inc mod: native agent types are the one route. Claude rung: `Agent(model=...)`. Codex or free model: `Agent(subagent_type="agents-inc:<nickname>")`, registered when its status says offered (`agents-inc native status`; delegate pane lists them). Relay type, `mcp__agents-inc__run`, `@alias`: only after `agents-inc install --legacy-routes`. The dispatch column below is the route without the mod and for scripts, CI and broker Workers; `agents-inc dispatch` stays.
-
-| nickname | vendor | slug | dispatch | tier | when-to-use |
-|---|---|---|---|---|---|
-| astra | OpenAI (Codex) | `gpt-6-astra` | `@AGENTS_INC_LAUNCHER@ run --model astra --cwd <dir>` | executive | hardest reasoning |
-| sol | OpenAI (Codex) | `gpt-5.6-sol` | `@AGENTS_INC_LAUNCHER@ run --model sol --cwd <dir>` | orchestrator | orchestration, review |
-| terra | OpenAI (Codex) | `gpt-6.1-terra` | `@AGENTS_INC_LAUNCHER@ run --model terra --cwd <dir>` | workhorse | implementation |
-| luna | OpenAI (Codex) | `gpt-6-luna` | `@AGENTS_INC_LAUNCHER@ run --model luna --cwd <dir>` | grunt | read-only triage, scouts, summaries |
-| fable | Anthropic | n/a — `Agent` tool | `Agent(model="fable", ...)` | executive | Claude-side hardest reasoning, last resort |
-| opus | Anthropic | n/a — `Agent` tool | `Agent(model="opus", ...)` | orchestrator | Claude-side orchestration, adversarial review, gates |
-| sonnet | Anthropic | n/a — `Agent` tool | `Agent(model="sonnet", ...)` | workhorse | Claude-side implementation |
-| haiku | Anthropic | n/a — `Agent` tool | `Agent(model="haiku", ...)` | grunt | Claude-side read-only triage, scouts, summaries |
-| gemini digest | Google Gemini, free tier | `gemini-3.8-flash` | `skills/codex-bridge/scripts/gask.sh --tier digest "<prompt>"` | grunt | 1M-context bulk digest of one large blob (logs, transcripts) |
-| gemini cheap | Google Gemini, free tier | `gemini-flash-lite-latest` | `skills/codex-bridge/scripts/gask.sh --tier cheap "<prompt>"` | grunt | high-volume shallow triage |
-| gemini deep | Google Gemini, free tier | `gemini-3.1-pro-preview` | `skills/codex-bridge/scripts/gask.sh --tier deep "<prompt>"` | — | not free-tier usable as of 2026-11-09 (free-tier quota 0) |
-| mistral cheap | Mistral API | `ministral-3b-latest` | `skills/codex-bridge/scripts/mask.sh --tier cheap "<prompt>"` | grunt | mechanical transform |
-| mistral code | Mistral API | `codestral-latest` | `skills/codex-bridge/scripts/mask.sh --tier code "<prompt>"` | grunt | code review/critique. Devstral not exposed on this key; codestral is the substitute |
-| mistral deep | Mistral API | `mistral-large-latest` | `skills/codex-bridge/scripts/mask.sh --tier deep "<prompt>"` | grunt | research-style questions; not free-tier usable as of 2026-11-09 (403, subscription tier) |
-| openrouter free | OpenRouter, free-tier models only | model id from `curl https://openrouter.ai/api/v1/models` | `skills/codex-bridge/scripts/oask.sh "<prompt>"` | grunt | one-shot text/drafts. Hard-coded spend guard refuses non-free models — operator rule is spend nothing on OpenRouter |
-| DelegateAgent | OpenAI (Codex), via MCP | `gpt-6-luna` | `DelegateAgent(model="luna", ...)` | grunt | transcript-return alternative to broken --backend codex --wait for luna; same call shape as Claude `Agent` tool |
-
-Bridge scripts (`gask.sh`/`mask.sh`/`oask.sh`) live in `skills/codex-bridge/scripts/` in this repo, alongside this skill. Prefer `agent.sh submit --backend <b> --wait "<prompt>"` over calling a wrapper directly (see `## CLI` section below) — it gives a job id and a saved `result.json`.
-
-Gemini/Mistral/OpenRouter have no vendor-marketed codenames like astra/luna — dispatch by tier name, not nickname. Only OpenAI's Codex-account models are branded with person-names in this operator's `models_cache.json`; treat that as this-account-specific, not a public naming convention.
-
-#### Step 1b: Discover models at runtime — don't hardcode, verify
-
-Nicknames, slugs, and available effort levels can change per Codex-account
-config. Before trusting this table on a machine or account you have not
-just verified, run:
-
-```bash
-# What's the current default model + effort for this Codex account?
-grep -E '^model' ~/.codex/config.toml
-# → model = "gpt-6-astra"
-# → model_reasoning_effort = "medium"
-
-# Full roster this account can see, with per-model reasoning levels:
-python3 -c "
-import json
-d = json.load(open('$HOME/.codex/models_cache.json'))
-for m in d['models']:
-    slug = m.get('slug') or m.get('id') or ''
-    levels = [e['effort'] for e in m.get('supported_reasoning_levels', [])]
-    print(slug, '|', m.get('display_name'), '| effort levels:', levels)
-"
-
-# Is a vendor CLI/credential actually present before you write a roster row for it?
-which codex; which gemini; which mistral
-ls ~/.codex-bridge/*-key 2>/dev/null   # gemini-key, openrouter-key present = wired
-ls ~/.config/devstral 2>/dev/null       # mistral agent creds present = wired
-```
-
-Never document a vendor row from memory or from a prior session's table —
-re-run this before dispatching to a nickname you have not already
-confirmed exists on this account, this session.
+The generated table lists agents-inc pins. Resolve a named alias against the
+host's offered models before native spawn. Ask only when the operator must
+decide whether a substitute meets the task.
 
 #### Step 1c: Reasoning effort is an operator cost decision, not a model default
 
@@ -350,10 +156,10 @@ same session, immediately after the astra/luna misidentification.
   above `medium` — silent escalation is the failure mode, not the token
   cost alone. (Superseded upward by Step 11 MUST 9: effort is now stated
   on every dispatch, at every level.)
-- Do not conflate this with the capability-ladder "ultra" **tier** in Step
-  1 (fable/astra as a *model choice*). Tier and effort are independent
-  dials; a `flash`-tier model can in principle run at high effort, and a
-  `ultra`-tier model can run at low effort. Name both when you report a
+- Do not conflate this with the capability-ladder "ultra" **rung** in Step
+  1 (fable/astra as a *model choice*). Rung and effort are independent
+  dials; a `flash` Grunt-rung model can in principle run at high effort, and a
+  `ultra` Executive-rung model can run at low effort. Name both when you report a
   dispatch: "astra @ medium effort", not just "astra".
 
 ### Step 2: Never accept a self-graded gate
@@ -408,13 +214,8 @@ same description and prompt are already in flight from another session. Check
 that session before re-dispatching. For intentional fan-out, add the line
 `agents-inc: fan-out` to each prompt.
 
-**Quickref by hook (D53).** The owned `agent-nudge` `PreToolUse` hook also
-fires on `Bash` and `mcp__.*__DelegateAgent`. On the first dispatch-shaped
-call of a session (`Agent`/`Task`, the DelegateAgent tool, or a `Bash`
-command matching `agents-inc dispatch`, `gask.sh`, `mask.sh`, `oask.sh`,
-`agent.sh`, or `codex exec`), it adds `skills/workerbee/QUICKREF.md` to
-context once. Other `Bash` commands get no output. The full `SKILL.md` is
-still required for non-Claude rungs, prompts from scratch, and disputed gates.
+The Claude hook adds QUICKREF once at the first governed dispatch. Native
+Agent calls receive a short reminder. The hook issues no permission grants.
 
 ### Step 3a: Poll every dispatch. Default on.
 
@@ -443,7 +244,7 @@ infer completion from a process exiting. **Exit 0 means returned, not
 verified** — keep those two states distinct or a crashed job reads as a
 success.
 
-To actually watch a job, use `scripts/watch.sh` in another pane. That stream
+To actually watch a job, use `skills/codex-bridge/scripts/watch.sh` in another pane. That stream
 goes to a human's eyes, not into a context window — which is also the only
 progress signal available to an operator who cannot read a test.
 
@@ -452,32 +253,7 @@ Self-test the poller both ways before trusting it, same bar as any harness
 
 ### Step 3b: Visibility contract — what the operator can and cannot see
 
-Claude `Agent` subagents stream into the transcript; codex-bridge jobs do
-not, and cannot. Bash tool output reaches the session only at command
-completion — no user-space script can push incremental lines into a
-transcript mid-run. This is a harness boundary, not a missing feature.
-What IS achievable, and is therefore required:
-
-1. **Default to blocking dispatch.** `agent.sh submit --backend <b> --wait`
-   run in the foreground returns into the transcript exactly like an `Agent`
-   call. Use it unless the job is long enough to need a background slot, and
-   say why when you don't. Exception: for `--backend codex` with luna, `--wait`
-   is broken (bridge daemon can't see codex on PATH); use the `DelegateAgent`
-   MCP tool instead for real-time transcript return. `--wait` remains the default
-   for gemini/mistral/openrouter backends.
-2. **Async submit → emit the watch line in the same turn, unasked.** Print
-   `scripts/watch.sh ~/.codex-bridge/jobs/<id>/stdout.log` immediately. The
-   operator's live view is a pane, not the transcript — it costs zero
-   context and is the only true live signal that exists.
-3. **Checkpoint with `poll.sh --once`, not a continuous poller in context.**
-   One state line per checkpoint the session was already going to hit.
-   Continuous polling into the transcript spends the tokens delegation saves.
-4. **Never narrate a job you are not polling.** "It's still working" without
-   a poll line is a guess; `DIED` and `thinking` look identical from outside.
-
-Real streaming parity would need an MCP server wrapping codex-bridge and
-exposing a streaming tool — different infrastructure, out of scope for a
-discipline skill. Do not re-litigate it as a doc gap.
+Load `references/operator-visibility.md` when you submit async work or must tell the operator what they can see (watch.sh, transcripts).
 
 ### Step 3c: Keep a delegate until its context ceiling
 
@@ -507,8 +283,8 @@ is no token tracker and no lint check.
 
 ### Step 4: Triage delegate reports through a flash model
 
-In budget mode, route completed delegate reports to a standing flash-tier
-interlocutor. Forward the report **verbatim** via message; surface only
+In budget mode, route completed delegate reports to a standing Grunt-rung
+triage helper. Forward the report **verbatim** via message; surface only
 what it marks ESCALATE.
 
 ### Step 5: Chief of Staff triage — every report, every mode
@@ -523,7 +299,7 @@ away). Lead w/ DECIDE. Delegate rule breaks + GREEN-on-RED always surface.
 these rules by hand.
 
 Budget mode add-on: CoS may route completed delegate reports to a standing
-flash-tier triage helper. Forward the report **verbatim** via message; the
+Grunt-rung triage helper. Forward the report **verbatim** via message; the
 helper pre-sorts, CoS still verifies + owns final wording. Surface only
 what survives as DECIDE/honesty items.
 
@@ -558,39 +334,11 @@ defensible figure was `$1.15`.
 
 ### Step 6: Feed stateless buddies real source
 
-Free-tier models see only your prompt. Given a *description* of a
-function, they will invent a plausible one that does not exist — this
-burned a whole collaboration round.
-
-Paste verbatim source, real sample rows, actual command output. And:
-**buddy output is never evidence.** Verify anything you keep against the
-real system yourself, with a citation.
-
-Expect provider failure. Observed verbatim:
-
-```
-ask_openrouter: API error: Upstream error from Nvidia: Service temporarily overloaded
-ask_gemini: API error: This model is currently experiencing high demand.
-ask_mistral: API error: Not enough capacity available for this request, please retry later.
-```
-
-Fail over across the family. Never stall on one dead provider.
+Load `references/stateless-and-sandbox.md` when you dispatch to a bare-API wrapper (gask/mask/oask) or a sandboxed delegate.
 
 ### Step 7: Know the sandbox gotchas
 
-- A delegate under `workspace-write` has **no network**. HTTP buddies fail
-  with `Could not resolve host: ...`. Fix:
-  `-c 'sandbox_workspace_write.network_access=true'`.
-- The same sandbox blocks `.git/index.lock`, so delegates **cannot
-  commit**. Expect `Operation not permitted`. Have the delegate report
-  `BLOCKED-SANDBOX` and land the commit yourself.
-- Do not commit while a delegate's snapshot is live: the commit moves HEAD
-  and the delegate's verify fails for a change it did not make. If a commit
-  is unavoidable, re-capture the snapshot and re-issue it to the delegate.
-- `--skip-git-repo-check` is required outside a git repo.
-- Read-only sandbox is the cheapest way to enforce a review-only scope. Do
-  not rely on the model honoring "do not edit" when the sandbox can
-  guarantee it.
+Load `references/stateless-and-sandbox.md` when a sandboxed delegate fails or you pick a sandbox mode.
 
 ### Step 8: Fail closed on irreversible actions
 
@@ -629,9 +377,9 @@ Under `agents-inc dispatch` a Claude delegate's tools are the GRANTS section of
 its prompt (#54, D58). A harness "requires approval" block means a missing
 grant. It is not a policy refusal and not a reason to try another tool. Run
 one plain command per Bash call, with no `cd`, `&&`, `;`, pipes, loops, or
-shell variables, because a compound command matches no grant. On a block the
-delegate stops, records the exact command, hands back, and never routes around
-it. The dispatcher adds the prefix to BASH_ALLOW and resumes or redispatches.
+shell variables, because a compound command matches no grant. On a block of a
+task operation the delegate stops, records the exact command, hands back, and
+never routes around it; an incidental denial is reported and work continues. The supervisor adds the prefix to BASH_ALLOW and resumes or redispatches.
 
 Same for a delegate's RED. A RED reported honestly is a good outcome. Say
 so **in the dispatch prompt** — delegates round up to GREEN when they
@@ -641,7 +389,13 @@ believe RED is failure. The gate wording that worked:
 
 ### Step 11: Write the dispatch prompt
 
-Agent-facing text = `caveman ultra`. Reader is a model.
+Governed dispatch uses the 14 elements below. For native work use a bounded
+brief with the task, authorized access, relevant paths, acceptance check and
+report format. Include any contract the workspace still requires. Start
+independent work fresh where the host supports it. For a related follow-up,
+reuse the agent and send only changed facts or instructions.
+
+Agent-facing text uses terse wording.
 
 Fan-out (D48): every prompt carries `FAN_OUT: width <n>, total <n>, depth <n>` (renderer fills the rung default) and every report carries `WORKERS SPAWNED: n`; checker rejects a malformed FAN_OUT line, wrapper marks run red when n > total.
 
@@ -682,11 +436,11 @@ grunt dispatch also carries, checked by `--tier grunt`:
   = RED.
 - `STOP RULE:` numeric attempt cap (e.g. `stop after 2 failed runs of the
   success check; report RED w/ last output`). No open-ended "keep trying".
-- Supervisor-written tests where feasible: name the test file/ids in the
+- supervisor-written tests where feasible: name the test file/ids in the
   success gate; the delegate does not author its own acceptance test (Step
   2).
 
-**Pre-existing changes — every dispatch, every tier.** Supervisor runs
+**Pre-existing changes — every dispatch, every rung.** The supervisor runs
 `python3 skills/workerbee/scripts/pre_dispatch_snapshot.py capture <scratchpad>/pre_dispatch.json`
 before dispatch (time, HEAD, porcelain, sha256 of every pre-existing dirty
 file + every untracked file, recursive) and puts the snapshot path + verify
@@ -736,21 +490,9 @@ then reported "no files outside scope touched".
    confirm the chosen model against this allowlist and echo the match
    (`SUB-DELEGATE MODEL: <slug> — allowlist match: yes`) in its report; no
    confirmation line = non-compliant, treat as an unverified nested call.
-   **Mechanical check, not prose-trust alone (follow-up to upstream incident A).** This
-   repo has no PreToolUse/hook mechanism (`scripts/hooks/` does not exist
-   here, `.claude/settings.json` absent — checked 2026-09-12) so nothing
-   can block a nested call before it fires. What IS achievable: lint the
-   saved transcript/output file after the dispatch —
-   `python3 skills/workerbee/scripts/check_subdelegate_allowlist.py
-   <transcript_file>` — greps for nested-call `"model":"..."` fields,
-   flags any that land on a forbidden slug (opus/sonnet/haiku/fable/
-   astra/sol/terra/luna) and flags any nested call missing the required
-   confirm-echo line. `COMPLIANT` / `NO NESTED CALLS FOUND` / exit 1 with
-   violation detail. Self-tested both ways (known-bad transcript mirroring
-   the actual incident-A evidence → 2 violations flagged; known-good → 0).
-   This does not resolve the open (a)/(b) classification question
-   (model-behavior gap vs. harness gap) — it only makes the drop
-   detectable after the fact instead of trusting the prose alone.
+   Audit broker and transcript evidence when a nested allowlist is in scope.
+   `check_subdelegate_allowlist.py` checks a saved transcript for the model
+   and confirmation line. The broker enforces the grants on governed runs.
 8. **Confidentiality/data-classification tag.** State classification of
    content the delegate handles (e.g. public / confidential).
 9. **Explicit effort level, every dispatch, default medium.** State chosen
@@ -802,13 +544,12 @@ then reported "no files outside scope touched".
 14. **Lesson-learned handling: relay up the chain, never sideways.** Delegate
     surfacing a finding w/ canon-doc implications (`AGENTS.md`/`CONTEXT.md`/
     `docs/DECISIONS.md`/any `SKILL.md`/constitution) tags it
-    `LESSON-CANDIDATE` in its report, not buried in prose. Relays exactly one
-    rung up (Grunt→Workhorse→Orchestrator→Executive), never skipping. Each
-    receiving rung either drops it (state why) or relays further. Before it
-    reaches Executive, a scout check (Step 1 Scout mode) must confirm it
+    `LESSON-CANDIDATE` in its report, not buried in prose. Relays to the delegate's supervisor, one level up the chain, never skipping a level. Each
+    receiving supervisor either drops it (state why) or relays further. Before it
+    reaches the CoS, a scout check (Step 1 Scout mode) must confirm it
     doesn't already exist in canon + doesn't contradict canon — whoever
     relays is responsible for that check having happened somewhere in the
-    chain. **Only Executive (fable/astra) presents a survivor to the
+    chain. **Only the CoS presents a survivor to the
     operator** — one concise paragraph: lesson, evidence, scout's
     dedup/contradiction result, target canon file. Executive may land
     small/minor doc fixes itself; anything material needs operator sign-off,
@@ -895,23 +636,7 @@ the fix. Overlap: `check_dispatch_prompt.py` checks *this repo's* 14
 elements; `handoff-lint` checks generic handoff hygiene any model→model msg
 needs. Both, not either.
 
-**Cross-repo dispatch, external session (upstream incident B gap — honest limit, not a
-claimed fix).** Incident B's actual root cause: a session working in a
-*different* repo (the upstream private governance repo), dispatching work about an agents-inc issue, never
-read agents-inc's `AGENTS.md` — it had no local reason to know this
-contract existed. This repo cannot reach into another repo's session and
-force a read; no such enforcement mechanism exists here (no hook, no CI
-gate that runs against external repos). The only thing achievable from
-this side: make the contract self-contained and say plainly, in the
-canonical source (`AGENTS.md` § Delegation prompt contract), that any
-session — this repo or another — dispatching work that touches an
-agents-inc issue/task MUST fetch and apply this section first. Paste-and-
-tick block above is written to be copy-pasted whole into a dispatch prompt
-from anywhere, needing no other agents-inc file open. **This does not
-close the gap for a session that never thinks to look** — that half of
-incident B stays open; a real fix would need the *dispatching* repo (the
-upstream private governance repo, or whichever originates the call) to add its own check, which is out of this
-repo's control.
+Cross-repo dispatch from another repo's session (incident B, honest limit): load `references/cross-repo-dispatch.md` when the dispatching session is outside agents-inc.
 
 Include, roughly this order:
 1. ROLE, one line
@@ -940,7 +665,7 @@ Include, roughly this order:
     edit surgically
 14. PLAN CONTRACT (MUST 11), if deliverable is a delegation-capable plan —
     model + gates per task
-15. LESSON-CANDIDATE tag (MUST 14), if applicable — one rung up, never
+15. LESSON-CANDIDATE tag (MUST 14), if applicable — one level up the chain, never
     sideways; only Executive presents to operator
 16. OUTPUT SHAPE — fenced template
 
@@ -967,7 +692,7 @@ rotation. Keep using the file, never the pasted literal.
 | Relaying every delegate report to the operator | Buries the one item needing a decision |
 | Accepting GREEN without re-running the check | Ships defects with a passing gate attached |
 | Letting a delegate own its own verifier | Grades intent, not result |
-| Escalating to ultra tier on difficulty vibes | Pays a ~3.2k token floor for nothing |
+| Escalating to the Executive rung on difficulty vibes | Pays a ~3.2k token floor for nothing |
 | Describing code to a stateless buddy | It invents an API and you debug fiction |
 | Coercing unknown to zero | Confident wrong numbers outlive the session |
 | Rephrasing to get past a blocked permission | Destroys the trust the role depends on |
@@ -976,28 +701,7 @@ rotation. Keep using the file, never the pasted literal.
 
 ## CLI
 
-None. This is a discipline skill with no scripts of its own — it governs
-how you use someone else's. Dispatch goes through `codex-bridge`:
-
-```
-skills/codex-bridge/scripts/agent.sh submit --backend <b> --wait "<prompt>"  # DEFAULT for gemini/mistral/openrouter
-skills/codex-bridge/scripts/agent.sh result <id>
-skills/codex-bridge/scripts/agent.sh submit --class review "<prompt>"   # route.sh picks
-# For codex/luna, use DelegateAgent MCP tool instead (--wait is broken on codex backend)
-```
-
-Every `agents-inc dispatch` run that reaches launch leaves a `dispatched` node
-in the host ledger; its node id is the run id the status line prints. List open
-nodes and close one with the verdict you reached, not the delegate's:
-
-```
-agents-inc ledger pending
-agents-inc ledger append --run-id <id> --verdict pass|fail
-```
-
-Prefer `agent.sh` over calling a provider wrapper directly — it gives a job
-id, saved stdout/stderr, transient-failure retries, and a provider-neutral
-`result.json` you can attach to a report.
+Load `references/cli-and-interop.md` when you need launcher command syntax or how this skill interacts with other skills.
 
 ## Hard stops
 
@@ -1017,7 +721,7 @@ id, saved stdout/stderr, transient-failure retries, and a provider-neutral
 
 - Orchestrator stays cheap; work moves down-tier
 - Escalate a tier only on evidence a lower tier failed, never on difficulty vibes
-- Ultra tier carries a measured token floor (~3.2k for a one-word reply) —
+- Executive rung carries a measured token floor (~3.2k for a one-word reply) —
   pre-load verified facts into its prompt so it spends tokens on judgment
 - Cap tool calls and output lines in dispatch prompts to expensive tiers
 - Triage saves operator attention reliably; it saves tokens only on long
@@ -1025,13 +729,7 @@ id, saved stdout/stderr, transient-failure retries, and a provider-neutral
 
 ## Cross-skill interaction
 
-| Skill | Relationship |
-|---|---|
-| `codex-bridge` | The mechanism this skill supervises. That skill owns transport, routing (`route.sh`), per-provider timeouts, job state and retries. This skill owns tier choice, trust, and honesty. Do not reimplement its dispatch here |
-| `caveman` | Agent-facing dispatch prompts are written at `ultra` level — the reader is a model |
-| `nested-notes` | Structures the supervisor's report back to the operator |
-| `accelerate` | Optional. Renders the Chief of Staff DECIDE / HANDLED / UNDERSTAND instrument (Step 4) |
-| `act-autonomously` | Sibling discipline skill for unattended routines; overlapping subagent-budget concerns |
+Load `references/cli-and-interop.md` when another skill (codex-bridge, speckit-pipeline, caveman) is in play.
 
 ## Files
 
@@ -1040,75 +738,4 @@ id, saved stdout/stderr, transient-failure retries, and a provider-neutral
 
 ## Version History
 
-- **Unreleased** — REPORTING CHAIN rendered from the optional slots `DELEGATE`,
-  `SUPERVISOR`, `EXECUTIVE` with ladder and settings defaults, `--model` on the
-  renderer, `agents-inc models chain`, and the `reporting-chain-inverted` lint
-  rule (#45); Step 1 relay paragraph for chains the tools cannot build;
-  `ledger pending` and `ledger append --run-id` in the CLI section (#49).
-
-- **v1.4.0** (2026-10-01) — Rung names (executive, orchestrator, workhorse,
-  grunt) and a generated tier table; five-dimension rung scoring grid ported
-  from DomI subagent-dispatch-policy (#27); Step 3c keep a delegate until its
-  context ceiling (#28); dispatch header plus slots (#36, #4); dispatch names
-  tell the truth and hierarchy statement (#17, #14).
-
-- **v1.3.0** (2026-09-22) — Step 4 generalized from budget-mode flash triage to always-on Chief of Staff triage (D43): verify, then DECIDE / HANDLED / UNDERSTAND re-projection; flash helper kept as budget add-on.
-
-- **v1.2.1** (2026-09-18) — DelegateAgent MCP tool clarification. Step 3b
-  (item 1) now notes that `--backend codex --wait` is broken for luna; use
-  DelegateAgent MCP tool instead for real-time transcript return. CLI section
-  conditional DEFAULT comment and DelegateAgent note added. MODEL ROSTER table
-  gains DelegateAgent row.
-- **v1.2.0** (2026-09-18) — Three additions. (1) Step 0.5 vendor eligibility
-  gate: non-Claude vendors are OFF by default and open only on operator
-  request, a stated capability fit, or declared budget modality (which opens
-  free grunts only, never paid Codex models); a one-line gate statement is now
-  required before any non-Claude dispatch. Closes the gap where "two vendors,
-  one ladder" read as a menu of equally-default options with no preference
-  expressed. (2) Step 3b visibility contract: states plainly that transcript
-  streaming parity with the `Agent` tool is a harness boundary and not
-  achievable, makes `--wait` the default dispatch form (which does buy
-  transcript-return parity), and requires an unprompted `watch.sh` line on
-  every async submit. (3) MUST 7 clarified: the sub-delegate allowlist is a
-  hard lock and is opt-in — an operator naming a model is a top-level
-  assignment (downward within Claude is free), not an implied allowlist.
-  Step 0.5 states the sideways half: downward within a
-  vendor is free, sideways across vendors is gated.
-- **v1.1.4** (2026-09-18) — Ports the upstream private governance repo's Step 0 dispatch-worthiness gate
-  (2 questions: volume ≤3 calls → don't dispatch; affordance → bare-API
-  buddies have no filesystem/shell/repo access) into this canonical copy,
-  closing the drift where the upstream private governance repo's workerbee fork had the gate and this one
-  didn't.
-- **v1.1.3** (2026-09-12) — upstream incident A root-cause follow-up: bare-prose
-  confirm-and-echo requirement (v1.1.2) is unenforceable by itself — same
-  class of instruction the issue says gets ignored. Adds
-  `scripts/check_subdelegate_allowlist.py`, a mechanical transcript lint
-  (no hook mechanism exists in this repo to block live) that flags a
-  nested sub-delegate call landing on a forbidden model or missing the
-  confirm-echo line. Self-tested both ways. Does not resolve incident A's open
-  (a) model-behavior vs (b) harness-gap question — only makes the drop
-  detectable after the fact. Also: incident B root cause (external-repo
-  session, no local reason to read this contract) cannot be closed from
-  this side alone — added an explicit cross-repo fetch-first note to
-  `AGENTS.md` and here as the smallest reachable fix, and corrected
-  checklist item 1's `(or no-Skill-tool stated)` wording, which read as a
-  blanket escape hatch not present in the original 14-point canon.
-- **v1.1** (2026-09-05) — Adds Step 1a (MODEL ROSTER: nickname → slug →
-  exact dispatch command, verified against this machine's `codex`
-  CLI/`codex-bridge` wrappers), Step 1b (runtime model-discovery snippet
-  via `~/.codex/config.toml` + `models_cache.json`), and Step 1c
-  (reasoning effort is a separate, operator-owned cost axis; `ultra`
-  effort self-delegates and is opt-in only). Closes the gap where the
-  capability-ladder table (Step 1, v1.0) named `astra`/`luna` as tier
-  labels without a slug or CLI mapping, forcing an orchestrator to
-  reverse-engineer both the vendor-nickname lookup and the effort-tier
-  distinction by hand mid-session. Same session as v1.0
-  (`33338e35-4ce9-43db-8cf0-624adf37e136`); two follow-on incidents same
-  day: (1) orchestrator misread "astra"/"luna" as absent Claude models
-  because it never checked `~/.codex/config.toml` / `models_cache.json`;
-  (2) orchestrator dispatched at `ultra` reasoning effort unprompted
-  after being told explicitly not to.
-- **v1.0** (2026-09-05) — Initial. Extracted from session
-  `33338e35-4ce9-43db-8cf0-624adf37e136`, where three false delegate GREENs
-  and a ~29x inflated savings figure motivated the verification and
-  honesty rules. Benchmark measured 3 → 0 in the same session.
+Load `references/history.md` when you need why a rule changed (version history).

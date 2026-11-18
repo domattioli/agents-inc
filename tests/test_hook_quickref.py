@@ -46,15 +46,20 @@ class QuickrefTest(unittest.TestCase):
         text = out.getvalue().strip()
         return json.loads(text)["hookSpecificOutput"].get("additionalContext", "") if text else ""
 
-    def test_agent_payload_gets_quickref_once_per_session(self):
-        first = self.context(agent())
-        self.assertIn(MARK, first)
-        self.assertIn("loaded once per session", first)
-        self.assertNotIn(MARK, self.context(agent()))
+    def test_native_agent_gets_reminder_without_quickref_or_permission_decision(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(hook.run(self.paths, "agent-nudge", None, io.StringIO(json.dumps(agent()))), 0)
+        result = json.loads(output.getvalue())["hookSpecificOutput"]
+        self.assertNotIn("permissionDecision", result)
+        self.assertNotIn(MARK, result["additionalContext"])
+        self.assertIn(hook.NUDGE, result["additionalContext"])
+        self.assertEqual(self.context(agent()), "")
+        self.assertIn(MARK, self.context(bash(DISPATCH)))
 
     def test_other_session_gets_it_again(self):
-        self.context(agent(session="s1"))
-        self.assertIn(MARK, self.context(agent(session="s2")))
+        self.context(bash(DISPATCH, session="s1"))
+        self.assertIn(MARK, self.context(bash(DISPATCH, session="s2")))
 
     def test_bash_dispatch_gets_quickref_without_agent_nudge(self):
         text = self.context(bash(DISPATCH))
@@ -81,7 +86,7 @@ class QuickrefTest(unittest.TestCase):
 
     def test_missing_quickref_yields_note_not_error(self):
         (self.paths.current / "skills/workerbee/QUICKREF.md").unlink()
-        self.assertIn("quickref missing", self.context(agent()))
+        self.assertIn("quickref missing", self.context(bash(DISPATCH)))
 
     def test_malformed_stdin_is_silent(self):
         for raw in ("garbage", "[]", json.dumps({"tool_name": "Bash", "tool_input": "x"})):

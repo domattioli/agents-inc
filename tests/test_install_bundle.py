@@ -22,3 +22,18 @@ class BundleTest(unittest.TestCase):
             receipt = InstallReceipt(staged.digest, Path("/usr/bin/python3"), Path("/usr/bin/codex"))
             activate(staged, InstallPaths.for_home(home), receipt)
             self.assertTrue((home / ".local/share/agents-inc/current").is_symlink())
+
+
+class BundleExclusionTest(unittest.TestCase):
+    def test_backup_and_orig_files_excluded_normal_kept(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); source = root / "source"; home = root / "home"
+            (source / "agents_inc").mkdir(parents=True)
+            for name in ("x.py", "x.py.bak", "x.py.bak.20260904_212304", "x.py.orig"):
+                (source / "agents_inc" / name).write_text("x")
+            (source / "skills" / "workerbee").mkdir(parents=True); (source / "skills" / "workerbee" / "SKILL.md").write_text("skill")
+            (source / "skills" / "codex-bridge").mkdir(parents=True); (source / "skills" / "codex-bridge" / "SKILL.md").write_text("skill")
+            staged = stage_bundle(source, InstallPaths.for_home(home))
+            self.assertTrue((staged.path / "agents_inc/x.py").is_file())
+            for name in ("x.py.bak", "x.py.bak.20260904_212304", "x.py.orig"):
+                self.assertFalse((staged.path / "agents_inc" / name).exists(), name)

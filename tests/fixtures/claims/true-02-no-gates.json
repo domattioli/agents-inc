@@ -1,0 +1,19 @@
+{
+ "name": "true-02-no-gates",
+ "report": "done.\n```claims\nfiles_changed: a.py\ngates: none\nstopped: none\n```\n",
+ "run": {
+  "changed": [
+   "a.py"
+  ],
+  "gate_results": [],
+  "stop_rule": "stop after 2 failed reads"
+ },
+ "expect": {
+  "state": "checked",
+  "items": [],
+  "omitted": [],
+  "weak": [],
+  "unclaimed": [],
+  "reason": null
+ }
+}

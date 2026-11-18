@@ -130,10 +130,15 @@ class GateDenyTest(_Gate):
         self.assertEqual(result["hookSpecificOutput"]["hookEventName"], "PreToolUse")
         reason = self.reason(result)
         for needle in ("agents-inc agent gate", "general-purpose", "background: yes", ", ".join(FIRST_ALLOWED),
-                       "agents-inc dispatch --slots <json> --model <opus|sonnet|haiku|fable>",
-                       "Naming a model picks the rung, not the route.", "AGENTS_INC_AGENT_GATE=off claude",
-                       "agents-inc repair --agent-gate advisory"):
+                       "Respect this denial and continue independent authorized work."):
             with self.subTest(needle=needle): self.assertIn(needle, reason)
+        self.assertNotIn("agents-inc dispatch", reason)
+        self.assertNotIn("AGENTS_INC_AGENT_GATE", reason)
+
+    def test_deny_a_description_naming_the_wrong_guest_model(self):
+        result = self.run_hook(payload("agents-inc:luna", description="astra: count lines"))
+        self.assertEqual(self.decision(result), "deny")
+        self.assertIn("FR-002", self.reason(result))
 
     def test_deny_returns_before_claiming_an_inflight_entry(self):
         self.run_hook(payload("general-purpose"))
@@ -142,7 +147,8 @@ class GateDenyTest(_Gate):
 
     def test_persona_deny_still_wins_with_its_exact_fr002_reason(self):
         result = self.run_hook(payload("general-purpose", description="terra: implement X"))
-        self.assertEqual(self.reason(result), PERSONA_REASON)
+        self.assertTrue(self.reason(result).startswith(PERSONA_REASON))  # spec 042: refusal text appended
+        self.assertIn("refused: hook-persona", self.reason(result))
         self.assertTrue(self.reason(result).startswith("FR-002:"))
 
     def test_bash_and_delegate_agent_are_never_gate_denied(self):
@@ -237,17 +243,17 @@ class GateCliTest(_Gate):
 
     def test_doctor_json_shape_unchanged_by_gate(self):
         _, text = self.cli_out(["doctor", "--json"])
-        self.assertEqual(set(json.loads(text)), {"ready", "codes", "live", "warnings"})
+        self.assertEqual(set(json.loads(text)), {"ready", "codes", "live", "warnings", "items"})  # spec 042 FR-017: items added
 
     def test_install_notice_text_names_unwire_env_bypass_and_settings_json(self):
         text = hook.gate_notice(self.paths)
         self.assertLessEqual(len(text.splitlines()), 8)
-        for needle in ("agents-inc unwire", "AGENTS_INC_AGENT_GATE=off", "settings.json", "agents-inc repair --agent-gate enforce"):
+        for needle in ("agents-inc unwire", "AGENTS_INC_AGENT_GATE=off", "settings.json", "agents-inc repair --agent-gate advisory|off|enforce"):
             with self.subTest(needle=needle): self.assertIn(needle, text)
 
     def test_install_notice_omits_advisory_warning_under_enforce(self):
         self.set_env("enforce")
-        self.assertNotIn("skip agents-inc routing", hook.gate_notice(self.paths))
+        self.assertNotIn("Advisory:", hook.gate_notice(self.paths))
 
     def test_cli_install_and_repair_accept_agent_gate_flag(self):
         for command in ("install", "repair"):
