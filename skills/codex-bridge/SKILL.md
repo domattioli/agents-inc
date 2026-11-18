@@ -157,13 +157,13 @@ In `CODEX_BRIDGE_MODE=ultra`, the runner refuses Anthropic names and follows `ro
 # NOTE: --backend codex --wait is broken (bridge daemon can't see codex on PATH) and superseded by the delegate-agent MCP tool for luna; other codex models still use this async path until wired into delegate-agent.
 
 # First engagement opens the mandate + role; a fresh provider session starts.
-agent.sh submit --backend codex --model gpt-6-astra --mandate run-123 --role executive --wait "brief..."
+agent.sh submit --backend codex --model gpt-6.2-astra --mandate run-123 --role executive --wait "brief..."
 
 # Re-engagement resumes the same role's session -- no re-briefing needed.
-agent.sh submit --backend codex --model gpt-6-astra --mandate run-123 --role executive --wait "follow-up question"
+agent.sh submit --backend codex --model gpt-6.2-astra --mandate run-123 --role executive --wait "follow-up question"
 
 # Abandon the stored session and start over (recorded in replaced_thread_ids):
-agent.sh submit --backend codex --model gpt-6-astra --mandate run-123 --role executive --fresh "..."
+agent.sh submit --backend codex --model gpt-6.2-astra --mandate run-123 --role executive --fresh "..."
 
 # Mandate lifecycle (only close mutates state):
 agent.sh mandate close run-123 --by lead --reason "done"
@@ -248,8 +248,8 @@ The alias match is case-insensitive:
 | sonnet | `claude -p` | latest (alias) |
 | opus | `claude -p` | latest (alias) |
 | fable | `claude -p` | latest (alias) |
-| astra | `agent.sh submit --backend codex --wait` | `gpt-6-astra` |
-| sol | same | `gpt-6.1-sol` |
+| astra | `agent.sh submit --backend codex --wait` | `gpt-6.2-astra` |
+| sol | same | `gpt-6.2-sol` |
 | terra | same | `gpt-6.1-terra` |
 | luna | same | `gpt-6-luna` |
 

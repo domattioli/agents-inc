@@ -11,7 +11,7 @@ just verified, run:
 ```bash
 # What's the current default model + effort for this Codex account?
 grep -E '^model' ~/.codex/config.toml
-# → model = "gpt-6-astra"
+# → model = "gpt-6.2-astra"
 # → model_reasoning_effort = "medium"
 
 # Full roster this account can see, with per-model reasoning levels:

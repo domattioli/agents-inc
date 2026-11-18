@@ -51,7 +51,7 @@ class RunThreadTest(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = run_codex_thread(thread_file, "astra", "medium", self.dir, io.StringIO(message), self.receipt,
-                                  {"gpt-6-astra": ["medium"]}, no_tools=True)
+                                  {"gpt-6.2-astra": ["medium"]}, no_tools=True)
         return rc, out.getvalue(), err.getvalue()
 
     def calls(self):
