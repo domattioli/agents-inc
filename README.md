@@ -6,8 +6,6 @@
 
 <p align="center"><strong><a href="https://github.com/domattioli/agents-inc/blob/main/docs/START-HERE.md">New here? Start with the guide: install, set up providers and run your first job.</a></strong></p>
 
-<p align="center"><a href="https://github.com/domattioli/agents-inc/blob/main/docs/assets/demo.mp4"><img src="https://raw.githubusercontent.com/domattioli/agents-inc/main/docs/assets/demo.gif" width="800" alt="An animated company tree: you and an Executive talk a request through, an Orchestrator hands work to Workers and Grunts, and a reviewer sends one result back until it passes."></a><br><em>Illustration of how agents-inc delegates and checks work.</em></p>
-
 <p align="center">
 <img alt="Status: experimental" src="https://img.shields.io/badge/status-experimental-orange">
 <a href="https://github.com/domattioli/agents-inc/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/domattioli/agents-inc/actions/workflows/tests.yml/badge.svg"></a>
@@ -34,7 +32,7 @@
 Version 0.7.0. The project is experimental and pre-MVP. The governed path (`WORKERBEES_GOVERNANCE`) is off by default. Changes per release are in the [CHANGELOG](https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md). The build plan and cut line are in [docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md). Open work is tracked in [the issues](https://github.com/domattioli/agents-inc/issues).
 
 - **Now:** measure the token cost of delegation against doing the work in one session, and port the test suite to Windows ([#138](https://github.com/domattioli/agents-inc/issues/138)).
-- **Next:** let a Worker launched by a broker lead its own Workers ([#73](https://github.com/domattioli/agents-inc/issues/73)).
+- **Next:** let Claude and Codex delegates read files and use the web the way the host's own subagents do, with free models kept to a narrower scope ([#155](https://github.com/domattioli/agents-inc/issues/155), [#135](https://github.com/domattioli/agents-inc/issues/135)).
 - **Later:** route work by data classification, so unpublished work reaches only approved providers ([#19](https://github.com/domattioli/agents-inc/issues/19)).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
@@ -44,6 +42,8 @@ Version 0.7.0. The project is experimental and pre-MVP. The governed path (`WORK
 Delegated model work can look done while it is wrong. A flat pool of agents has no way to catch that. `agents-inc` borrows a [corporate org chart](https://github.com/domattioli/agents-inc/blob/main/docs/governance/DELEGATION-MODEL.md). The CEO is you. The CoS (chief of staff) is the session you talk to. A Lead manages one run, and a Worker reports to a Lead.
 
 Workers take routine work, and the Lead manages them. An author never grades its own work: the Lead checks what its Workers report before anything moves up. Savings are not yet measured, so none are claimed ([docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md)).
+
+<p align="center"><a href="https://github.com/domattioli/agents-inc/blob/main/docs/assets/demo.mp4"><img src="https://raw.githubusercontent.com/domattioli/agents-inc/main/docs/assets/demo.gif" width="800" alt="An animated company tree: you and an Executive talk a request through, an Orchestrator hands work to Workers and Grunts, and a reviewer sends one result back until it passes."></a><br><em>Illustration of how agents-inc delegates and checks work.</em></p>
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
 
