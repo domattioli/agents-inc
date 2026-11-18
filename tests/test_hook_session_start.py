@@ -72,6 +72,13 @@ class SessionStartWarningsTest(unittest.TestCase):
         self.assertIn("dispatch-path", text)
         self.assertIn("agents-inc doctor", text)
 
+    def test_claude_text_names_delegateagent_for_codex_rungs(self):
+        text = self._text(())
+        self.assertIn("astra, sol, terra and luna run through the DelegateAgent MCP tool", text)
+        self.assertIn("read-only", text)
+        self.assertNotIn("DelegateAgent MCP tool", self._text(("WB_CLI_NOT_FOUND",)))
+        self.assertNotIn("DelegateAgent MCP tool", self._text((), host="codex"))
+
     def test_nothing_stored_adds_no_mark(self):
         self.assertNotIn("not verified now", self._text(()))
 

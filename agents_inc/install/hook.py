@@ -70,6 +70,10 @@ def session_start(paths: InstallPaths, host: str) -> str:
         # does not read "CLI not found" as "dispatch is broken" and avoid it.
         text += (" The Codex CLI is missing (WB_CLI_NOT_FOUND). This affects the CLI route; check native availability in the host."
                  if warning == "WB_CLI_NOT_FOUND" else f" WARNING: {warning}.")
+    if host == "claude" and "WB_CLI_NOT_FOUND" not in report.warnings:
+        text += (" Codex rungs astra, sol, terra and luna run through the DelegateAgent MCP tool (deferred: load it with"
+                 " ToolSearch \"DelegateAgent\"), not as agent types; it is read-only (no file writes, no network, no"
+                 " `agents-inc dispatch`), so use `agents-inc dispatch` for Codex write work.")
     if "INSTALL_STALE" in report.warnings:
         text += (" INSTALL_STALE means the installed bundle differs from the source checkout (after a clean git install:"
                  " HEAD moved to a commit with different bundle files; uncommitted edits do not count), so launcher and docs may"
