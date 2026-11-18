@@ -15,8 +15,8 @@ from unittest import mock
 from agents_inc.install import hook, host_wiring
 from agents_inc.install.paths import InstallPaths
 
-REASON = ("FR-002: Agent/Task descriptions cannot begin with a Codex persona name. For Codex execution, "
-          "dispatch through agents-inc; Agent/Task creates Claude subagents. If this names a product, "
+REASON = ("FR-002: Agent/Task descriptions must identify the actual delegate. For Codex execution, "
+          "use the matching registered guest type or a separately authorized route. If this names a product, "
           "repository, person, or supervised worker, put the actual Claude rung first and mention that "
           "name later. Renaming does not change the execution model.")
 DENY = ["terra: implement X", "Luna - triage logs", "sol reviews spec", "ASTRA: review hook", "sol/review"]
