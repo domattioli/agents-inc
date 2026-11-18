@@ -2,7 +2,7 @@
 
 # agents-inc
 
-<p align="center"><strong>agents-inc runs AI models the way a company runs staff: a Lead takes your request, delegates it down an org chart of cheaper Worker models, and accepts nothing until a reviewer signs off. The aim is more checked work from the AI subscriptions you already pay for.</strong></p>
+<p align="center"><strong>Run your AI subscriptions like a small company you direct: a Lead splits each request among Workers, a script checks every result, and a reviewer must accept it. You stay in charge and approve what matters. The project is experimental, and the governed path is off until you turn it on.</strong></p>
 
 <p align="center">
 <img alt="Status: experimental" src="https://img.shields.io/badge/status-experimental-orange">
@@ -39,7 +39,7 @@ Version 0.6.4. The project is experimental and pre-MVP. The governed path (`WORK
 
 Delegated model work can look done while it is wrong. A flat pool of agents has no way to catch that. `agents-inc` borrows a [corporate org chart](https://github.com/domattioli/agents-inc/blob/main/docs/governance/DELEGATION-MODEL.md). The CEO is you. The CoS (chief of staff) is the session you talk to. A Lead manages one run, and a Worker reports to a Lead.
 
-Cheap models take routine work, and costlier models manage. An author never grades its own work: the Lead checks what its Workers report before anything moves up. Savings are not yet measured, so none are claimed ([docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md)).
+Workers take routine work, and the Lead manages them. An author never grades its own work: the Lead checks what its Workers report before anything moves up. Savings are not yet measured, so none are claimed ([docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md)).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
 
@@ -127,7 +127,7 @@ Every dispatch prompt carries a `REPORTING CHAIN` line derived from the ladder, 
 
 For a trusted MCP client, `agents-inc mcp --cwd /absolute/workspace` exposes governed dispatch, status, results, cancellation, and follow-up; see [the MCP adapter guide](docs/HOW-IT-WORKS.md#workspace-bound-mcp-adapter). Write tasks and host gates require the server’s `--allow-writes` flag.
 
-Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. With `--legacy-routes`, `@haiku <question>` inside any Claude Code session sends one side question to a cheaper model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
+Two more entry points need no dispatch. `PYTHONPATH=. python3 tools/governance_demo.py --fake`, run from a checkout, shows routing, policy checks and ledger records with no provider keys. With `--legacy-routes`, `@haiku <question>` inside any Claude Code session sends one side question to a Haiku model before the session model runs ([docs/at-route/AT-ROUTE.md](https://github.com/domattioli/agents-inc/blob/main/docs/at-route/AT-ROUTE.md)).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
 

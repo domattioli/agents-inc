@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agents-inc"
 dynamic = ["version"]
-description = "agents-inc runs AI models the way a company runs staff: a Lead takes your request, delegates it down an org chart of cheaper Worker models, and accepts nothing until a reviewer signs off."
+description = "Run your AI subscriptions like a small company you direct: a Lead splits each request among Workers, a script checks every result, and a reviewer must accept it."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "PolyForm-Small-Business-1.0.0 AND LicenseRef-Mattioli-NoAI-Training-1.0"

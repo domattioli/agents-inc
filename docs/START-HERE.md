@@ -134,8 +134,8 @@ and runs commands. The final answer is the same report you get without the mod.
 ## What this is
 
 - **Delegation system**
-  - **Purpose:** Gets several AI models to do work cheaply without trusting any model blindly.
-  - **Division of labor:** A capable model supervises while cheaper models handle narrow jobs such as reading a long document, extracting every date from files, or writing a first draft.
+  - **Purpose:** Gets several AI models to do work without trusting any model blindly.
+  - **Division of labor:** A Lead model supervises while Workers handle narrow jobs such as reading a long document, extracting every date from files, or writing a first draft.
   - **Core problem:** Deciding whether returned work is correct.
 
 ## The two pieces

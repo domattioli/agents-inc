@@ -200,7 +200,7 @@ scripts/watch.sh <stderr>
   - **Review**
     - Use `--sandbox read-only` for review-only work.
   - **Caller sandbox**
-    - `agents-inc dispatch` refuses to start from inside the Claude Code Bash sandbox or a Codex sandbox, because that sandbox blocks the provider API. It exits 69 with `detail=caller-sandboxed`. Rerun it outside the sandbox, for example by adding `"agents-inc dispatch *"` to `sandbox.excludedCommands` (D65; `agents-inc install` adds the narrow entries `agents-inc dispatch *`, `run *`, `repair *` and `install *`, and `repair` replaces the older `"agents-inc *"`).
+    - `agents-inc dispatch` refuses to start from inside the Claude Code Bash sandbox or a Codex sandbox, because that sandbox blocks the provider API. It exits 69 with `detail=caller-sandboxed`. A Codex Desktop caller is detected before checkout scripts are pinned and reports `caller-sandboxed-codex`; rerun it with host-approved elevation or in a normal terminal. In Claude Code, `agents-inc install` adds `"agents-inc dispatch *"` to `sandbox.excludedCommands` (D65), and repair replaces the older broad entry.
 
 ## Irreversible actions
 
@@ -408,6 +408,7 @@ agents-inc dispatch --slots slots.json --model sonnet --dry-run
   - Claude aliases are bare (`opus`, `sonnet`, `haiku`), so new Claude releases arrive through Claude Code itself.
 - Doctor
   - `agents-inc doctor` prints the status on line 1 and one `WARNING:` line per warning. Warnings never change the status. `MODEL_DRIFT <alias>: pinned <slug>, newest <slug>` means the catalog lists a newer slug. `INSTALL_STALE` means the installed release differs from the checkout it was installed from; run `agents-inc repair --source <checkout>`. After an install from a git checkout whose bundle paths were clean, only HEAD moving to a commit whose bundle paths differ counts (a commit, checkout, reset or branch switch); uncommitted and untracked files do not. After an install with uncommitted bundle changes, any further edit counts. When git cannot run, the check reports not stale. `WB_CLI_TEMP_PATH` means the recorded `codex` path is temporary or a shim.
+  - Host CLI and catalog warnings (spec 047, D52.1). `HOST_CLI_OUTDATED <cli> <installed> < <latest>` means a newer Codex or Claude Code CLI is published; the line names the update command. `CODEX_CATALOG_FOREIGN` means `models_cache.json` was written by a different Codex version than the one installed, so doctor makes no drift claim; update the CLI, then run `codex debug models`. `PIN_NOT_IN_CATALOG <alias>` means the installed CLI's catalog does not list the pinned model, so every call to that alias will fail. `(catalog version unknown)` after a `MODEL_DRIFT` line means doctor could not tell which Codex version wrote the catalog. `host-cli-version: could-not-test` means the latest version could not be looked up (offline); it never changes READY. Doctor and repair look up versions at most once a day; session start only reads the stored result.
 - Roster
   - The installer creates an empty `~/.config/agents-inc/roster.json`. Model aliases there or in `AGENTS_INC_MODEL_MAP` (JSON object or file path) override the built-in slugs.
 - DelegateAgent MCP server
