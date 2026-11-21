@@ -143,7 +143,8 @@ export const register: Register = on => {
     motion.seen = {}
     motion.returns = []
     const nowIso = new Date(await $.clock.now()).toISOString()
-    await $.command.register({ name: 'delegate-pane', description: 'Open the agents-inc pane: the delegation tree, the mission map, a new-agent form and a message box' })
+    // Spec 050 T050: Board (mods/agents-inc/hooks/board.tsx) is the one registered pane. The old pane no longer registers
+    // its slash command or opens at session start; its code stays here, unregistered, on the development branch.
     // sessionStart, acked and finalRuns survive a reload: sessionStart is set once. After `--resume` $.state is empty:
     // this session's $.store record (FR-013) gives back its start, acks and subagent alert times.
     const saved = normalizeView(await read($, view)).sessionStart ? undefined : await loadSaved($)
@@ -176,13 +177,7 @@ export const register: Register = on => {
         await update($, view, v => ({ ...normalizeView(v), note: `poll error: ${String((err as Error)?.message ?? err)}` }))
       }
     })
-    // Open at session start; /delegate-pane reopens it. Non-blocking: a refused open must not break the start.
     motion.off = false
-    try {
-      void Promise.resolve($.ui.open({ id: PANE, title: TITLE })).catch(() => {})
-    } catch {
-      // open refused: the command still opens the pane
-    }
     return next(e)
   })
 
