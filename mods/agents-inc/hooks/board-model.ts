@@ -138,8 +138,10 @@ export function noteHold(m: Mem, e: { agent_id?: string; tool_name?: string; too
   return true
 }
 
-export function clearHold(m: Mem, agentId: string): void {
+export function clearHold(m: Mem, agentId: string): boolean {
+  if (!agentId || !m.holds[agentId]) return false
   delete m.holds[agentId]
+  return true
 }
 
 const firstLine = (s: unknown): string => String(s ?? '').split('\n').find(l => l.trim())?.trim() ?? ''

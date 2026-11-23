@@ -17,16 +17,43 @@ export const register: Register = on => {
   // is the only signal. A hold in the main session has no agent id and makes no row.
   on('classic.PermissionRequest', async ($, e, next) => {
     const now = Number(await $.clock.now())
-    if (noteHold(board, e as any, now)) $.ui.invalidate('ui.render')
+    if (noteHold(board, e as any, now)) {
+      board.board = buildBoard(board, now) // a second prompt replaces the first hold's text at once, not at the next poll
+      $.ui.invalidate('ui.render')
+    }
     return next(e)
   })
   on('classic.Notification', async ($, e, next) => {
     board.notice = String((e as any).message ?? '')
     return next(e)
   })
-  // No event says a prompt was answered: a stopped agent clears its hold, and a status change does at the next poll.
+  // The host sends no "prompt answered" event. A hold ends when its agent stops, when its status changes (next poll), or
+  // when the held tool finishes: PostToolUse, PostToolUseFailure, or PermissionDenied from the same agent. Limit: an
+  // approved tool stays shown as NEEDS YOU while it runs, until PostToolUse. PermissionRequest carries no tool_use_id,
+  // so the match is by agent_id; a main-session event has none and clears nothing.
   on('classic.SubagentStop', async ($, e, next) => {
     clearHold(board, String((e as any).agent_id ?? ''))
+    return next(e)
+  })
+  on('classic.PostToolUse', async ($, e, next) => {
+    if (clearHold(board, String((e as any).agent_id ?? ''))) {
+      board.board = buildBoard(board, Number(await $.clock.now()))
+      $.ui.invalidate('ui.render')
+    }
+    return next(e)
+  })
+  on('classic.PostToolUseFailure', async ($, e, next) => {
+    if (clearHold(board, String((e as any).agent_id ?? ''))) {
+      board.board = buildBoard(board, Number(await $.clock.now()))
+      $.ui.invalidate('ui.render')
+    }
+    return next(e)
+  })
+  on('classic.PermissionDenied', async ($, e, next) => {
+    if (clearHold(board, String((e as any).agent_id ?? ''))) {
+      board.board = buildBoard(board, Number(await $.clock.now()))
+      $.ui.invalidate('ui.render')
+    }
     return next(e)
   })
 

@@ -155,3 +155,15 @@ Run by the supervisor in a tmux-driven test session (Claude Code v2.1.329, probe
 - A second pane (`$.ui.open` with `focus: true`, `closeOnEscape: true`) opens focused and hides the first pane (`shown: false`). When Escape closes it, focus returns to the chat prompt, but the first pane stays hidden. A separate reply pane therefore pushes Board out of view and does not bring it back.
 - The inline region keeps Board visible: Enter reached the pane's Client after a click, and the region state lives in the Client. Escape never reaches the Client and the pane closes on Escape only if `closeOnEscape` is set. For an inline region, leave `closeOnEscape` off so Escape returns focus to the chat, and close the region with a key the Client receives.
 - Recommendation for T026: use the inline region below Board, with Board's pane set not to close on Escape. Not tested: Escape behavior with `closeOnEscape` off.
+
+## T020 live qualification (2026-11-23, Claude Code 2.1.330)
+
+- /board failed live: host refuses `closeOnEscape: false` ("ui.open: closeOnEscape is true or left out (host check)"). The option is `true`-only. Fixed in #224 by leaving it out. Live after fix: /board opens, Escape returns keys to chat, pane stays.
+- Hold signal: classic.PermissionRequest with agent_id gave a NEEDS YOU row "<agent> waits: <command>" for a haiku subagent Bash approval.
+- Hold clearing bug: before fix 982ed97 the hold cleared only on SubagentStop, so an approved 30 s command stayed NEEDS YOU and a second approval showed the first command's text. Fix: clear on classic.PostToolUse, PostToolUseFailure and PermissionDenied for the same agent_id. PermissionRequest has no tool_use_id, so match by agent only.
+- Limit: an approved tool shows NEEDS YOU until it finishes. tool.run would end that sooner, but a tool.run hook disables background moves for matched tools, so it is not used.
+- Live after fix: hold cleared by end of run; PostToolUse versus SubagentStop not separable in that run. Second-hold replacement covered by unit test only; host firing of a second PermissionRequest with agent_id unconfirmed live.
+- Plan approval in the main session fires no Board row (no agent_id), as designed.
+- WORKING: a 50 s haiku delegate showed "WORKING 1" with its step text for the whole run, then cleared.
+- Narrow width: host hides the pane below its seat width (shown at 110 terminal columns, about 46 pane columns; hidden at 80). The under-30-column counts-only rule is unreachable live in the terminal; covered by unit tests.
+- Keys after click: not re-tested in this run; known limit stands.
