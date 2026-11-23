@@ -61,14 +61,14 @@ function fakeStore(on: any, map: Record<string, unknown>) {
 }
 
 type On = Parameters<Parameters<typeof test>[1]>[1]
-async function start($: any, on: On, sends: any[], answer: () => unknown) {
+async function start($: any, on: On, sends: any[], answer: () => unknown, status: () => string = () => 'running') {
   on('agent.register', (_$: any, e: any) => ({ value: { agent: `agents-inc:${e.name}` } }))
   on('tool.register', () => ({ value: {} }))
   on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'own' }))
   on('ui.log', () => ({ value: undefined }))
   on('command.register', () => ({ value: { command: 'board' } }))
-  on('agent.list', () => ({ value: [{ id: 'a8bb', type: 'agents-inc:haiku', description: 'scan', status: 'running' }] }))
+  on('agent.list', () => ({ value: [{ id: 'a8bb', type: 'agents-inc:haiku', description: 'scan', status: status() }] }))
   on('session.messages', () => ({ value: [] as any }))
   on('fs.list', () => {
     throw new Error('ENOENT')
@@ -168,3 +168,29 @@ const read = async ($: any) => {
   await ui.unmount()
   return t
 }
+
+test('/board-memo to a finished Worker sends nothing (no resume) and leaves one FYI row with the text', async ($, on) => {
+  const sends: any[] = []
+  let st = 'running'
+  await start($, on, sends, () => ({ isDelivered: true }), () => st)
+  st = 'completed' // finished after the poll saw it running: the send-time check must catch it
+  const r = await typed($, 'board-memo', 'a8bb wrap up')
+  expect(sends).toEqual([])
+  expect(r.text).toBe('not delivered: worker finished')
+  expect((await read($)).some(x => x.includes('Memo to haiku not delivered: worker finished'))).toBe(true)
+})
+
+test('footer says Esc, then type after a fill, and clears on the next key', async ($, on) => {
+  const sends: any[] = []
+  on('prompt.fill', () => ({ isFilled: true }))
+  await start($, on, sends, () => ({ isDelivered: true }))
+  await key($, 'down')
+  await key($, 'm')
+  const ui = await mount($)
+  expect(((await ui.find({ type: 'Client' })) as any)?.props?.props.keys).toBe('Esc, then type')
+  await ui.unmount()
+  await key($, 'down')
+  const ui2 = await mount($)
+  expect(((await ui2.find({ type: 'Client' })) as any)?.props?.props.keys).not.toBe('Esc, then type')
+  await ui2.unmount()
+})

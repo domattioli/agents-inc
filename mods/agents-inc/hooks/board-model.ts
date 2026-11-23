@@ -70,6 +70,8 @@ export type Mem = {
   sessionId: string
   teamName: string
   teams: TeamRec[]
+  // True after the Board filled the composer: the Board still holds the keys until Escape.
+  fillHint: boolean
 }
 
 export const LOST_MS = 5 * 60 * 1000
@@ -84,7 +86,7 @@ export const emptyBoard = (): Board => ({ needs: [], fyi: [], trouble: [], worki
 export const newMem = (): Mem => ({
   start: 0, agents: {}, steps: {}, holds: {}, runs: {}, dismissed: {}, selected: undefined, opened: false, closedByPerson: false,
   busy: false, board: emptyBoard(), sig: '', notice: '', items: newItems(), reply: undefined, sent: [],
-  sessionId: '', teamName: '', teams: [],
+  sessionId: '', teamName: '', teams: [], fillHint: false,
 })
 export const board: Mem = newMem()
 // A session start clears everything Board remembers.

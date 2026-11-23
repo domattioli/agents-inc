@@ -101,11 +101,24 @@ export const register: Register = on => {
     const p = parseMemo(String((e as any).args ?? ''), agents, board.sessionId, board.teamName)
     if (!p.ok) return { text: p.line }
     const plan = planSend(p.target, p.text, board.sessionId)
+    // D91: a Memo never starts a resume. A `{ agentId }` send to a finished subagent makes the host resume it from its
+    // transcript, so send only while the host lists the agent as running at this moment. Known limit: a Worker that
+    // finishes between this check and delivery is still resumed by the host (no atomic check-and-send exists).
     let result: unknown
+    let running = false
     try {
-      result = await $.session.send({ to: plan.to, text: plan.text })
-    } catch (err) {
-      result = failed(err)
+      const listed = ((await $.agent.list()) as Array<{ id?: string; status?: string }>) ?? []
+      running = listed.some(a => p.target.kind === 'memo' && a.id === p.target.agentId && a.status === 'running')
+      if (!running) result = { isDelivered: false, reason: 'worker finished' }
+    } catch {
+      result = { isDelivered: false, reason: 'could not check that the worker is running' }
+    }
+    if (running) {
+      try {
+        result = await $.session.send({ to: plan.to, text: plan.text })
+      } catch (err) {
+        result = failed(err)
+      }
     }
     const r = finish(plan, p.text, result, Number(await $.clock.now()))
     $.ui.invalidate('ui.render')
@@ -153,11 +166,13 @@ export const register: Register = on => {
       else if (text) {
         const r = await $.prompt.fill({ text, mode: 'replace' })
         board.reply = afterFill(board.reply, text, (r as any)?.isFilled)
+        board.fillHint = true
       }
       $.ui.invalidate('ui.render')
       return next(e)
     }
     if (data.kind !== 'key' || typeof data.key !== 'string') return next(e)
+    board.fillHint = false
     const r = keyAction(board.board, board.selected, data.key)
     board.selected = r.selected
     if (r.act === 'dismiss' && r.entry) {
@@ -166,9 +181,11 @@ export const register: Register = on => {
     } else if (r.act === 'reply' && r.entry?.teamId) {
       board.reply = undefined
       await $.prompt.fill({ text: fillSend({ id: r.entry.teamId }), mode: 'replace' })
+      board.fillHint = true
     } else if (r.act === 'memo' && r.entry?.agentId) {
       board.reply = undefined
       await $.prompt.fill({ text: fillMemo({ id: r.entry.agentId }), mode: 'replace' })
+      board.fillHint = true
     } else if (r.act === 'reply' && r.entry) {
       const item = board.items.items.find(i => itemKey(i) === r.entry!.key)
       if (item) board.reply = { itemId: item.id }
@@ -183,6 +200,7 @@ export const register: Register = on => {
 
   // The Item closes only when the operator's own chat submission carries exactly the text Board filled for it.
   on('prompt.submit', async ($, e, next) => {
+    board.fillHint = false
     if (closesOnSubmit(board.reply, e as any)) {
       const item = board.items.items.find(i => i.id === board.reply!.itemId)
       if (item) {
@@ -203,7 +221,9 @@ export const register: Register = on => {
     const r = renderBoard(board.board, { width: columns, selected: board.selected })
     const item = board.reply ? board.items.items.find(i => i.id === board.reply!.itemId) : undefined
     const region = item ? regionLines(item, Number(await $.clock.now()), board.sent, columns) : []
-    const footer = item ? `1-${Math.max(3, item.options.length)} fill reply  x close` : r.footer
+    // Host fact: no API returns the keys to the composer (ui.focus only moves the ring inside the pane; a re-open cannot
+    // drop focus). After a fill the Board keeps the keys until the operator presses Escape.
+    const footer = board.fillHint ? 'Esc, then type' : item ? `1-${Math.max(3, item.options.length)} fill reply  x close` : r.footer
     const spans = (line: Line, key: string) =>
       line.length === 0 ? (
         <Text key={key}> </Text>

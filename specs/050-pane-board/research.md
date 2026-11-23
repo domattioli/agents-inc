@@ -206,3 +206,8 @@ Verdict by path (D91 bar: one live run showing sender identity and Worker receip
 - CoS delivery by stable id, idle and mid-turn: PASS.
 
 Phase 3 design: one `team.<sessionId>` store key per session with a heartbeat; route Board replies to a Team's CoS by `{sessionId}`; send a Worker Memo only from that Worker's own session's Board; for another Team, message its Chief and mark Worker delivery unproven. Make Memo text self-identifying (for example `Memo from the operator via Board`), since the Worker sees only "coordinator".
+
+### S2 follow-up: live test of Phase 3 (2026-11-23)
+
+- Memo to a finished Worker: the host RESUMED the finished subagent to deliver it (`{ agentId }` resumes a finished subagent from its transcript). That breaks D91 (a Memo never starts a resume). Fix: `/board-memo` reads `$.agent.list()` at send time and sends only when that agent's status is `running`; otherwise nothing is sent and one FYI row `Memo to <alias> not delivered: worker finished` keeps the text. Known limit: a Worker that finishes between the check and delivery is still resumed by the host; no atomic check-and-send exists.
+- Focus after `$.prompt.fill`: the Board keeps the keys, so typed text goes to the pane until the operator presses Escape. The host types offer no way back: `$.ui.focus` moves the ring inside a site only, `$.ui.open` focus is a request that cannot release, and `prompt.fill` has no focus option. Limit recorded; the footer reads `Esc, then type` after a fill, for Item replies, Team sends and Memos, until the next key or submit.
