@@ -47,11 +47,11 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Reopen: asked open and focused, closed again by Escape. It resets the person's close, so the poll may open again.
+  // Reopen: asked open and focused. Escape returns keys; the pane stays. It resets the person's close, so the poll may open again.
   on('command.run', { command: 'board' }, async $ => {
     board.closedByPerson = false
     board.opened = true
-    await $.ui.open({ id: PANE, title: TITLE, focus: true, closeOnEscape: false })
+    await $.ui.open({ id: PANE, title: TITLE, focus: true })
     return { text: 'Board opened.' }
   })
 
