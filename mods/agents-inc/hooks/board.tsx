@@ -7,7 +7,7 @@ import { extractMainTurnAnswer, ingestTurn, itemKey } from './board-items'
 import { keyAction, renderBoard } from './board-render'
 import { afterFill, closesOnSubmit, regionLines, replyText } from './board-reply'
 import type { Line } from './board-render'
-import { fillMemo, fillSend, isPerson, MEMO_CMD, parseMemo, parseSend, parseTell, planSend, SEND_CMD, settle, TELL_CMD } from './board-teams'
+import { fillMemo, fillSend, isPerson, MEMO_CMD, memoRefText, parseMemo, parseSend, parseTell, planSend, SEND_CMD, settle, TELL_CMD } from './board-teams'
 
 export const PANE = 'Board'
 export const TITLE = 'Board'
@@ -99,7 +99,17 @@ export const register: Register = on => {
     const live = ['pending', 'running', 'waiting', 'idle']
     const agents = Object.values(board.agents).filter(a => live.includes(a.status)).map(a => ({ id: a.id, alias: alias(a.type) }))
     const p = parseMemo(String((e as any).args ?? ''), agents, board.sessionId, board.teamName)
-    if (!p.ok) return { text: p.line }
+    if (!p.ok) {
+      // D91: an undeliverable Memo is one FYI row. A ref that matches no live delegate but exactly one agent this session
+      // has seen (its last known type is kept in board.agents) is a Worker that has gone: send nothing, keep the text.
+      const [ref, text] = memoRefText(String((e as any).args ?? ''))
+      const seen = ref ? Object.values(board.agents).filter(a => a.id.startsWith(ref)) : []
+      if (seen.length !== 1 || !text) return { text: p.line }
+      const gone = planSend({ kind: 'memo', agentId: seen[0]!.id, alias: alias(seen[0]!.type), teamId: board.sessionId, teamName: board.teamName }, text, board.sessionId)
+      const g = finish(gone, text, { isDelivered: false, reason: 'worker finished' }, Number(await $.clock.now()))
+      $.ui.invalidate('ui.render')
+      return g
+    }
     const plan = planSend(p.target, p.text, board.sessionId)
     // D91: a Memo never starts a resume. A `{ agentId }` send to a finished subagent makes the host resume it from its
     // transcript, so send only while the host lists the agent as running at this moment. Known limit: a Worker that

@@ -118,7 +118,7 @@ const split = (args: string): [string, string] => {
 function pick<T extends { id: string }>(ref: string, all: T[], what: string): T | string {
   const hit = all.filter(x => x.id.startsWith(ref))
   if (!ref) return `no ${what} given`
-  if (!hit.length) return `no live ${what} matches "${ref}" (it may have gone; press Enter on the line again)`
+  if (!hit.length) return `no live ${what} matches "${ref}" ${what === 'Team' ? '(it may have gone; press Enter on the line again)' : '(it may have gone)'}`
   if (hit.length > 1) return `"${ref}" matches ${hit.length} ${what}s; type more of the ref`
   return hit[0]!
 }
@@ -150,4 +150,7 @@ export function parseTell(args: string, teams: TeamRec[]): Parsed {
 }
 
 // Only the operator's own Enter in the composer is a deliberate send: a plugin, the model or the bridge never is.
+// The ref and text of a Memo's args, for a target that has gone (the caller then looks the ref up among agents already seen).
+export const memoRefText = (args: string): [string, string] => split(args)
+
 export const isPerson = (origin: unknown): boolean => (origin as { kind?: unknown } | undefined)?.kind === 'composer'

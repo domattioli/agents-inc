@@ -85,6 +85,7 @@ async function start($: any, on: On, sends: any[], answer: () => unknown, status
   const clock = mock.clock(on, { now: T0 })
   await $.session.start({ cwd: '/work/ainc2', surface: 'desktop', isInteractive: true })
   await clock.advance(2100)
+  return clock
 }
 const mount = ($: any) => $.ui.mount({ plugin: 'agents-inc', component: 'Pane', requestId: 'Board', surface: 'terminal', props: { title: 'Board', isFocused: false, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } } as any)
 // The operator's own Enter in the composer stamps origin composer; a test reaches the hook with that origin directly.
@@ -193,4 +194,18 @@ test('footer says Esc, then type after a fill, and clears on the next key', asyn
   const ui2 = await mount($)
   expect(((await ui2.find({ type: 'Client' })) as any)?.props?.props.keys).not.toBe('Esc, then type')
   await ui2.unmount()
+})
+
+test('/board-memo after the Worker left the live list: one FYI row, text kept, nothing sent; an unknown ref is text only', async ($, on) => {
+  const sends: any[] = []
+  let st = 'running'
+  const clock = await start($, on, sends, () => ({ isDelivered: true }), () => st)
+  st = 'completed'
+  await clock.advance(2100) // the poll now sees it finished
+  expect((await typed($, 'board-memo', 'zzzz hello')).text).toBe('not delivered: no live delegate matches "zzzz" (it may have gone)')
+  expect((await read($)).some(x => x.includes('Memo to'))).toBe(false)
+  expect((await typed($, 'board-memo', 'a8bb wrap up')).text).toBe('not delivered: worker finished')
+  expect(sends).toEqual([])
+  const t = await read($)
+  expect(t.filter(x => x.includes('Memo to haiku not delivered: worker finished'))).not.toHaveLength(0)
 })
