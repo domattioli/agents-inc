@@ -947,7 +947,7 @@ Lifecycle records are observations. The supervisor still verifies and records
 an explicit verdict. Usage outside the evidence the host provides stays unknown.
 See the [native delegation guide](HOW-IT-WORKS.md#native-delegation).
 
-## D90: Markers instead of a posting tool (2026-11-23, status: proposed, spec 050 FR-044)
+## D90 — Markers instead of a posting tool (2026-11-23, status: accepted, spec 050 FR-044)
 
 The Chief of Staff (CoS) is the session the operator talks to. It puts Items on the Board by writing marker lines in its final chat message. A marker is one line: `[board:<section>] <text> | <option> | <option>`. The options are optional. `<text>` is the title, on one line.
 
@@ -965,11 +965,11 @@ Live evidence. Observed on 2026-11-23 in a test session (Claude Code 2.1.329), o
 
 Untested. Interrupted turns other than a user Escape, and turns from other hosts.
 
-Status: proposed.
+Status: accepted, ruled by the operator on 2026-11-23.
 
-## D91: Board Memo (2026-11-23, status: proposed; blocked for acceptance, amends D54 and D46 for the Board only; spec 050 FR-047)
+## D91 — Board Memo (2026-11-23, status: accepted; amends D54 and D46 for the Board only; spec 050 FR-047)
 
-The operator may send a Memo through the Board to a running Worker. A Memo is the one-way note defined in D63. The operator ruled on 2026-11-19 to accept it, with this amendment landing before Phase 3.
+The operator may send a Memo through the Board to a running Worker. A Memo is the one-way note defined in D63. On 2026-11-19, the operator agreed to land the Board Memo amendment before Phase 3.
 
 Scope of D63. D91 adopts only the operator-to-Worker Board route from D63. It adopts nothing else from D63.
 
@@ -998,8 +998,7 @@ Evidence so far. D63 records one earlier observation, a Codex probe from 2026-10
 
 Untested. Memo receipt in a live Worker. Spike S2 (cross-session message provenance and Worker Memos) is not run. The research file marks delivery to native Claude Workers at a checkpoint, and delivery to dispatched Workers on the next governed resume, as unverified. How the host carries the sender's identity is also untested.
 
-Status: proposed. Acceptance is blocked until these happen.
-- A reviewer from a different vendor than the author reviews this entry (D46).
+Status: accepted, ruled by the operator on 2026-11-23 before spike S2 ran. Phase 3 can ship only after spike S2 passes for each delivery path the Board supports. It needs the following.
 - Spike S2 gives one live run per supported delivery path, each showing the sender's identity and the Worker's receipt. A path with no passing run is not supported by D91 and stays out of the Board. Running the spike is not enough.
 
 The different-vendor review was done once by sol on 2026-11-23 (needs-fixes, then fixed). A second review of the final text is not required unless the text changes materially.
