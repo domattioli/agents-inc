@@ -12,7 +12,7 @@ All notable changes to this project are recorded here. The format follows
 
 - The Board pane (mod 0.8.0) shows what needs you, what is in trouble and what each Worker is doing. It has three sections: NEEDS YOU, TROUBLE and WORKING (phase 1).
 - The Chief of Staff can flag an ask, a decision or a blocker in its chat reply with a marker. The Board turns each marker into an Item and lets you reply inline (phase 2, D90).
-- The Board covers every Team on the machine, not only the current session. `/board-send` sends a message to a Worker in another session, `/board-memo` leaves a Memo for a running Worker and `/board-tell` tells a session's Chief of Staff something (phase 3, D91).
+- The Board covers every Team on the machine, not only the current session. `/board-send` sends a message to another session's Chief of Staff, `/board-memo` leaves a Memo for a running Worker in your own session, and `/board-tell` tells another session's Chief of Staff about one of its Workers (phase 3, D91).
 
 ### Fixed
 
