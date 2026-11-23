@@ -1,6 +1,10 @@
 // Spec 050 Phase 1: the pure model behind the Board. No engine nouns and no I/O: the hooks read and write, this decides.
 // Zero model calls: every state here comes from host events, the agent list, transcript tails and dispatch run files.
 
+import { itemEntries, newItems } from './board-items'
+import type { ItemStore } from './board-items'
+import type { Reply } from './board-reply'
+
 export type Listed = { id: string; type?: string; name?: string; description?: string; status?: string; parentId?: string }
 export type AgentRec = { id: string; type: string; description: string; status: string; since: number }
 // One dispatch run of this session, as read from its run dir. `newest` is the newest file time, the run's last event.
@@ -20,7 +24,7 @@ export type Hold = { agentId: string; question: string; at: number; status: stri
 export type StepRec = { text: string; sig: string; changedAt: number; readAt: number }
 
 export type Section = 'needs' | 'fyi' | 'trouble' | 'working'
-export type Action = 'open' | 'stop' | 'dismiss'
+export type Action = 'open' | 'stop' | 'dismiss' | 'reply'
 export type Entry = {
   // Identity of the selection: stable across refreshes. Trouble and needs keys carry the episode start.
   key: string
@@ -52,6 +56,12 @@ export type Mem = {
   board: Board
   sig: string
   notice: string
+  // CoS marker Items (spec 050 Phase 2).
+  items: ItemStore
+  // The open reply region and the reply waiting for the operator's own Enter (spec 050 T026, T027).
+  reply?: Reply
+  // Replies the operator submitted, newest last, shown as the last messages sent to the target.
+  sent: string[]
 }
 
 export const LOST_MS = 5 * 60 * 1000
@@ -65,7 +75,7 @@ const DONE = new Set(['completed', 'finished', 'done'])
 export const emptyBoard = (): Board => ({ needs: [], fyi: [], trouble: [], working: [] })
 export const newMem = (): Mem => ({
   start: 0, agents: {}, steps: {}, holds: {}, runs: {}, dismissed: {}, selected: undefined, opened: false, closedByPerson: false,
-  busy: false, board: emptyBoard(), sig: '', notice: '',
+  busy: false, board: emptyBoard(), sig: '', notice: '', items: newItems(), reply: undefined, sent: [],
 })
 export const board: Mem = newMem()
 // A session start clears everything Board remembers.
@@ -312,6 +322,9 @@ export function buildBoard(m: Mem, now: number): Board {
       b.working.push({ key: `w:${r.id}`, section: 'working', glyph: active ? '●' : '◌', alias: name, task: r.task, note: active ? 'running' : quietNote(now - r.newest), runId: r.id, since: r.startedAt, actions: [] })
     }
   }
+  const it = itemEntries(m.items, m.dismissed)
+  b.needs.push(...it.needs)
+  b.fyi.push(...it.fyi)
   b.needs.sort(byAge)
   b.trouble.sort(byAge)
   b.working.sort((x, y) => (x.glyph === y.glyph ? byAge(x, y) : x.glyph === '●' ? -1 : 1))
