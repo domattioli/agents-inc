@@ -26,7 +26,7 @@ const LABEL = { needs: 'NEEDS YOU', fyi: 'FYI', trouble: 'TROUBLE', working: 'WO
 const COLOR = { needs: 'yellow', trouble: 'red' } as const
 
 export function footerKeys(entry: Entry | undefined): string {
-  const names: Record<Action, string> = { open: 'o open', stop: 's stop', dismiss: 'd dismiss' }
+  const names: Record<Action, string> = { open: 'o open', stop: 's stop', dismiss: 'd dismiss', reply: 'Enter reply' }
   return ['↑↓ select', ...(entry?.actions ?? []).map(a => names[a])].join('  ')
 }
 
@@ -78,6 +78,7 @@ export function keyAction(b: Board, selected: string | undefined, key: string): 
   const cur = at < 0 ? undefined : all[at]
   if (key === 'up' || key === 'k') return { selected: all.length ? all[at <= 0 ? all.length - 1 : at - 1]!.key : undefined }
   if (key === 'down' || key === 'j') return { selected: all.length ? all[at < 0 || at >= all.length - 1 ? 0 : at + 1]!.key : undefined }
+  if ((key === 'return' || key === 'enter') && cur && cur.actions.includes('reply')) return { selected: cur.key, act: 'reply', entry: cur }
   const act = ({ o: 'open', s: 'stop', d: 'dismiss' } as Record<string, Action>)[key]
   if (act && cur && cur.actions.includes(act)) {
     if (act !== 'dismiss') return { selected: cur.key, act, entry: cur }

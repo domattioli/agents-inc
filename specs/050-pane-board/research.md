@@ -127,3 +127,23 @@ Corrected the same day after a recheck. The first reading ("the pane loses focus
 - In the operator's own window the pane was a narrow strip at the top right, about 25 columns wide, and clipped its header text.
 - Consequence for the spec: Board keys (arrows, Enter) work only after the operator clicks the Board. Whether that is acceptable, or Board also needs slash commands, is an open decision before T016 and T017.
 - Not tested: widths of 150 and 100 columns, whether a click on one row selects it, and Escape closing the pane.
+
+## Phase 2 spike results, 2026-11-23
+
+Run by the supervisor in a tmux-driven test session (Claude Code v2.1.329, probe mod, default mode, one observation per case).
+
+### T022 results (turn.complete)
+
+- A main-loop turn: keys `answer`, `durationMs`, `isAborted`, `turnId`, `reason`, `usage`. `agentId` is absent. `reason: "answer"`, `isAborted: false`, and `answer` holds the visible text ("Hi. Ready. What next?"). `turnId` is unique per turn.
+- A subagent turn: its own `turn.complete` with `agentId` set, its own `turnId`, and `answer` equal to its report (`PONG`). The main turn follows with its own `turnId`. Native hand-back was undisturbed: the main answer reported the subagent's reply.
+- An interrupted turn (Escape during a long answer): `reason: "aborted"`, `isAborted: true`, and a partial `answer` (439 characters). The parser must skip aborted turns, because the partial text can contain marker lines.
+- Consequence: read markers only from events with `agentId` absent, `isAborted` false, `reason` equal to `answer`, and a `turnId`. The Phase 2 hook uses the matcher `{ reason: 'answer' }` because the native loop already holds the one matcherless `turn.complete` hook.
+
+### T021 results (S5, reply region and chat path)
+
+- `$.prompt.fill` puts text in the chat box (`origin: plugin`, `isFilled: true`, `refusal: null`). The operator's own Enter then produces `prompt.submit` with `origin: composer` and the filled text. The two are distinct, so a plugin fill is never counted as an operator submission.
+- A submission is tied to an Item by the text: the probe put an id in the filled text (`[probe-fill M1] reply test`) and the submit carried it. For Board, match the submitted text to the text Board filled for that Item.
+- A draft left unsent produced no `prompt.submit`. No `prompt.cancel` event is declared, so a cancel is inferred from `prompt.change` with no later `prompt.submit`. The Item stays open in both cases. The refusal case (`isFilled: false` while a dialog is open) was not tested.
+- A second pane (`$.ui.open` with `focus: true`, `closeOnEscape: true`) opens focused and hides the first pane (`shown: false`). When Escape closes it, focus returns to the chat prompt, but the first pane stays hidden. A separate reply pane therefore pushes Board out of view and does not bring it back.
+- The inline region keeps Board visible: Enter reached the pane's Client after a click, and the region state lives in the Client. Escape never reaches the Client and the pane closes on Escape only if `closeOnEscape` is set. For an inline region, leave `closeOnEscape` off so Escape returns focus to the chat, and close the region with a key the Client receives.
+- Recommendation for T026: use the inline region below Board, with Board's pane set not to close on Escape. Not tested: Escape behavior with `closeOnEscape` off.
