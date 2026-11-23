@@ -72,6 +72,11 @@ export type Mem = {
   teams: TeamRec[]
   // True after the Board filled the composer: the Board still holds the keys until Escape.
   fillHint: boolean
+  // The poll's generation and its timer handle. They outlive resetMem: a new session.start or a /clear bumps the
+  // generation, so a tick already in flight stops before it writes. Kept here, not in a module variable, so every
+  // handler and the poll see one copy.
+  pollGen: number
+  stop?: unknown
 }
 
 export const LOST_MS = 5 * 60 * 1000
@@ -86,12 +91,13 @@ export const emptyBoard = (): Board => ({ needs: [], fyi: [], trouble: [], worki
 export const newMem = (): Mem => ({
   start: 0, agents: {}, steps: {}, holds: {}, runs: {}, dismissed: {}, selected: undefined, opened: false, closedByPerson: false,
   busy: false, board: emptyBoard(), sig: '', notice: '', items: newItems(), reply: undefined, sent: [],
-  sessionId: '', teamName: '', teams: [], fillHint: false,
+  sessionId: '', teamName: '', teams: [], fillHint: false, pollGen: 0, stop: undefined,
 })
 export const board: Mem = newMem()
 // A session start clears everything Board remembers.
 export function resetMem(m: Mem): void {
-  Object.assign(m, newMem())
+  const keep = { pollGen: m.pollGen, stop: m.stop }
+  Object.assign(m, newMem(), keep)
 }
 
 export const clip = (s: string, n: number): string => (s.length <= n ? s : n <= 1 ? s.slice(0, Math.max(0, n)) : s.slice(0, n - 1) + '…')

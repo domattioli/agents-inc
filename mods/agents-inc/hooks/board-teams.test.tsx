@@ -67,11 +67,12 @@ function fakeStore(on: any, map: Record<string, unknown>) {
 }
 
 type On = Parameters<Parameters<typeof test>[1]>[1]
-async function start($: any, on: On, id: string, opens: any[], seed: Record<string, unknown>, agents: any[]) {
+async function start($: any, on: On, id: string | (() => string), opens: any[], seed: Record<string, unknown>, agents: any[]) {
   on('agent.register', (_$: any, e: any) => ({ value: { agent: `agents-inc:${e.name}` } }))
   on('tool.register', () => ({ value: {} }))
   on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
-  on('session.id', () => ({ value: id }))
+  on('session.id', () => ({ value: typeof id === 'function' ? id() : id }))
+  on('session.end', (_$: any, e: any) => ({ sessionId: e.sessionId }) as any)
   on('ui.log', () => ({ value: undefined }))
   on('command.register', () => ({ value: { command: 'board' } }))
   on('agent.list', () => ({ value: agents }))
@@ -128,7 +129,6 @@ test('a session never deletes another key; its own key goes at session.end; a se
   const opens: any[] = []
   const deletes: string[] = []
   let writes = 0
-  on('session.end', (_$: any, e: any) => ({ sessionId: 'own' }) as any)
   const seed: Record<string, any> = new Proxy({ [teamKey('s-old')]: rec('s-old', 'ancient', 1, 1, T0 - 100 * 3600_000), [teamKey('bad')]: { junk: true } } as Record<string, any>, {
     deleteProperty: (t, k) => (deletes.push(String(k)), delete t[k as string]),
     set: (t, k, v) => ((t[k as string] = v), writes++, true),
@@ -143,9 +143,44 @@ test('a session never deletes another key; its own key goes at session.end; a se
   writes = 0
   await clock.advance(2100)
   expect(writes).toBe(1)
-  await $.session.end({ reason: 'exit' } as any)
+  await $.session.end({ reason: 'exit', sessionId: 'own', resume: { id: 'x' } } as any)
   expect(deletes).toEqual([teamKey('own')])
   writes = 0
   await clock.advance(6000)
   expect(writes).toBe(0) // the poll is cancelled
+})
+
+test('the poll keeps writing across several intervals after one session.start', async ($, on) => {
+  let writes = 0
+  const seed: Record<string, any> = new Proxy({} as Record<string, any>, { set: (t, k, v) => ((t[k as string] = v), writes++, true) })
+  const clock = await start($, on, 'own', [], seed, [{ id: 'a1', type: 'agents-inc:haiku', description: 'scan', status: 'running' }])
+  writes = 0
+  for (let i = 0; i < 5; i++) await clock.advance(2000)
+  expect(writes).toBeGreaterThanOrEqual(4)
+  expect((await texts($)).some(x => x.includes('haiku'))).toBe(true) // the delegate shows under WORKING
+})
+
+test('session.end stops the poll only when it is this session that ends; /clear resets and keeps polling under the new id', async ($, on) => {
+  let writes = 0
+  let id = 'own'
+  const seed: Record<string, any> = new Proxy({} as Record<string, any>, { set: (t, k, v) => ((t[k as string] = v), writes++, true) })
+  const clock = await start($, on, () => id, [], seed, [{ id: 'a1', type: 'agents-inc:haiku', description: 'scan', status: 'running' }])
+  await clock.advance(2100)
+  await $.session.end({ reason: 'exit', sessionId: 'someone-else', resume: { id: 'x' } } as any)
+  writes = 0
+  await clock.advance(4000)
+  expect(writes).toBeGreaterThanOrEqual(2) // a stray end for another id changes nothing
+  // /clear: same process, new session id, no session.start
+  id = 'new-id'
+  await $.session.end({ reason: 'clear', sessionId: 'own', resume: { id: 'x' } } as any)
+  expect(seed[teamKey('own')]).toBeUndefined()
+  writes = 0
+  await clock.advance(4100)
+  expect(writes).toBeGreaterThanOrEqual(2)
+  expect(seed[teamKey('new-id')]).toBeDefined()
+  expect(seed[teamKey('own')]).toBeUndefined()
+  await $.session.end({ reason: 'exit', sessionId: 'new-id', resume: { id: 'x' } } as any)
+  writes = 0
+  await clock.advance(6000)
+  expect(writes).toBe(0)
 })

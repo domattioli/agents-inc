@@ -159,7 +159,26 @@ export const MAX_BYTES = 64 * 1024
 // A first filter in the spirit of D88, kept stricter and simpler: any mention of a secret location or a secret-shaped
 // assignment is refused. The repo's real credential screen is Python (agents_inc dispatch); no TypeScript copy exists to
 // reuse. Limit: prose that hides a request (encoded or indirect) is not seen.
+// Ported from agents_inc/install/dispatch.py CREDENTIAL_RE (the D54 resume screen): a home credential path with a further
+// non-glob segment, key files as path tokens, `.env` after a separator or ~, and a backticked read of `.env`.
+const HOME_CRED = /(~|\$HOME|\$\{HOME\}|\/Users\/[^/\s]+|\/home\/[^/\s]+|\/root)\/\.(claude(?!\/skills\/(?!\S*\.\.))(?!\/AGENTS\.md(?=$|[\s'"`,;)]))|codex|ssh|config|aws|gnupg|netrc|local(?!\/(?:bin|share\/agents-inc|state\/agents-inc)\/(?!\S*\.\.))|codex-bridge(?!\/usage\.jsonl(?=$|[\s'"`,;)]|\.(?:\s|$))))\b\/(?![^\s/]*[*?\[])[^\s/'"`,;)]+/i
+const KEY_FILE = /(?<![^\s/='"])(?:id_rsa|id_ed25519|[^\s/]*\.(?:pem|key))(?=$|[\s/'".,;:)])/i
+const ENV_AFTER_SEP = /(?<=[/~])\.env(?:\.[\w.-]+)?\b/i
+const ENV_READ_TICKED = /`[^`\n]*?(?<![\w-])(?:cat|read|print|open|source|dump|echo|show|less|head|tail)\s+\.env(?:\.[\w.-]+)?(?=[\s`])[^`\n]*`/i
+// SECRET_VAR_PRINT_RE: a print verb, then within the clause an upper-case name ending in a secret word ($OPENAI_API_KEY,
+// ${GH_TOKEN}, printenv AWS_SECRET_ACCESS_KEY). The verb is case-insensitive, the name is not, so `$tokens` passes.
+const PRINT_VERB = /\b(?:print(?:env)?|echo|show|dump|output|paste|reveal|log|report|copy|cat|env)\b/gi
+const SECRET_NAME = /(?<![\w])\$?\{?[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Z0-9_]*\b/
+export function printsSecretVar(text: string): boolean {
+  for (const m of text.matchAll(PRINT_VERB)) {
+    const rest = text.slice((m.index ?? 0) + m[0].length)
+    const clause = /^[^.;\n]{0,60}?(?<![\w])\$?\{?[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Z0-9_]*\b/.exec(rest)
+    if (clause && SECRET_NAME.test(clause[0])) return true
+  }
+  return false
+}
 const SECRET = [
+  HOME_CRED, KEY_FILE, ENV_AFTER_SEP, ENV_READ_TICKED,
   /(^|[\s/"'`=~])\.env(\.[\w-]+)?(?![\w-])/i,
   /~\/\.(ssh|aws|gnupg|netrc|config\/(gh|gcloud)|claude\/\.?credentials|codex\/auth)/i,
   /\bauth\.json\b|\.credentials\.json|\bid_(rsa|ed25519|ecdsa)\b/i,
@@ -170,14 +189,7 @@ const SECRET = [
 ]
 export function screenText(text: string): string | undefined {
   if (new TextEncoder().encode(text).length > MAX_BYTES) return 'text is over the 64 KiB limit'
-  if (SECRET.some(r => r.test(text))) return 'text names a credential or secret location (credential screen)'
+  if (SECRET.some(r => r.test(text)) || printsSecretVar(text)) return 'text names a credential or secret location (credential screen)'
   return undefined
 }
 
-// A Team's heartbeat checked at command time, from a fresh read of its key (not the last poll's copy).
-export function freshTeam(id: string, value: unknown, now: number): TeamRec | string {
-  const t = parseTeam(teamKey(id), value)
-  if (!t) return `no live Team ${id.slice(0, 8)}: its record is gone`
-  const age = now - t.at
-  return age > TEAM_STALE_MS || -age > TEAM_STALE_MS ? `Team ${t.name} looks gone: no heartbeat for ${Math.max(0, Math.round(age / 1000))}s` : t
-}

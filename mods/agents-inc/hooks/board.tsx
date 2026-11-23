@@ -7,7 +7,7 @@ import { extractMainTurnAnswer, ingestTurn, itemKey } from './board-items'
 import { keyAction, renderBoard } from './board-render'
 import { afterFill, closesOnSubmit, regionLines, replyText } from './board-reply'
 import type { Line } from './board-render'
-import { fillMemo, fillSend, isPerson, freshTeam, MEMO_CMD, memoRefText, screenText, teamKey, parseMemo, parseSend, parseTell, planSend, SEND_CMD, settle, TELL_CMD } from './board-teams'
+import { fillMemo, fillSend, isPerson, liveTeams, MEMO_CMD, memoRefText, parseTeam, screenText, TEAM_PREFIX, teamKey, parseMemo, parseSend, parseTell, planSend, SEND_CMD, settle, TELL_CMD } from './board-teams'
 
 export const PANE = 'Board'
 export const TITLE = 'Board'
@@ -81,16 +81,19 @@ export const register: Register = on => {
   const NOT_PERSON = { text: 'not delivered: only the operator typing this in the chat sends from Board' }
   on('command.run', { command: SEND_CMD }, async ($, e) => {
     if (!isPerson((e as any).origin)) return NOT_PERSON
-    const p = parseSend(String((e as any).args ?? ''), board.teams)
+    // Candidates are read now, not from the last poll: every live team.* key, so a ref that became ambiguous or stale
+    // is refused. Own key and stale heartbeats are left out (S1: the store cannot tell live from dead).
+    const now0 = Number(await $.clock.now())
+    const found: Array<ReturnType<typeof parseTeam>> = []
+    for (const k of (await $.store.keys()) as string[]) if (k.startsWith(TEAM_PREFIX)) found.push(parseTeam(k, await $.store.get(k)))
+    const fresh = liveTeams(found, board.sessionId, now0)
+    const p = parseSend(String((e as any).args ?? ''), fresh)
     if (!p.ok) return { text: p.line }
     const bad = screenText(p.text)
     if (bad) return { text: `not delivered: ${bad}` }
-    // Re-read the target's key now: the last poll's copy may be old (spike S1: the store cannot tell live from dead).
-    if (p.target.kind === 'team') {
-      const fresh = freshTeam(p.target.id, await $.store.get(teamKey(p.target.id)), Number(await $.clock.now()))
-      if (typeof fresh === 'string') return { text: `not delivered: ${fresh}` }
-    }
     const plan = planSend(p.target, p.text, board.sessionId)
+    const tooBig = screenText(plan.text) // the 64 KiB cap applies to the final payload, prefix included
+    if (tooBig) return { text: `not delivered: ${tooBig}` }
     let result: unknown
     try {
       result = await $.session.send({ to: plan.to, text: plan.text })
@@ -115,6 +118,8 @@ export const register: Register = on => {
       const badText = screenText(text)
       if (badText) return { text: `not delivered: ${badText}` }
       const gone = planSend({ kind: 'memo', agentId: seen[0]!.id, alias: alias(seen[0]!.type), teamId: board.sessionId, teamName: board.teamName }, text, board.sessionId)
+      const goneBig = screenText(gone.text)
+      if (goneBig) return { text: `not delivered: ${goneBig}` }
       const g = finish(gone, text, { isDelivered: false, reason: 'worker finished' }, Number(await $.clock.now()))
       $.ui.invalidate('ui.render')
       return g
@@ -122,6 +127,8 @@ export const register: Register = on => {
     const bad = screenText(p.text)
     if (bad) return { text: `not delivered: ${bad}` }
     const plan = planSend(p.target, p.text, board.sessionId)
+    const tooBig = screenText(plan.text) // the 64 KiB cap applies to the final payload, prefix included
+    if (tooBig) return { text: `not delivered: ${tooBig}` }
     // D91: a Memo never starts a resume. A `{ agentId }` send to a finished subagent makes the host resume it from its
     // transcript, so send only while the host lists the agent as running at this moment. Known limit: a Worker that
     // finishes between this check and delivery is still resumed by the host (no atomic check-and-send exists).
@@ -147,15 +154,17 @@ export const register: Register = on => {
   })
   on('command.run', { command: TELL_CMD }, async ($, e) => {
     if (!isPerson((e as any).origin)) return NOT_PERSON
-    const p = parseTell(String((e as any).args ?? ''), board.teams)
+    const now0 = Number(await $.clock.now())
+    const found: Array<ReturnType<typeof parseTeam>> = []
+    for (const k of (await $.store.keys()) as string[]) if (k.startsWith(TEAM_PREFIX)) found.push(parseTeam(k, await $.store.get(k)))
+    const fresh = liveTeams(found, board.sessionId, now0)
+    const p = parseTell(String((e as any).args ?? ''), fresh)
     if (!p.ok) return { text: p.line }
     const bad = screenText(p.text)
     if (bad) return { text: `not delivered: ${bad}` }
-    if (p.target.kind === 'memo') {
-      const fresh = freshTeam(p.target.teamId, await $.store.get(teamKey(p.target.teamId)), Number(await $.clock.now()))
-      if (typeof fresh === 'string') return { text: `not delivered: ${fresh}` }
-    }
     const plan = planSend(p.target, p.text, board.sessionId)
+    const tooBig = screenText(plan.text) // the 64 KiB cap applies to the final payload, prefix included
+    if (tooBig) return { text: `not delivered: ${tooBig}` }
     let result: unknown
     try {
       result = await $.session.send({ to: plan.to, text: plan.text })

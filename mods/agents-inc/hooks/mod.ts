@@ -8,11 +8,7 @@ import { board, buildBoard, dirTime, hasActivity, ingestAgents, noteStep, resetM
 
 // hooks.json allows one hooks module per plugin, and a module may register session.start once,
 // so this entry owns session.start and hands it to every feature.
-// The Board poll of this process: one at a time. A new session.start or the session's end cancels the previous interval,
-// and a callback already in flight sees a newer generation and does nothing more.
-let stopPoll: unknown
-let pollGen = 0
-// The host hands back a function; accept a { cancel } handle too. The generation check stops a callback either way.
+// The host hands back a Timer ({ cancel }); a plain function is accepted too.
 const cancelPoll = (h: unknown): void => {
   if (typeof h === 'function') h()
   else if (h && typeof (h as { cancel?: unknown }).cancel === 'function') (h as { cancel: () => void }).cancel()
@@ -41,10 +37,14 @@ export const register: Register = (on, options) => {
         // an unregistered command only means the operator cannot type it
       }
     }
-    cancelPoll(stopPoll)
-    const mine = ++pollGen
-    stopPoll = $.clock.every(BOARD_POLL_MS, async () => {
-      if (mine !== pollGen || board.busy) return
+    // One poll per process: a new session.start cancels the previous interval and bumps the generation.
+    cancelPoll(board.stop)
+    board.pollGen++
+    board.stop = $.clock.every(BOARD_POLL_MS, async () => {
+      if (board.busy) return
+      // This tick's generation: after every await, a changed one (new session.start, /clear, session end) means stop
+      // before any write, so an old tick never overwrites new state or republishes an ended session's key.
+      const mine = board.pollGen
       board.busy = true
       try {
         const now = Number(await $.clock.now())
@@ -55,7 +55,7 @@ export const register: Register = (on, options) => {
         } catch {
           listed = []
         }
-        if (mine !== pollGen) return
+        if (mine !== board.pollGen) return
         ingestAgents(board, listed, now)
         for (const a of listed) {
           if (a.status !== 'running' || !stepDue(board, a.id, now)) continue
@@ -65,6 +65,7 @@ export const register: Register = (on, options) => {
           } catch {
             noteStep(board, a.id, undefined, now)
           }
+          if (mine !== board.pollGen) return
         }
         let names: string[] = []
         try {
@@ -72,7 +73,9 @@ export const register: Register = (on, options) => {
         } catch {
           names = []
         }
+        if (mine !== board.pollGen) return
         for (const name of sessionRunNames(names, board.start)) {
+          if (mine !== board.pollGen) return
           let newest: number | undefined
           try {
             const files = ((await $.fs.list(`${BOARD_RUNS}/${name}`)) as Array<{ kind: string; mtimeMs: number }>).filter(x => x.kind === 'file')
@@ -102,27 +105,36 @@ export const register: Register = (on, options) => {
               events = undefined
             }
           }
+          if (mine !== board.pollGen) return
           board.runs[name] = runFrom(name, { runJson, slotsJson, events }, newest)
         }
         // Teams across sessions (spec 050 Phase 3): publish this session's own key, read the others, ignore stale heartbeats.
         // Never a shared counter: each key has one writer. Own Team is always the open one.
         try {
-          if (mine !== pollGen) return
-          if (!board.sessionId) board.sessionId = String(await $.session.id())
+          let sid = board.sessionId
+          if (!sid) {
+            sid = String(await $.session.id())
+            if (mine !== board.pollGen) return
+            board.sessionId = sid
+          }
           const prior = buildBoard(board, now)
-          await $.store.set(teamKey(board.sessionId), summary(board.sessionId, board.teamName, prior.needs.length, prior.working.length, now))
-          if (mine !== pollGen) return
+          await $.store.set(teamKey(sid), summary(sid, board.teamName, prior.needs.length, prior.working.length, now))
+          if (mine !== board.pollGen) {
+            // the session changed while the write was in flight: take our own (old) key back out, nothing else
+            await $.store.delete(teamKey(sid))
+            return
+          }
           const all: Array<[string, ReturnType<typeof parseTeam>]> = []
           for (const k of (await $.store.keys()) as string[]) {
-            if (k.startsWith(TEAM_PREFIX) && k !== teamKey(board.sessionId)) all.push([k, parseTeam(k, await $.store.get(k))])
+            if (k.startsWith(TEAM_PREFIX) && k !== teamKey(sid)) all.push([k, parseTeam(k, await $.store.get(k))])
           }
-          if (mine !== pollGen) return
-          board.teams = liveTeams(all.map(x => x[1]), board.sessionId, now)
+          if (mine !== board.pollGen) return
+          board.teams = liveTeams(all.map(x => x[1]), sid, now)
           // Never delete another session's key: readers only ignore stale or malformed peers (S1: one writer per key).
         } catch {
           board.teams = [] // the store is unreadable: show no other Teams rather than stale ones
         }
-        if (mine !== pollGen) return
+        if (mine !== board.pollGen) return
         const built = buildBoard(board, now)
         const sig = JSON.stringify(built)
         board.board = built
@@ -138,21 +150,32 @@ export const register: Register = (on, options) => {
       } catch {
         // one failed poll changes nothing: the next one runs
       } finally {
-        if (mine === pollGen) board.busy = false
+        if (mine === board.pollGen) board.busy = false
       }
     })
     const legacyRoutes = await registerNativeAgents($, e)
     await registerRelay($, e, legacyRoutes)
     return next(e)
   })
-  // The session ends: stop polling and remove this session's own Team key (the only key it may delete).
+  // The session ends. Only for the session this Board polls for (a stray end for another id changes nothing). `clear` keeps
+  // the process: no session.start follows, so reset the Board and let the running poll continue under the new id (it
+  // reads `$.session.id()` again). Any other reason stops the poll. Either way the old session's own key is removed.
   on('session.end', async ($, e, next) => {
-    cancelPoll(stopPoll)
-    stopPoll = undefined
-    pollGen++
-    if (board.sessionId) {
+    const ended = String((e as any).sessionId ?? '')
+    if (board.sessionId && ended === board.sessionId) {
+      if ((e as any).reason === 'clear') {
+        const name = board.teamName
+        resetMem(board)
+        board.teamName = name
+        board.pollGen++
+        $.ui.invalidate('ui.render')
+      } else {
+        cancelPoll(board.stop)
+        board.stop = undefined
+        board.pollGen++
+      }
       try {
-        await $.store.delete(teamKey(board.sessionId))
+        await $.store.delete(teamKey(ended))
       } catch {
         // readers ignore the key once its heartbeat is stale
       }
