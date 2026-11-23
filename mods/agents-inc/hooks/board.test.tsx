@@ -222,6 +222,9 @@ async function startPlugin($: Dollar, on: On, world: { agents: any[]; runs?: boo
   on('classic.PermissionRequest', () => ({}))
   on('classic.Notification', () => ({}))
   on('classic.SubagentStop', () => ({}))
+  on('classic.PostToolUse', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+  on('classic.PermissionDenied', () => ({}))
   on('ui.open', (_$, e: any) => (opens.push(e), { value: { isPlaced: true } }))
   on('process.spawn', async function* () {
     yield { stream: 'stdout' as const, text: JSON.stringify({ offered: false, models: [] }) }
@@ -264,4 +267,37 @@ test('the pane draws NEEDS YOU from the host hold event, and the footer Client c
   const footer: any = await ui.find({ type: 'Client' })
   expect(footer?.props?.props).toEqual({ keys: '↑↓ select', hint: 'click here to use keys' })
   await ui.unmount()
+})
+
+const permReq = (agent_id: string, command: string) => ({ session_id: 's', transcript_path: '', cwd: '/work', agent_id, agent_type: 'agents-inc:sonnet', tool_name: 'Bash', tool_input: { command } }) as any
+const postUse = (agent_id: string) => ({ session_id: 's', transcript_path: '', cwd: '/work', agent_id, tool_name: 'Bash', tool_input: {}, tool_response: {}, tool_use_id: 't1' }) as any
+const paneTexts = async ($: Dollar) => {
+  const ui = await $.ui.mount({ plugin: 'agents-inc', component: 'Pane', requestId: 'Board', surface: 'terminal', props: { title: 'Board', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} } } as any)
+  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text as string)
+  await ui.unmount()
+  return texts
+}
+
+test('a hold clears on the same agent PostToolUse, not another agent\'s', async ($, on) => {
+  const world = { agents: [agent('a1', 'agents-inc:sonnet', 'one'), agent('a2', 'agents-inc:sonnet', 'two')] }
+  const clock = await startPlugin($, on, world, [])
+  await clock.advance(2100)
+  await $.classic.PermissionRequest(permReq('a1', 'sleep 30'))
+  await $.classic.PostToolUse(postUse('a2'))
+  expect((await paneTexts($)).some(t => t.includes('waits: sleep 30'))).toBe(true)
+  await $.classic.PostToolUse(postUse('a1'))
+  expect((await paneTexts($)).some(t => t.includes('waits:'))).toBe(false)
+})
+
+test('a second PermissionRequest replaces the question in the rendered NEEDS YOU note', async ($, on) => {
+  const world = { agents: [agent('a1', 'agents-inc:sonnet', 'one')] }
+  const clock = await startPlugin($, on, world, [])
+  await clock.advance(2100)
+  await $.classic.PermissionRequest(permReq('a1', 'python3 sleep'))
+  expect((await paneTexts($)).some(t => t.includes('waits: python3 sleep'))).toBe(true)
+  await clock.advance(100)
+  await $.classic.PermissionRequest(permReq('a1', 'touch held.txt'))
+  const t = await paneTexts($)
+  expect(t.some(x => x.includes('waits: touch held.txt'))).toBe(true)
+  expect(t.some(x => x.includes('python3 sleep'))).toBe(false)
 })
