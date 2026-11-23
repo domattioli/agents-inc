@@ -244,6 +244,8 @@ test('scene 4: Board starts closed, then opens without focus at the first delega
   expect(opens[0].id).toBe('Board')
   expect(opens[0].title).toBe('Board')
   expect(opens[0].focus).toBeUndefined() // never takes focus
+  expect('closeOnEscape' in opens[0]).toBe(false) // host accepts only true; left out
+
   await clock.advance(10_000)
   expect(opens).toHaveLength(1) // once per session
 })
