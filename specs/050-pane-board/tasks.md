@@ -111,16 +111,16 @@ Plan.md names these paths and no others. Board code goes in the directory `mods/
 
 ### Implementation
 
-- [ ] T034 [US3] [FR-001, FR-038] Implement shared Team data per the S1 result (plugin store or session-owned summary file) in a new file in `mods/agents-inc/hooks/`, sharing only what each pane needs and identifying a Team by harness and session, not display name or working directory.
-- [ ] T035 [US3] [FR-001, FR-030, FR-033] Render folded Teams: every other Team as one count line with `!` when it holds a needs-you Item, two blank lines before them, no "other sessions" label, and the open Team always the pane's own. Extend the renderer from T011.
-- [ ] T036 [US3] [FR-026, FR-027, FR-028, FR-047] Route Board replies by stable target identity (Team line to that Team's CoS, Item to its source, delegate row to its Team's delegate), preserve plugin provenance, keep a Worker Memo pending until an authorized checkpoint or next resume, and send the other Team's Chief an FYI when its delegate is messaged. Extend the controls from T026 and T027. Depends on T031 and T033.
-- [ ] T037 [US3] [FR-035] Extend first-event detection so the first delegate or first NEEDS YOU Item in any Team opens Board without focus. File: the registration from T014 in `mods/agents-inc/hooks/`. Depends on T014 and T034.
+- [x] T034 [US3] [FR-001, FR-038] Implement shared Team data per the S1 result (plugin store or session-owned summary file) in a new file in `mods/agents-inc/hooks/`, sharing only what each pane needs and identifying a Team by harness and session, not display name or working directory.
+- [x] T035 [US3] [FR-001, FR-030, FR-033] Render folded Teams: every other Team as one count line with `!` when it holds a needs-you Item, two blank lines before them, no "other sessions" label, and the open Team always the pane's own. Extend the renderer from T011.
+- [x] T036 [US3] [FR-026, FR-027, FR-028, FR-047] Route Board replies by stable target identity (Team line to that Team's CoS, Item to its source, delegate row to its Team's delegate), preserve plugin provenance, keep a Worker Memo pending until an authorized checkpoint or next resume, and send the other Team's Chief an FYI when its delegate is messaged. Extend the controls from T026 and T027. Depends on T031 and T033.
+- [x] T037 [US3] [FR-035] Extend first-event detection so the first delegate or first NEEDS YOU Item in any Team opens Board without focus. File: the registration from T014 in `mods/agents-inc/hooks/`. Depends on T014 and T034.
 - [ ] T038 [US3] [FR-042] Prepare the one-week operator observation: record how often the operator still switches sessions, with no target count, starting when cross-session counts are available. Record the start date and method in `specs/050-pane-board/research.md`.
 
 ### Golden scene test (Phase 3)
 
-- [ ] T039 [US3] [FR-041, FR-001, FR-030, FR-033, FR-038] Golden scene 6 (folded Teams): `ainc2` with one NEEDS YOU Item and three working delegates, `quadmesh` with two working; assert two blank lines after the open Team and the exact lines `! ainc2       1 needs you · 3 working` and `● quadmesh    2 working`; assert two sessions show the same Team data, each opening its own Team. New test file in `mods/agents-inc/hooks/`.
-- [ ] T040 [P] [US3] [FR-026, FR-027, FR-028] Delivery and refusal tests: a message to another Team's delegate produces an FYI for that Team's CoS, a Memo to a running dispatch Worker stays pending until checkpoint or resume, and a refused send keeps its target and Item open. New test file in `mods/agents-inc/hooks/`.
+- [x] T039 [US3] [FR-041, FR-001, FR-030, FR-033, FR-038] Golden scene 6 (folded Teams): `ainc2` with one NEEDS YOU Item and three working delegates, `quadmesh` with two working; assert two blank lines after the open Team and the exact lines `! ainc2       1 needs you · 3 working` and `● quadmesh    2 working`; assert two sessions show the same Team data, each opening its own Team. New test file in `mods/agents-inc/hooks/`.
+- [x] T040 [P] [US3] [FR-026, FR-027, FR-028] Delivery and refusal tests: a message to another Team's delegate produces an FYI for that Team's CoS, a Memo to a running dispatch Worker stays pending until checkpoint or resume, and a refused send keeps its target and Item open. New test file in `mods/agents-inc/hooks/`.
 
 **Checkpoint**: Phases 1 to 3 work together.
 

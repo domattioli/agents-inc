@@ -2,6 +2,7 @@
 // the same lines. No map, stations, roles line, feed, tree, form, done list, tokens or animation (FR-036, FR-037).
 import { clip, selectable } from './board-model'
 import type { Action, Board, Entry } from './board-model'
+import { NAME_W } from './board-teams'
 
 export type Span = { t: string; dim?: boolean; color?: 'yellow' | 'red' }
 export type Line = Span[]
@@ -26,7 +27,7 @@ const LABEL = { needs: 'NEEDS YOU', fyi: 'FYI', trouble: 'TROUBLE', working: 'WO
 const COLOR = { needs: 'yellow', trouble: 'red' } as const
 
 export function footerKeys(entry: Entry | undefined): string {
-  const names: Record<Action, string> = { open: 'o open', stop: 's stop', dismiss: 'd dismiss', reply: 'Enter reply' }
+  const names: Record<Action, string> = { open: 'o open', stop: 's stop', dismiss: 'd dismiss', reply: 'Enter reply', memo: 'm memo' }
   return ['↑↓ select', ...(entry?.actions ?? []).map(a => names[a])].join('  ')
 }
 
@@ -34,19 +35,25 @@ export function renderBoard(b: Board, o: { width: number; selected?: string }): 
   const width = Math.max(0, Math.floor(o.width))
   const sections = (['needs', 'fyi', 'trouble', 'working'] as const).filter(s => b[s].length)
   const narrow = width < NARROW
-  if (!sections.length) return { lines: [[{ t: 'nothing to show', dim: true }]], footer: '', hint: HINT, narrow }
+  if (!sections.length && !b.teams.length) return { lines: [[{ t: 'nothing to show', dim: true }]], footer: '', hint: HINT, narrow }
   const label = (s: (typeof sections)[number]): string => (s === 'fyi' ? LABEL.fyi : `${LABEL[s]} ${b[s].length}`)
   if (narrow) {
     // counts only: one line per section, FYI included with its count
     const lines = sections.map(s => [{ t: clip(s === 'fyi' ? `${LABEL.fyi} ${b.fyi.length}` : label(s), width), dim: s === 'fyi' || s === 'working' || undefined, color: s in COLOR ? COLOR[s as 'needs' | 'trouble'] : undefined } as Span])
+    if (b.teams.length) lines.push([{ t: clip(`TEAMS ${b.teams.length}`, width), dim: true }])
     return { lines, footer: '', hint: HINT, narrow }
   }
-  const lines: Line[] = []
+  const lines: Line[] = sections.length ? [] : [[{ t: 'nothing to show', dim: true }]]
   sections.forEach((s, k) => {
     if (k) lines.push([])
     lines.push([{ t: label(s), dim: true }])
     b[s].forEach((e, i) => lines.push(row(s, e, i + 1, width, e.key === o.selected)))
   })
+  // Other Teams: one line each, two blank lines before them, no label (FR-001, FR-030, FR-033).
+  if (b.teams.length) {
+    lines.push([], [])
+    for (const t of b.teams) lines.push(row('team', t, 0, width, t.key === o.selected))
+  }
   const sel = selectable(b).find(e => e.key === o.selected)
   return { lines, footer: clip(footerKeys(sel), width), hint: HINT, narrow }
 }
@@ -55,6 +62,7 @@ export function renderBoard(b: Board, o: { width: number; selected?: string }): 
 function row(s: Entry['section'], e: Entry, n: number, width: number, selected: boolean): Line {
   const color = s in COLOR ? COLOR[s as 'needs' | 'trouble'] : undefined
   const lead = selected ? '▸ ' : '  '
+  if (s === 'team') return [{ t: clip(`${selected ? '▸ ' : ''}${e.glyph} ${e.alias.padEnd(NAME_W)}${e.note}`, width), color: e.glyph === '!' ? 'yellow' : undefined, dim: e.glyph === '◌' || undefined }]
   if (s === 'needs') return [{ t: clip(`${lead}${n} ${e.note}`, width), color }]
   if (s === 'fyi') return [{ t: clip(`${lead}· ${e.note}`, width) }]
   const head = `${lead}${e.glyph} ${e.alias.padEnd(ALIAS_W)}`
@@ -79,7 +87,7 @@ export function keyAction(b: Board, selected: string | undefined, key: string): 
   if (key === 'up' || key === 'k') return { selected: all.length ? all[at <= 0 ? all.length - 1 : at - 1]!.key : undefined }
   if (key === 'down' || key === 'j') return { selected: all.length ? all[at < 0 || at >= all.length - 1 ? 0 : at + 1]!.key : undefined }
   if ((key === 'return' || key === 'enter') && cur && cur.actions.includes('reply')) return { selected: cur.key, act: 'reply', entry: cur }
-  const act = ({ o: 'open', s: 'stop', d: 'dismiss' } as Record<string, Action>)[key]
+  const act = ({ o: 'open', s: 'stop', d: 'dismiss', m: 'memo' } as Record<string, Action>)[key]
   if (act && cur && cur.actions.includes(act)) {
     if (act !== 'dismiss') return { selected: cur.key, act, entry: cur }
     // after a dismissal the selection moves to the neighbour that stays, by identity

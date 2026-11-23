@@ -191,7 +191,7 @@ test('keys: o and s act on live rows only, Enter does nothing yet, and the foote
   const m = newMem()
   ingestAgents(m, [agent('a1', 'agents-inc:sonnet', 'one')], T0)
   use(m, T0, 'down')
-  expect(show(m, T0, 80, m.selected).slice(-1)).toEqual(['↑↓ select  o open  s stop'])
+  expect(show(m, T0, 80, m.selected).slice(-1)).toEqual(['↑↓ select  o open  s stop  m memo'])
   expect(keyAction(m.board, m.selected, 's').act).toBe('stop')
   expect(keyAction(m.board, m.selected, 'return').act).toBeUndefined()
   expect(keyAction(m.board, m.selected, 'd').act).toBeUndefined() // a working row cannot be dismissed

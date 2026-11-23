@@ -3,7 +3,8 @@ import { register as relay, registerRelay } from './relay'
 import { registerLunaAgent } from './luna'
 import { register as native, registerNativeAgents } from './native/registry'
 import { register as boardPane, PANE as BOARD_PANE, POLL_MS as BOARD_POLL_MS, TITLE as BOARD_TITLE } from './board'
-import { board, buildBoard, dirTime, ingestAgents, isEmpty, noteStep, resetMem, RUNS as BOARD_RUNS, runFrom, sessionRunNames, stepDue } from './board-model'
+import { deadKeys, liveTeams, parseTeam, summary, teamKey, TEAM_PREFIX } from './board-teams'
+import { board, buildBoard, dirTime, hasActivity, ingestAgents, noteStep, resetMem, RUNS as BOARD_RUNS, runFrom, sessionRunNames, stepDue } from './board-model'
 
 // hooks.json allows one hooks module per plugin, and a module may register session.start once,
 // so this entry owns session.start and hands it to every feature.
@@ -13,6 +14,7 @@ export const register: Register = (on, options) => {
     // Board (spec 050): the one poll behind the pane. `$` calls stay inline here (host loader rule); every decision is a
     // pure function in board-model.ts. Zero model calls: the agent list, transcript tails and dispatch run files only.
     resetMem(board)
+    board.teamName = String((e as any).cwd ?? '').split('/').filter(Boolean).pop() ?? ''
     try {
       await $.command.register({ name: 'board', description: 'Open the Board: what needs you, trouble, and what each delegate is doing' })
     } catch {
@@ -78,6 +80,21 @@ export const register: Register = (on, options) => {
           }
           board.runs[name] = runFrom(name, { runJson, slotsJson, events }, newest)
         }
+        // Teams across sessions (spec 050 Phase 3): publish this session's own key, read the others, ignore stale heartbeats.
+        // Never a shared counter: each key has one writer. Own Team is always the open one.
+        try {
+          if (!board.sessionId) board.sessionId = String(await $.session.id())
+          const prior = buildBoard(board, now)
+          await $.store.set(teamKey(board.sessionId), summary(board.sessionId, board.teamName, prior.needs.length, prior.working.length, now))
+          const all: Array<[string, ReturnType<typeof parseTeam>]> = []
+          for (const k of (await $.store.keys()) as string[]) {
+            if (k.startsWith(TEAM_PREFIX) && k !== teamKey(board.sessionId)) all.push([k, parseTeam(k, await $.store.get(k))])
+          }
+          board.teams = liveTeams(all.map(x => x[1]), board.sessionId, now)
+          for (const k of deadKeys(all, now)) await $.store.delete(k)
+        } catch {
+          board.teams = [] // the store is unreadable: show no other Teams rather than stale ones
+        }
         const built = buildBoard(board, now)
         const sig = JSON.stringify(built)
         board.board = built
@@ -86,7 +103,7 @@ export const register: Register = (on, options) => {
           $.ui.invalidate('ui.render')
         }
         // Open without taking focus on the first delegate or first NEEDS YOU row; stay closed with nothing to show.
-        if (!board.opened && !board.closedByPerson && !isEmpty(built)) {
+        if (!board.opened && !board.closedByPerson && hasActivity(built)) {
           board.opened = true
           await $.ui.open({ id: BOARD_PANE, title: BOARD_TITLE })
         }

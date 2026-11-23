@@ -7,6 +7,8 @@ import { extractMainTurnAnswer, ingestTurn, itemKey } from './board-items'
 import { keyAction, renderBoard } from './board-render'
 import { afterFill, closesOnSubmit, regionLines, replyText } from './board-reply'
 import type { Line } from './board-render'
+import { planSend, settle, targetLines } from './board-teams'
+import type { Target } from './board-teams'
 
 export const PANE = 'Board'
 export const TITLE = 'Board'
@@ -86,7 +88,32 @@ export const register: Register = on => {
   // With the reply region open: x closes it, a digit fills the chat box with that quick reply (the operator presses
   // Enter in chat), and a `reply` message fills free text. Nothing here sends: no `$.session.send` for replies.
   on('ui.message', { requestId: PANE }, async ($, e, next) => {
-    const data = ((e as any).data ?? {}) as { kind?: string; key?: string; text?: string }
+    const data = ((e as any).data ?? {}) as { kind?: string; key?: string; text?: string; teamId?: string; teamName?: string; agentId?: string; alias?: string }
+    // Phase 3: a Team line reply or a Memo. Deliberate operator action: plugin provenance is fine, and nothing here is
+    // labelled as a native operator message. `tell` names a delegate directly (another Team's becomes an FYI to its CoS).
+    const tgt: Target | undefined = data.kind === 'tell' && data.agentId
+      ? { kind: 'memo', agentId: String(data.agentId), alias: String(data.alias ?? data.agentId), teamId: String(data.teamId ?? ''), teamName: String(data.teamName ?? 'that Team') }
+      : board.target
+    if (tgt && (data.kind === 'reply' || data.kind === 'tell' || (data.kind === 'key' && typeof data.key === 'string'))) {
+      const text = data.kind === 'key' ? '' : String(data.text ?? '').trim()
+      if (data.kind === 'key' && data.key === 'x') board.target = undefined
+      else if (text) {
+        const plan = planSend(tgt, text, board.sessionId)
+        let result: unknown
+        try {
+          result = await $.session.send({ to: plan.to, text: plan.text })
+        } catch (err) {
+          result = { isDelivered: false, reason: String((err as Error)?.message ?? 'send failed') }
+        }
+        const now = Number(await $.clock.now())
+        const out = settle(plan, text, result, board.items, board.sent, now)
+        if (out.close) board.target = undefined
+        else if (data.kind !== 'tell') board.targetNote = out.line
+        board.board = buildBoard(board, now)
+      }
+      $.ui.invalidate('ui.render')
+      return next(e)
+    }
     const open = board.reply ? board.items.items.find(i => i.id === board.reply!.itemId) : undefined
     if (board.reply && !open) board.reply = undefined
     if (open && board.reply && (data.kind === 'reply' || (data.kind === 'key' && typeof data.key === 'string'))) {
@@ -102,10 +129,18 @@ export const register: Register = on => {
     if (data.kind !== 'key' || typeof data.key !== 'string') return next(e)
     const r = keyAction(board.board, board.selected, data.key)
     board.selected = r.selected
+    board.targetNote = undefined
     if (r.act === 'dismiss' && r.entry) {
       board.dismissed[r.entry.key] = true
       board.board = buildBoard(board, Number(await $.clock.now()))
+    } else if (r.act === 'reply' && r.entry?.teamId) {
+      board.reply = undefined
+      board.target = { kind: 'team', id: r.entry.teamId, name: r.entry.alias }
+    } else if (r.act === 'memo' && r.entry?.agentId) {
+      board.reply = undefined
+      board.target = { kind: 'memo', agentId: r.entry.agentId, alias: r.entry.alias, teamId: board.sessionId, teamName: board.teamName }
     } else if (r.act === 'reply' && r.entry) {
+      board.target = undefined
       const item = board.items.items.find(i => itemKey(i) === r.entry!.key)
       if (item) board.reply = { itemId: item.id }
     } else if (r.act === 'open' && r.entry?.agentId) {
@@ -139,7 +174,8 @@ export const register: Register = on => {
     const r = renderBoard(board.board, { width: columns, selected: board.selected })
     const item = board.reply ? board.items.items.find(i => i.id === board.reply!.itemId) : undefined
     const region = item ? regionLines(item, Number(await $.clock.now()), board.sent, columns) : []
-    const footer = item ? `1-${Math.max(3, item.options.length)} fill reply  x close` : r.footer
+    const tregion = board.target ? targetLines(board.target, board.targetNote, board.sent, columns) : []
+    const footer = board.target ? 'type text to send  x close' : item ? `1-${Math.max(3, item.options.length)} fill reply  x close` : r.footer
     const spans = (line: Line, key: string) =>
       line.length === 0 ? (
         <Text key={key}> </Text>
@@ -155,6 +191,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {r.lines.map((l, i) => spans(l, 'l' + i))}
         {region.map((l, i) => spans(l, 'r' + i))}
+        {tregion.map((l, i) => spans(l, 't' + i))}
         {footer ? <Text key="gap"> </Text> : null}
         {footer && Client ? <Client key="footer" module="./board-footer.tsx" props={{ keys: footer, hint: r.hint }} height={1} /> : null}
         {footer && !Client ? <Text key="footer" dimColor>{footer}</Text> : null}
