@@ -15,7 +15,7 @@ This page is for people who have not run it before. The other docs are written f
 - Optional: Codex CLI, signed in through a ChatGPT account. Its model slugs depend on your account. `~/.config/agents-inc/roster.json` overrides the defaults in `agents_inc/routing.json`.
 - Optional: Gemini, Mistral or OpenRouter API keys. See below.
 
-## Install (0.7.0)
+## Install (0.8.0)
 
 ```bash
 pip install agents-inc

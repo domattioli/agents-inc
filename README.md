@@ -29,10 +29,10 @@
 
 ## 1. Status & Roadmap
 
-Version 0.7.0. The project is experimental and pre-MVP. The governed path (`WORKERBEES_GOVERNANCE`) is off by default. Changes per release are in the [CHANGELOG](https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md). The build plan and cut line are in [docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md). Open work is tracked in [the issues](https://github.com/domattioli/agents-inc/issues).
+Version 0.8.0. The project is experimental and pre-MVP. The governed path (`WORKERBEES_GOVERNANCE`) is off by default. Changes per release are in the [CHANGELOG](https://github.com/domattioli/agents-inc/blob/main/CHANGELOG.md). The build plan and cut line are in [docs/PLAN-MVP.md](https://github.com/domattioli/agents-inc/blob/main/docs/PLAN-MVP.md). Open work is tracked in [the issues](https://github.com/domattioli/agents-inc/issues).
 
-- **Now:** measure the token cost of delegation against doing the work in one session, and port the test suite to Windows ([#138](https://github.com/domattioli/agents-inc/issues/138)).
-- **Next:** let Claude and Codex delegates read files and use the web the way the host's own subagents do, with free models kept to a narrower scope ([#155](https://github.com/domattioli/agents-inc/issues/155), [#135](https://github.com/domattioli/agents-inc/issues/135)).
+- **Now:** the Board pane is shipped (phases 1 to 3). Measure the token cost of delegation against doing the work in one session, and port the test suite to Windows ([#138](https://github.com/domattioli/agents-inc/issues/138)).
+- **Next:** Board phase 4, a Secretary that pulls Items out of chat turns the Chief of Staff left unmarked, once a Mistral free-tier check passes (D90).
 - **Later:** route work by data classification, so unpublished work reaches only approved providers ([#19](https://github.com/domattioli/agents-inc/issues/19)).
 
 <div align="right"><a href="#agents_inc"><sub>^ Back to top</sub></a></div>
