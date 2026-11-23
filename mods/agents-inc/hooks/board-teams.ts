@@ -177,8 +177,10 @@ export function printsSecretVar(text: string): boolean {
   }
   return false
 }
+// A credential directory or file under any home path (`~`, $HOME, /Users/x, /home/x, /root), even bare: `/root/.aws`.
+const HOME_CRED_DIR = /(~|\$HOME|\$\{HOME\}|\/Users\/[^/\s]+|\/home\/[^/\s]+|\/root)\/\.(ssh|aws|gnupg|netrc|npmrc|pypirc|docker\/config\.json|kube\/config|config\/(gh|gcloud)|codex\/auth\.json|claude\/\.?credentials(\.json)?)(?![\w-])/i
 const SECRET = [
-  HOME_CRED, KEY_FILE, ENV_AFTER_SEP, ENV_READ_TICKED,
+  HOME_CRED_DIR, HOME_CRED, KEY_FILE, ENV_AFTER_SEP, ENV_READ_TICKED,
   /(^|[\s/"'`=~])\.env(\.[\w-]+)?(?![\w-])/i,
   /~\/\.(ssh|aws|gnupg|netrc|config\/(gh|gcloud)|claude\/\.?credentials|codex\/auth)/i,
   /\bauth\.json\b|\.credentials\.json|\bid_(rsa|ed25519|ecdsa)\b/i,

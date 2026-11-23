@@ -77,6 +77,8 @@ export type Mem = {
   // handler and the poll see one copy.
   pollGen: number
   stop?: unknown
+  // After /clear: the id of the session that ended. The poll publishes nothing until `$.session.id()` differs from it.
+  endedId: string
 }
 
 export const LOST_MS = 5 * 60 * 1000
@@ -91,12 +93,12 @@ export const emptyBoard = (): Board => ({ needs: [], fyi: [], trouble: [], worki
 export const newMem = (): Mem => ({
   start: 0, agents: {}, steps: {}, holds: {}, runs: {}, dismissed: {}, selected: undefined, opened: false, closedByPerson: false,
   busy: false, board: emptyBoard(), sig: '', notice: '', items: newItems(), reply: undefined, sent: [],
-  sessionId: '', teamName: '', teams: [], fillHint: false, pollGen: 0, stop: undefined,
+  sessionId: '', teamName: '', teams: [], fillHint: false, pollGen: 0, stop: undefined, endedId: '',
 })
 export const board: Mem = newMem()
 // A session start clears everything Board remembers.
 export function resetMem(m: Mem): void {
-  const keep = { pollGen: m.pollGen, stop: m.stop }
+  const keep = { pollGen: m.pollGen, stop: m.stop, endedId: m.endedId }
   Object.assign(m, newMem(), keep)
 }
 

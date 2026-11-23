@@ -7,7 +7,7 @@ import { extractMainTurnAnswer, ingestTurn, itemKey } from './board-items'
 import { keyAction, renderBoard } from './board-render'
 import { afterFill, closesOnSubmit, regionLines, replyText } from './board-reply'
 import type { Line } from './board-render'
-import { fillMemo, fillSend, isPerson, liveTeams, MEMO_CMD, memoRefText, parseTeam, screenText, TEAM_PREFIX, teamKey, parseMemo, parseSend, parseTell, planSend, SEND_CMD, settle, TELL_CMD } from './board-teams'
+import { fillMemo, fillSend, isPerson, liveTeams, MEMO_CMD, parseTeam, screenText, TEAM_PREFIX, teamKey, parseMemo, parseSend, parseTell, planSend, SEND_CMD, settle, TELL_CMD } from './board-teams'
 
 export const PANE = 'Board'
 export const TITLE = 'Board'
@@ -106,41 +106,34 @@ export const register: Register = on => {
   })
   on('command.run', { command: MEMO_CMD }, async ($, e) => {
     if (!isPerson((e as any).origin)) return NOT_PERSON
-    const live = ['pending', 'running', 'waiting', 'idle']
-    const agents = Object.values(board.agents).filter(a => live.includes(a.status)).map(a => ({ id: a.id, alias: alias(a.type) }))
-    const p = parseMemo(String((e as any).args ?? ''), agents, board.sessionId, board.teamName)
-    if (!p.ok) {
-      // D91: an undeliverable Memo is one FYI row. A ref that matches no live delegate but exactly one agent this session
-      // has seen (its last known type is kept in board.agents) is a Worker that has gone: send nothing, keep the text.
-      const [ref, text] = memoRefText(String((e as any).args ?? ''))
-      const seen = ref ? Object.values(board.agents).filter(a => a.id.startsWith(ref)) : []
-      if (seen.length !== 1 || !text) return { text: p.line }
-      const badText = screenText(text)
-      if (badText) return { text: `not delivered: ${badText}` }
-      const gone = planSend({ kind: 'memo', agentId: seen[0]!.id, alias: alias(seen[0]!.type), teamId: board.sessionId, teamName: board.teamName }, text, board.sessionId)
-      const goneBig = screenText(gone.text)
-      if (goneBig) return { text: `not delivered: ${goneBig}` }
-      const g = finish(gone, text, { isDelivered: false, reason: 'worker finished' }, Number(await $.clock.now()))
-      $.ui.invalidate('ui.render')
-      return g
+    // One snapshot of `$.agent.list()` decides both the ref and the status, so a ref cannot resolve against one view and
+    // be judged against another. Candidates: what the host lists now plus agents seen earlier that it no longer lists
+    // (a Worker that has gone resolves, then is refused as finished).
+    let listed: Array<{ id?: string; type?: string; status?: string }> = []
+    let listFailed = false
+    try {
+      listed = ((await $.agent.list()) as typeof listed) ?? []
+    } catch {
+      listFailed = true
     }
+    const cand = new Map<string, { id: string; alias: string }>()
+    for (const a of Object.values(board.agents)) cand.set(a.id, { id: a.id, alias: alias(a.type) })
+    for (const a of listed) if (typeof a.id === 'string') cand.set(a.id, { id: a.id, alias: alias(String(a.type ?? board.agents[a.id]?.type ?? '')) })
+    const p = parseMemo(String((e as any).args ?? ''), [...cand.values()], board.sessionId, board.teamName)
+    if (!p.ok) return { text: p.line }
     const bad = screenText(p.text)
     if (bad) return { text: `not delivered: ${bad}` }
     const plan = planSend(p.target, p.text, board.sessionId)
     const tooBig = screenText(plan.text) // the 64 KiB cap applies to the final payload, prefix included
     if (tooBig) return { text: `not delivered: ${tooBig}` }
     // D91: a Memo never starts a resume. A `{ agentId }` send to a finished subagent makes the host resume it from its
-    // transcript, so send only while the host lists the agent as running at this moment. Known limit: a Worker that
+    // transcript, so send only while that same snapshot lists the agent as running. Known limit: a Worker that
     // finishes between this check and delivery is still resumed by the host (no atomic check-and-send exists).
     let result: unknown
-    let running = false
-    try {
-      const listed = ((await $.agent.list()) as Array<{ id?: string; status?: string }>) ?? []
-      running = listed.some(a => p.target.kind === 'memo' && a.id === p.target.agentId && a.status === 'running')
-      if (!running) result = { isDelivered: false, reason: 'worker finished' }
-    } catch {
-      result = { isDelivered: false, reason: 'could not check that the worker is running' }
-    }
+    const target = p.target
+    const running = !listFailed && target.kind === 'memo' && listed.some(a => a.id === target.agentId && a.status === 'running')
+    if (listFailed) result = { isDelivered: false, reason: 'could not check that the worker is running' }
+    else if (!running) result = { isDelivered: false, reason: 'worker finished' }
     if (running) {
       try {
         result = await $.session.send({ to: plan.to, text: plan.text })

@@ -184,3 +184,20 @@ test('session.end stops the poll only when it is this session that ends; /clear 
   await clock.advance(6000)
   expect(writes).toBe(0)
 })
+
+test('after /clear nothing is published under the ended id until the host answers with a new one', async ($, on) => {
+  const writes: string[] = []
+  let id = 'own'
+  const seed: Record<string, any> = new Proxy({} as Record<string, any>, { set: (t, k, v) => ((t[k as string] = v), writes.push(String(k)), true) })
+  const clock = await start($, on, () => id, [], seed, [])
+  await clock.advance(2100)
+  expect(writes).toContain(teamKey('own'))
+  await $.session.end({ reason: 'clear', sessionId: 'own', resume: { id: 'x' } } as any)
+  writes.length = 0
+  await clock.advance(6100) // the host still answers with the ended id
+  expect(writes).toEqual([])
+  expect(seed[teamKey('own')]).toBeUndefined()
+  id = 'fresh'
+  await clock.advance(2100)
+  expect(writes).toEqual([teamKey('fresh')])
+})

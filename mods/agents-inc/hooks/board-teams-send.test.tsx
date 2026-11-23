@@ -61,6 +61,7 @@ function fakeStore(on: any, map: Record<string, unknown>) {
 }
 
 let mem: Record<string, any> = {}
+let extraAgents: any[] = []
 type On = Parameters<Parameters<typeof test>[1]>[1]
 async function start($: any, on: On, sends: any[], answer: () => unknown, status: () => string = () => 'running') {
   on('agent.register', (_$: any, e: any) => ({ value: { agent: `agents-inc:${e.name}` } }))
@@ -69,7 +70,7 @@ async function start($: any, on: On, sends: any[], answer: () => unknown, status
   on('session.id', () => ({ value: 'own' }))
   on('ui.log', () => ({ value: undefined }))
   on('command.register', () => ({ value: { command: 'board' } }))
-  on('agent.list', () => ({ value: [{ id: 'a8bb', type: 'agents-inc:haiku', description: 'scan', status: status() }] }))
+  on('agent.list', () => ({ value: [{ id: 'a8bb', type: 'agents-inc:haiku', description: 'scan', status: status() }, ...extraAgents] }))
   on('session.messages', () => ({ value: [] as any }))
   on('fs.list', () => {
     throw new Error('ENOENT')
@@ -82,6 +83,7 @@ async function start($: any, on: On, sends: any[], answer: () => unknown, status
     yield { stream: 'stdout' as const, text: JSON.stringify({ offered: false, models: [] }) }
     return { value: { code: 0, signal: null } }
   })
+  extraAgents = []
   mem = { [teamKey('sess-q')]: summary('sess-q', 'quadmesh', 0, 2, T0 + 1000) }
   fakeStore(on, mem)
   const clock = mock.clock(on, { now: T0 })
@@ -276,4 +278,18 @@ test('refs resolve against a fresh read: a Team that appeared since the last pol
   expect(r).toBe('not delivered: "sess" matches 2 Teams; type more of the ref')
   expect(sends).toHaveLength(1)
   void clock
+})
+
+test('/board-memo resolves the ref and the status from one fresh agent list: a newly listed agent makes the ref ambiguous', async ($, on) => {
+  const sends: any[] = []
+  await start($, on, sends, () => ({ isDelivered: true }))
+  extraAgents = [{ id: 'a8bc', type: 'agents-inc:haiku', description: 'other', status: 'running' }] // not yet polled
+  expect((await typed($, 'board-memo', 'a8b hi')).text).toBe('not delivered: "a8b" matches 2 delegates; type more of the ref')
+  expect((await typed($, 'board-memo', 'a8bc hi')).text).toBe('Queued.')
+  expect(sends).toEqual([{ to: 'a8bc', text: MEMO_PREFIX + 'hi' }])
+})
+
+test('absolute home paths are screened even bare: /root/.aws, /home/x/.ssh, /Users/x/.gnupg', () => {
+  for (const t of ['look in /root/.aws', 'cat /home/dev/.ssh', 'see /Users/me/.gnupg now', 'open $HOME/.netrc', 'try ${HOME}/.aws/credentials']) expect(screenText(t)).toBeDefined()
+  expect(screenText('the /root/.awsome dir is fine')).toBeUndefined()
 })

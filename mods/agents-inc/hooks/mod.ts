@@ -20,6 +20,7 @@ export const register: Register = (on, options) => {
     // Board (spec 050): the one poll behind the pane. `$` calls stay inline here (host loader rule); every decision is a
     // pure function in board-model.ts. Zero model calls: the agent list, transcript tails and dispatch run files only.
     resetMem(board)
+    board.endedId = ''
     board.teamName = String((e as any).cwd ?? '').split('/').filter(Boolean).pop() ?? ''
     try {
       await $.command.register({ name: 'board', description: 'Open the Board: what needs you, trouble, and what each delegate is doing' })
@@ -115,11 +116,14 @@ export const register: Register = (on, options) => {
           if (!sid) {
             sid = String(await $.session.id())
             if (mine !== board.pollGen) return
+            // After /clear the host may still answer with the ended id for a moment: publish nothing under it.
+            if (board.endedId && sid === board.endedId) return
+            board.endedId = ''
             board.sessionId = sid
           }
           const prior = buildBoard(board, now)
           await $.store.set(teamKey(sid), summary(sid, board.teamName, prior.needs.length, prior.working.length, now))
-          if (mine !== board.pollGen) {
+          if (mine !== board.pollGen || board.sessionId !== sid) {
             // the session changed while the write was in flight: take our own (old) key back out, nothing else
             await $.store.delete(teamKey(sid))
             return
@@ -128,7 +132,7 @@ export const register: Register = (on, options) => {
           for (const k of (await $.store.keys()) as string[]) {
             if (k.startsWith(TEAM_PREFIX) && k !== teamKey(sid)) all.push([k, parseTeam(k, await $.store.get(k))])
           }
-          if (mine !== board.pollGen) return
+          if (mine !== board.pollGen || board.sessionId !== sid) return
           board.teams = liveTeams(all.map(x => x[1]), sid, now)
           // Never delete another session's key: readers only ignore stale or malformed peers (S1: one writer per key).
         } catch {
@@ -167,6 +171,7 @@ export const register: Register = (on, options) => {
         const name = board.teamName
         resetMem(board)
         board.teamName = name
+        board.endedId = ended
         board.pollGen++
         $.ui.invalidate('ui.render')
       } else {
