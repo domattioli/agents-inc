@@ -946,3 +946,60 @@ existing work.
 Lifecycle records are observations. The supervisor still verifies and records
 an explicit verdict. Usage outside the evidence the host provides stays unknown.
 See the [native delegation guide](HOW-IT-WORKS.md#native-delegation).
+
+## D90: Markers instead of a posting tool (2026-11-23, status: proposed, spec 050 FR-044)
+
+The Chief of Staff (CoS) is the session the operator talks to. It puts Items on the Board by writing marker lines in its final chat message. A marker is one line: `[board:<section>] <text> | <option> | <option>`. The options are optional. `<text>` is the title, on one line.
+
+The Board reads the markers at the end of an eligible marker turn. That is a successful `turn.complete` event from the session's main chat with `reason: answer`, no `agentId`, and `isAborted` false. From chat the Board accepts three sections. `needs-you` and `fyi` become Items. `done` closes the NEEDS YOU Item whose title text matches the `done` text exactly. The Board ignores `trouble` and `working` without an error. It sets those two states from mechanical facts, and chat text must not control them.
+
+Why. A posting tool needs an extra model round trip for every Item. The operator rejected that cost on 2026-11-19. Markers cost zero extra model calls.
+
+Alternatives considered.
+- A posting tool call. It adds the round trip above.
+- A Secretary-only extraction. The Secretary is the function that pulls Items out of a CoS message when the CoS flagged none. Using it for every turn would add model cost to every turn. The spec limits it to unmarked turns in Phase 4.
+
+Cost. Markers depend on the CoS writing the format. A missed marker means a missed Item. The Secretary fallback in Phase 4 covers this. Until Phase 4 is built or chosen, a missed marker can omit an Item.
+
+Live evidence. Observed on 2026-11-23 in a test session (Claude Code 2.1.329), one observation per case. A main-loop turn gave `answer` (the visible text), `turnId`, `reason: answer` and `isAborted: false`, with no `agentId`. A subagent turn was its own event with `agentId` set and its own `turnId`. The parent received the subagent's reply. An interrupted turn gave `reason: aborted`, `isAborted: true` and a partial `answer` that can contain marker lines, so the Board skips it. The Board deduplicates by session, turn id and source line. Source: `specs/050-pane-board/research.md`, section "Phase 2 spike results, 2026-11-23" (PR 221).
+
+Untested. Interrupted turns other than a user Escape, and turns from other hosts.
+
+Status: proposed.
+
+## D91: Board Memo (2026-11-23, status: proposed; blocked for acceptance, amends D54 and D46 for the Board only; spec 050 FR-047)
+
+The operator may send a Memo through the Board to a running Worker. A Memo is the one-way note defined in D63. The operator ruled on 2026-11-19 to accept it, with this amendment landing before Phase 3.
+
+Scope of D63. D91 adopts only the operator-to-Worker Board route from D63. It adopts nothing else from D63.
+
+What changes. D54 says "No other message reaches a running Worker." That sentence gains one exception: a Memo from the operator through the Board. This applies to the Board only.
+
+A governed resume is a resume through `agents-inc dispatch --resume` or the broker resume tool (D54).
+
+When it is read. The Worker reads the Memo at a checkpoint, as D63 defines it. For a native Claude Worker, D63 designs a run-scoped hook that reads memos at tool boundaries. That hook design applies to native Claude Workers only, and it was never probed. A dispatched Worker, Claude or Codex, receives the Memo on its next governed resume (spec FR-028). Delivery is queued until then.
+
+Receipt. Every Board Memo passes the credential screen and the 64 KiB size limit, as D54 applies them to resume messages. The Board shows the Memo as pending until receipt is observed, then clears it.
+
+What stays.
+- A Memo is a note from the operator. A Worker's Question goes to its Lead through `ask_lead`.
+- The chain Worker, Lead, CoS, CEO (D46) stays.
+- The Lead still cannot push a message into a running Worker.
+- The D54 resume caps are unchanged: 1 for a Grunt Worker, 2 for Workhorse and above. Past the cap the broker still refuses with `resume-cap`.
+- The D54 verification of resumed turns is unchanged.
+
+Resume cap, ruled 2026-11-23. A Memo only rides a resume that the supervisor or Lead already authorized. A Memo never starts a resume by itself, so the Board never starts work or spends quota. It counts once against the D54 cap (1 for a Grunt Worker, 2 for Workhorse and above).
+
+Undelivered Memo, ruled 2026-11-23. When a Worker ends before a Memo can be delivered and no resume is available (cap reached or nobody resumes it), the Board shows one FYI row, for example `Memo to sonnet not delivered: worker finished`. It ages out like other FYI rows. The Memo text stays in the item detail so the operator can resend it to the Lead. It does not show as pending and is not TROUBLE.
+
+Sender, ruled 2026-11-23. Only the operator can send a Memo through the Board. The CoS cannot, so it cannot steer a Worker around its Lead (D46).
+
+Evidence so far. D63 records one earlier observation, a Codex probe from 2026-10-18. A message queued during a running `codex exec` was not seen by that run, and a later `codex exec resume` quoted it.
+
+Untested. Memo receipt in a live Worker. Spike S2 (cross-session message provenance and Worker Memos) is not run. The research file marks delivery to native Claude Workers at a checkpoint, and delivery to dispatched Workers on the next governed resume, as unverified. How the host carries the sender's identity is also untested.
+
+Status: proposed. Acceptance is blocked until these happen.
+- A reviewer from a different vendor than the author reviews this entry (D46).
+- Spike S2 gives one live run per supported delivery path, each showing the sender's identity and the Worker's receipt. A path with no passing run is not supported by D91 and stays out of the Board. Running the spike is not enough.
+
+The different-vendor review was done once by sol on 2026-11-23 (needs-fixes, then fixed). A second review of the final text is not required unless the text changes materially.
