@@ -167,3 +167,53 @@ Run by the supervisor in a tmux-driven test session (Claude Code v2.1.329, probe
 - WORKING: a 50 s haiku delegate showed "WORKING 1" with its step text for the whole run, then cleared.
 - Narrow width: host hides the pane below its seat width (shown at 110 terminal columns, about 46 pane columns; hidden at 80). The under-30-column counts-only rule is unreachable live in the terminal; covered by unit tests.
 - Keys after click: not re-tested in this run; known limit stands.
+
+## S1 live results (2026-11-23, Claude Code 2.1.330)
+
+Probe: throwaway mod, logs to `probe.jsonl` in each session cwd. Two independent Claude processes in tmux (dirs dA, dB), plus two in one shared dir (dS). No model calls for the store tests.
+
+- PASS store visibility A to B, no restart: A wrote `shared`; B's `/s2r` logged `"shared":{"from":"01787c2f-...","val":"hello-from-A"}` and listed A's `reg.<sid>` key. The store is one file per plugin under the user config dir, so it is shared across working directories, not per checkout.
+- PASS distinct keys under concurrent writes: both sessions ran 40 `set` calls on own keys at once. Final key list held all 80 (`b.01787c.0..39`, `b.be6f6c.0..39`) plus `reg.*`; neither process lost the other's keys.
+- FAIL read-modify-write of one shared key: both ran 40 get+1+set increments on `counter`. Final `{"n":49}` where 80 was expected, so 31 updates lost. No compare-and-set or lock exists. Never share one writable key.
+- PASS restart: A killed and restarted with `claude -c`; its keys and B's keys were all still present. `claude -c` kept the same session id (`01787c2f-...` in both starts). A fresh `claude` gets a new id.
+- Stale session: the killed session's `reg.01787c2f-...` stayed in the store with no expiry or liveness flag. `$.session.send` to the dead id returned `{"isDelivered":false,"reason":"no live session on this machine has id ... (a session that exited, ...)"}`. The store cannot tell live from dead; a heartbeat timestamp or a send probe has to.
+- PASS stable ids: `$.session.id()` returned a distinct uuid per process, also for two sessions in the same dir (`654cd77f-...` and `edbbb9e4-...` in dS). They saw each other's store writes and C reached D by id. The id identifies a Team; display name (`db-77`, `ds-56`) and cwd do not.
+- Not available: no `$.session.list()` or peer discovery in the host types. A pane learns other sessions only from keys each session writes itself.
+- Session-owned atomic summary file: NOT RUN. The store passed the tests that matter (cross-process visibility, no lost distinct keys, restart), so the fallback was not needed.
+- Delegate ownership: `$.agent.list()` ids (e.g. `a8bb162243160d210`) are session-local and another session cannot address them (S2). A Team row keys a delegate as session id plus agent id.
+
+Verdict: shared Team data in `$.store` PASS under the rule one writer per key (`team.<sessionId>`), readers merge. Needs a heartbeat field and reader-side age-out. One shared counter or shared writable key FAIL.
+
+## S2 live results (2026-11-23, Claude Code 2.1.330)
+
+Probe sends with `$.session.send` from a slash command typed by the person. Sender log is the `session.send` hook plus result; receiver log is `session.receive`, `prompt.submit`, `turn.complete`.
+
+- PASS idle recipient by stable id (B to A). Sender result `{"isDelivered":true}`. Receiver `session.receive` origin `{"kind":"peer","plugin":"board-s2-probe"}`, text `<cross-session-message from="uds:/tmp/cc-socks/52561.sock" from-name="db-77" from-mode="prompting">...`. `prompt.submit` origin `{"kind":"peer"}` (no plugin there). The model acted: `turn.complete answer "ACK-IDLE-1"`; screen `Message from @db-77: ...`.
+- PASS live mid-turn recipient. A ran a 10-call tool turn; the send arrived at 21:25:03.166 (`session.receive`) and surfaced to the model at 21:25:09.385 (`prompt.submit`, next tool boundary, same turn). Final answer `DONE-A2 ... ACK-MID-3`. Queue acceptance came at once; reading came about 6 s later. A first mid-turn attempt was invalid (a blocked foreground sleep ended the turn first); the second run counts.
+- PASS after restart: ping to A's resumed session (same id) delivered and answered `ACK-RESTART-5`. PASS same checkout: C to D by id, delivered and answered `ACK-SAMEDIR-6`.
+- Sender identity at the receiver: the host stamps `from-name` and a socket address in the text, and `origin.plugin` in hooks. The type docs say `plugin` is the sender's own claim; do not key guards on it.
+- FAIL direct Memo to another Team's Worker. `$.session.send` with `{agentId}` and with a raw id string, from A to B's running haiku worker `a1db1095ebbe84b6a`, both returned `{"isDelivered":false,"reason":"Agent \"a1db1095ebbe84b6a\" could not be resumed: No transcript found for agent ID ... never ran in this session"}`. Agent ids resolve only inside the sending session. Unsupported.
+- PASS same-session Memo to a native Claude Worker (the Board of the Worker's own Team). B's plugin sent to its running haiku worker `a8bb162243160d210` at 21:28:06; result `{"isDelivered":true}`; worker `session.receive` at 21:28:09 with `origin {"kind":"coordinator","plugin":"board-s2-probe"}` and `agentId":"a8bb..."`. Checkpoint: the next tool boundary, 3 s later, mid-run. The worker's final report began `ACK-W3` and called the sender "the coordinator" (a system-reminder). The Worker sees no operator or Board identity; the plugin name is visible to hooks, not to the model.
+- PASS cross-Team relay through the recipient Chief. A sent to B's session (`from-name="da-d4"`, origin peer, plugin `board-s2-probe`). B's Chief model chose to forward with SendMessage (`session.send` origin `{"kind":"model"}`); the worker got `MEMO-W4` at the next checkpoint (`origin {"kind":"coordinator"}`, no plugin) and answered `ACK-W4`. Sender identity is lost at the Worker. This is a Chief FYI plus a model-chosen relay, not guaranteed delivery.
+- Recipient Chief FYI for another Team's delegate: the host allows a peer message to the Chief session only (PASS above). The Chief sees sender name, address and plugin. No direct write to the other Team's delegate.
+- NOT RUN Memo to a Codex Worker on the next governed resume. Reason: needs a live governed dispatch with a luna or terra resume; not attempted, so $0 cost was not confirmed. Unsupported under the D91 evidence bar.
+
+Verdict by path (D91 bar: one live run showing sender identity and Worker receipt):
+- Board to own-Team native Claude Worker at a checkpoint: PASS (identity at the Worker: "coordinator" only).
+- Board to another Team's Chief (FYI): PASS.
+- Board to another Team's native Worker, direct: FAIL, unsupported. Only via Chief relay, which depends on the model.
+- Codex Worker on resume: NOT RUN, unsupported.
+- CoS delivery by stable id, idle and mid-turn: PASS.
+
+Phase 3 design: one `team.<sessionId>` store key per session with a heartbeat; route Board replies to a Team's CoS by `{sessionId}`; send a Worker Memo only from that Worker's own session's Board; for another Team, message its Chief and mark Worker delivery unproven. Make Memo text self-identifying (for example `Memo from the operator via Board`), since the Worker sees only "coordinator".
+
+### S2 follow-up: live test of Phase 3 (2026-11-23)
+
+- Memo to a finished Worker: the host RESUMED the finished subagent to deliver it (`{ agentId }` resumes a finished subagent from its transcript). That breaks D91 (a Memo never starts a resume). Fix: `/board-memo` reads `$.agent.list()` at send time and sends only when that agent's status is `running`; otherwise nothing is sent and one FYI row `Memo to <alias> not delivered: worker finished` keeps the text. Known limit: a Worker that finishes between the check and delivery is still resumed by the host; no atomic check-and-send exists.
+- Focus after `$.prompt.fill`: the Board keeps the keys, so typed text goes to the pane until the operator presses Escape. The host types offer no way back: `$.ui.focus` moves the ring inside a site only, `$.ui.open` focus is a request that cannot release, and `prompt.fill` has no focus option. Limit recorded; the footer reads `Esc, then type` after a fill, for Item replies, Team sends and Memos, until the next key or submit.
+- Receipt is not observable from the plugin: `isDelivered: true` from `$.session.send` means queue acceptance only. Board says "Queued." and "FYI queued for <Team>", never delivered or received. The Worker's receipt shows only in the Worker's own session.
+- Send text screen: Memo, send and tell text pass a TypeScript first-filter credential screen (secret locations, secret-shaped assignments, bearer and key shapes; stricter than D88, no TypeScript copy of the Python screen exists) and a 64 KiB cap. Limit: encoded or indirect requests are not seen.
+- Run counts and session ownership: a dispatch run's `run.json` carries `session_id` of the delegate's own thread, not the owning session's id, so the poll cannot filter runs by owner. Limit kept: two sessions in one checkout may count each other's dispatch runs started after their own start time.
+- Pending Memo until receipt (D91 "shows the Memo as pending until receipt is observed") is not built: receipt is not observable from the plugin, so Board never shows a Memo as pending or received. The row after a send says only that it was queued; a Worker that ended first leaves the FYI row.
+- `/clear`: the host raises `session.end` with reason `clear` and fires no `session.start`; the process continues under a new session id. Board resets its state, removes the old session's key, and the running poll reads the new id on its next tick.
+- Send text screen now also ports the D54 resume screen patterns (home credential paths, key files, `.env` after a separator, backticked `.env` reads, and a print verb followed by an upper-case secret variable name). The 64 KiB cap counts the final payload, prefix included. `/board-send` and `/board-tell` resolve refs against all live `team.*` keys read at command time.

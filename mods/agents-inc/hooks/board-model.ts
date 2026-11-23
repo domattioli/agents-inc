@@ -4,6 +4,8 @@
 import { itemEntries, newItems } from './board-items'
 import type { ItemStore } from './board-items'
 import type { Reply } from './board-reply'
+import { teamEntries } from './board-teams'
+import type { TeamRec } from './board-teams'
 
 export type Listed = { id: string; type?: string; name?: string; description?: string; status?: string; parentId?: string }
 export type AgentRec = { id: string; type: string; description: string; status: string; since: number }
@@ -23,8 +25,8 @@ export type RunRec = {
 export type Hold = { agentId: string; question: string; at: number; status: string }
 export type StepRec = { text: string; sig: string; changedAt: number; readAt: number }
 
-export type Section = 'needs' | 'fyi' | 'trouble' | 'working'
-export type Action = 'open' | 'stop' | 'dismiss' | 'reply'
+export type Section = 'needs' | 'fyi' | 'trouble' | 'working' | 'team'
+export type Action = 'open' | 'stop' | 'dismiss' | 'reply' | 'memo'
 export type Entry = {
   // Identity of the selection: stable across refreshes. Trouble and needs keys carry the episode start.
   key: string
@@ -36,10 +38,12 @@ export type Entry = {
   note: string
   agentId?: string
   runId?: string
+  // A Team line: the other session's id (spec 050 Phase 3).
+  teamId?: string
   since: number
   actions: Action[]
 }
-export type Board = { needs: Entry[]; fyi: Entry[]; trouble: Entry[]; working: Entry[] }
+export type Board = { needs: Entry[]; fyi: Entry[]; trouble: Entry[]; working: Entry[]; teams: Entry[] }
 
 export type Mem = {
   start: number
@@ -62,6 +66,19 @@ export type Mem = {
   reply?: Reply
   // Replies the operator submitted, newest last, shown as the last messages sent to the target.
   sent: string[]
+  // Spec 050 Phase 3: this session's id and Team name, and the other Teams read from the store at the last poll.
+  sessionId: string
+  teamName: string
+  teams: TeamRec[]
+  // True after the Board filled the composer: the Board still holds the keys until Escape.
+  fillHint: boolean
+  // The poll's generation and its timer handle. They outlive resetMem: a new session.start or a /clear bumps the
+  // generation, so a tick already in flight stops before it writes. Kept here, not in a module variable, so every
+  // handler and the poll see one copy.
+  pollGen: number
+  stop?: unknown
+  // After /clear: the id of the session that ended. The poll publishes nothing until `$.session.id()` differs from it.
+  endedId: string
 }
 
 export const LOST_MS = 5 * 60 * 1000
@@ -72,15 +89,17 @@ export const STOP_TEXT = 'Stop now and report what you have.'
 const LIVE = new Set(['pending', 'running', 'waiting', 'idle'])
 const DONE = new Set(['completed', 'finished', 'done'])
 
-export const emptyBoard = (): Board => ({ needs: [], fyi: [], trouble: [], working: [] })
+export const emptyBoard = (): Board => ({ needs: [], fyi: [], trouble: [], working: [], teams: [] })
 export const newMem = (): Mem => ({
   start: 0, agents: {}, steps: {}, holds: {}, runs: {}, dismissed: {}, selected: undefined, opened: false, closedByPerson: false,
   busy: false, board: emptyBoard(), sig: '', notice: '', items: newItems(), reply: undefined, sent: [],
+  sessionId: '', teamName: '', teams: [], fillHint: false, pollGen: 0, stop: undefined, endedId: '',
 })
 export const board: Mem = newMem()
 // A session start clears everything Board remembers.
 export function resetMem(m: Mem): void {
-  Object.assign(m, newMem())
+  const keep = { pollGen: m.pollGen, stop: m.stop, endedId: m.endedId }
+  Object.assign(m, newMem(), keep)
 }
 
 export const clip = (s: string, n: number): string => (s.length <= n ? s : n <= 1 ? s.slice(0, Math.max(0, n)) : s.slice(0, n - 1) + '…')
@@ -301,7 +320,7 @@ export function buildBoard(m: Mem, now: number): Board {
     const stepOk = a.status === 'running' && st && st.text && now - st.changedAt < QUIET_MS
     const quietSince = Math.max(a.since, st?.changedAt ?? 0)
     const note = a.status === 'waiting' ? 'waiting' : stepOk ? st!.text : quietNote(now - quietSince)
-    b.working.push({ key: `w:${a.id}`, section: 'working', glyph: stepOk ? '●' : '◌', alias: name, task: a.description, note, agentId: a.id, since: a.since, actions: ['open', 'stop'] })
+    b.working.push({ key: `w:${a.id}`, section: 'working', glyph: stepOk ? '●' : '◌', alias: name, task: a.description, note, agentId: a.id, since: a.since, actions: ['open', 'stop', 'memo'] })
   }
   for (const r of Object.values(m.runs)) {
     const name = alias(r.model)
@@ -327,11 +346,15 @@ export function buildBoard(m: Mem, now: number): Board {
   const it = itemEntries(m.items, m.dismissed)
   b.needs.push(...it.needs)
   b.fyi.push(...it.fyi)
+  b.teams = teamEntries(m.teams)
   b.needs.sort(byAge)
   b.trouble.sort(byAge)
   b.working.sort((x, y) => (x.glyph === y.glyph ? byAge(x, y) : x.glyph === '●' ? -1 : 1))
   return b
 }
 
-export const selectable = (b: Board): Entry[] => [...b.needs, ...b.fyi, ...b.trouble, ...b.working]
-export const isEmpty = (b: Board): boolean => selectable(b).length === 0
+export const selectable = (b: Board): Entry[] => [...b.needs, ...b.fyi, ...b.trouble, ...b.working, ...b.teams]
+// Own sections only: other Teams do not make this Team's Board non-empty.
+export const isEmpty = (b: Board): boolean => !b.needs.length && !b.fyi.length && !b.trouble.length && !b.working.length
+// FR-035: the first delegate or first NEEDS YOU in this Team or any other Team opens the Board.
+export const hasActivity = (b: Board): boolean => !isEmpty(b) || b.teams.some(t => t.glyph !== '◌')

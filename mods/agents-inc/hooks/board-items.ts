@@ -73,6 +73,14 @@ export function ingestTurn(s: ItemStore, session: string, turn: MainTurn, now: n
   }
 }
 
+// An FYI the Board itself raises (a Memo or an FYI to another Team's CoS that did not go as asked). `detail` keeps the text.
+export function addFyi(s: ItemStore, title: string, detail: string, now: number): void {
+  s.items.push({ id: `i${++s.seq}`, kind: 'fyi', title, options: [], source: detail, context: detail, sessionId: '', turnId: '', at: now })
+  const fyi = s.items.filter(i => i.kind === 'fyi')
+  const drop = new Set(fyi.slice(0, Math.max(0, fyi.length - FYI_KEEP)).map(i => i.id))
+  if (drop.size) s.items = s.items.filter(i => !drop.has(i.id))
+}
+
 export const itemKey = (i: Item): string => `i:${i.id}`
 
 // Board rows for the Items: NEEDS YOU oldest first, FYI newest first. Dismissed Items are hidden by key.

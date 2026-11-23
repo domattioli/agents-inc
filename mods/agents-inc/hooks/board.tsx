@@ -2,11 +2,12 @@
 // Host loader rule: `$` appears only as `$.noun.event(...)` at call sites; never passed, bound or read as a value, and
 // every event name is a literal. The poll that feeds it starts in mod.ts's session.start (one registration per event).
 import type { Register } from 'claude-code'
-import { board, buildBoard, clearHold, noteHold, STOP_TEXT } from './board-model'
+import { alias, board, buildBoard, clearHold, noteHold, STOP_TEXT } from './board-model'
 import { extractMainTurnAnswer, ingestTurn, itemKey } from './board-items'
 import { keyAction, renderBoard } from './board-render'
 import { afterFill, closesOnSubmit, regionLines, replyText } from './board-reply'
 import type { Line } from './board-render'
+import { fillMemo, fillSend, isPerson, liveTeams, MEMO_CMD, parseTeam, screenText, TEAM_PREFIX, teamKey, parseMemo, parseSend, parseTell, planSend, SEND_CMD, settle, TELL_CMD } from './board-teams'
 
 export const PANE = 'Board'
 export const TITLE = 'Board'
@@ -69,6 +70,105 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // Send and Memo through the chat composer. The operator's own Enter on the slash command is the deliberate act; a run that
+  // came from a plugin, the model or the bridge is refused, so a CoS marker or reply can never send. Plugin provenance stays.
+  const finish = (plan: ReturnType<typeof planSend>, text: string, result: unknown, now: number) => {
+    const out = settle(plan, text, result, board.items, board.sent, now)
+    board.board = buildBoard(board, now)
+    return { text: out.delivered ? (plan.how === 'fyi' ? "FYI queued for that Team's Chief." : 'Queued.') : (out.line ?? 'not delivered') }
+  }
+  const failed = (err: unknown) => ({ isDelivered: false, reason: String((err as Error)?.message ?? 'send failed') })
+  const NOT_PERSON = { text: 'not delivered: only the operator typing this in the chat sends from Board' }
+  on('command.run', { command: SEND_CMD }, async ($, e) => {
+    if (!isPerson((e as any).origin)) return NOT_PERSON
+    // Candidates are read now, not from the last poll: every live team.* key, so a ref that became ambiguous or stale
+    // is refused. Own key and stale heartbeats are left out (S1: the store cannot tell live from dead).
+    const now0 = Number(await $.clock.now())
+    const found: Array<ReturnType<typeof parseTeam>> = []
+    for (const k of (await $.store.keys()) as string[]) if (k.startsWith(TEAM_PREFIX)) found.push(parseTeam(k, await $.store.get(k)))
+    const fresh = liveTeams(found, board.sessionId, now0)
+    const p = parseSend(String((e as any).args ?? ''), fresh)
+    if (!p.ok) return { text: p.line }
+    const bad = screenText(p.text)
+    if (bad) return { text: `not delivered: ${bad}` }
+    const plan = planSend(p.target, p.text, board.sessionId)
+    const tooBig = screenText(plan.text) // the 64 KiB cap applies to the final payload, prefix included
+    if (tooBig) return { text: `not delivered: ${tooBig}` }
+    let result: unknown
+    try {
+      result = await $.session.send({ to: plan.to, text: plan.text })
+    } catch (err) {
+      result = failed(err)
+    }
+    const r = finish(plan, p.text, result, Number(await $.clock.now()))
+    $.ui.invalidate('ui.render')
+    return r
+  })
+  on('command.run', { command: MEMO_CMD }, async ($, e) => {
+    if (!isPerson((e as any).origin)) return NOT_PERSON
+    // One snapshot of `$.agent.list()` decides both the ref and the status, so a ref cannot resolve against one view and
+    // be judged against another. Candidates: what the host lists now plus agents seen earlier that it no longer lists
+    // (a Worker that has gone resolves, then is refused as finished).
+    let listed: Array<{ id?: string; type?: string; status?: string }> = []
+    let listFailed = false
+    try {
+      listed = ((await $.agent.list()) as typeof listed) ?? []
+    } catch {
+      listFailed = true
+    }
+    const cand = new Map<string, { id: string; alias: string }>()
+    for (const a of Object.values(board.agents)) cand.set(a.id, { id: a.id, alias: alias(a.type) })
+    for (const a of listed) if (typeof a.id === 'string') cand.set(a.id, { id: a.id, alias: alias(String(a.type ?? board.agents[a.id]?.type ?? '')) })
+    const p = parseMemo(String((e as any).args ?? ''), [...cand.values()], board.sessionId, board.teamName)
+    if (!p.ok) return { text: p.line }
+    const bad = screenText(p.text)
+    if (bad) return { text: `not delivered: ${bad}` }
+    const plan = planSend(p.target, p.text, board.sessionId)
+    const tooBig = screenText(plan.text) // the 64 KiB cap applies to the final payload, prefix included
+    if (tooBig) return { text: `not delivered: ${tooBig}` }
+    // D91: a Memo never starts a resume. A `{ agentId }` send to a finished subagent makes the host resume it from its
+    // transcript, so send only while that same snapshot lists the agent as running. Known limit: a Worker that
+    // finishes between this check and delivery is still resumed by the host (no atomic check-and-send exists).
+    let result: unknown
+    const target = p.target
+    const running = !listFailed && target.kind === 'memo' && listed.some(a => a.id === target.agentId && a.status === 'running')
+    if (listFailed) result = { isDelivered: false, reason: 'could not check that the worker is running' }
+    else if (!running) result = { isDelivered: false, reason: 'worker finished' }
+    if (running) {
+      try {
+        result = await $.session.send({ to: plan.to, text: plan.text })
+      } catch (err) {
+        result = failed(err)
+      }
+    }
+    const r = finish(plan, p.text, result, Number(await $.clock.now()))
+    $.ui.invalidate('ui.render')
+    return r
+  })
+  on('command.run', { command: TELL_CMD }, async ($, e) => {
+    if (!isPerson((e as any).origin)) return NOT_PERSON
+    const now0 = Number(await $.clock.now())
+    const found: Array<ReturnType<typeof parseTeam>> = []
+    for (const k of (await $.store.keys()) as string[]) if (k.startsWith(TEAM_PREFIX)) found.push(parseTeam(k, await $.store.get(k)))
+    const fresh = liveTeams(found, board.sessionId, now0)
+    const p = parseTell(String((e as any).args ?? ''), fresh)
+    if (!p.ok) return { text: p.line }
+    const bad = screenText(p.text)
+    if (bad) return { text: `not delivered: ${bad}` }
+    const plan = planSend(p.target, p.text, board.sessionId)
+    const tooBig = screenText(plan.text) // the 64 KiB cap applies to the final payload, prefix included
+    if (tooBig) return { text: `not delivered: ${tooBig}` }
+    let result: unknown
+    try {
+      result = await $.session.send({ to: plan.to, text: plan.text })
+    } catch (err) {
+      result = failed(err)
+    }
+    const r = finish(plan, p.text, result, Number(await $.clock.now()))
+    $.ui.invalidate('ui.render')
+    return r
+  })
+
   on('ui.close', { id: PANE }, async ($, e, next) => {
     if ((e as any).origin?.kind === 'person') board.closedByPerson = true
     return next(e)
@@ -95,16 +195,26 @@ export const register: Register = on => {
       else if (text) {
         const r = await $.prompt.fill({ text, mode: 'replace' })
         board.reply = afterFill(board.reply, text, (r as any)?.isFilled)
+        board.fillHint = true
       }
       $.ui.invalidate('ui.render')
       return next(e)
     }
     if (data.kind !== 'key' || typeof data.key !== 'string') return next(e)
+    board.fillHint = false
     const r = keyAction(board.board, board.selected, data.key)
     board.selected = r.selected
     if (r.act === 'dismiss' && r.entry) {
       board.dismissed[r.entry.key] = true
       board.board = buildBoard(board, Number(await $.clock.now()))
+    } else if (r.act === 'reply' && r.entry?.teamId) {
+      board.reply = undefined
+      await $.prompt.fill({ text: fillSend({ id: r.entry.teamId }), mode: 'replace' })
+      board.fillHint = true
+    } else if (r.act === 'memo' && r.entry?.agentId) {
+      board.reply = undefined
+      await $.prompt.fill({ text: fillMemo({ id: r.entry.agentId }), mode: 'replace' })
+      board.fillHint = true
     } else if (r.act === 'reply' && r.entry) {
       const item = board.items.items.find(i => itemKey(i) === r.entry!.key)
       if (item) board.reply = { itemId: item.id }
@@ -119,6 +229,7 @@ export const register: Register = on => {
 
   // The Item closes only when the operator's own chat submission carries exactly the text Board filled for it.
   on('prompt.submit', async ($, e, next) => {
+    board.fillHint = false
     if (closesOnSubmit(board.reply, e as any)) {
       const item = board.items.items.find(i => i.id === board.reply!.itemId)
       if (item) {
@@ -139,7 +250,9 @@ export const register: Register = on => {
     const r = renderBoard(board.board, { width: columns, selected: board.selected })
     const item = board.reply ? board.items.items.find(i => i.id === board.reply!.itemId) : undefined
     const region = item ? regionLines(item, Number(await $.clock.now()), board.sent, columns) : []
-    const footer = item ? `1-${Math.max(3, item.options.length)} fill reply  x close` : r.footer
+    // Host fact: no API returns the keys to the composer (ui.focus only moves the ring inside the pane; a re-open cannot
+    // drop focus). After a fill the Board keeps the keys until the operator presses Escape.
+    const footer = board.fillHint ? 'Esc, then type' : item ? `1-${Math.max(3, item.options.length)} fill reply  x close` : r.footer
     const spans = (line: Line, key: string) =>
       line.length === 0 ? (
         <Text key={key}> </Text>
