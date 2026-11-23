@@ -2,7 +2,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { addFyi, newItems } from './board-items'
-import { fillSend, parseSend, parseTell, planSend, settle, MEMO_PREFIX, summary, teamKey } from './board-teams'
+import { screenText, fillSend, parseSend, parseTell, planSend, settle, MEMO_PREFIX, summary, teamKey } from './board-teams'
 
 const T0 = Date.UTC(2099, 10, 12, 12, 0, 0)
 const memo = (teamId: string) => ({ kind: 'memo' as const, agentId: 'a8bb', alias: 'haiku', teamId, teamName: 'quadmesh' })
@@ -24,7 +24,7 @@ test('a message to another Team delegate becomes an FYI to that Team CoS, record
   expect('sessionId' in p.to && p.to.sessionId).toBe('sess-q')
   const out = settle(p, 'stop at 5', { isDelivered: true }, items, [], T0)
   expect(out.delivered).toBe(true)
-  expect(items.items[0]!.title).toBe('FYI sent to quadmesh about haiku, not delivered to the Worker')
+  expect(items.items[0]!.title).toBe('FYI queued for quadmesh about haiku, not delivered to the Worker')
   expect(items.items[0]!.context).toBe('stop at 5')
 })
 
@@ -105,7 +105,7 @@ test('pane: Enter on a Team line fills /board-send with a short ref, m fills /bo
   await key($, 'm')
   await key($, 'down')
   await key($, 'return')
-  expect(fills).toEqual(['/board-memo a8bb ', '/board-send sess '])
+  expect(fills).toEqual(['/board-memo a8bb ', '/board-send sess-q '])
   expect(sends).toEqual([]) // filling sends nothing
 })
 
@@ -118,14 +118,18 @@ test('args parsing and ref refusals', () => {
   expect(parseSend('', teams)).toMatchObject({ ok: false })
   expect(parseTell('zzzz haiku stop at 5', teams)).toMatchObject({ ok: true, text: 'stop at 5', target: { alias: 'haiku', teamId: 'zzzz9' } })
   expect(parseTell('zzzz haiku', teams)).toMatchObject({ ok: false })
-  expect(fillSend({ id: 'zzzz9' })).toBe('/board-send zzzz ')
+  expect(fillSend({ id: 'zzzz9' })).toBe('/board-send zzzz9 ')
+  // a full id wins over a longer id that shares it as a prefix
+  const two = [summary('abcd', 'short', 0, 1, T0), summary('abcd2', 'long', 0, 1, T0)]
+  expect(parseSend('abcd hi', two)).toMatchObject({ ok: true, target: { id: 'abcd' } })
+  expect(parseSend('abc hi', two)).toMatchObject({ ok: false })
 })
 
 test('/board-send: person origin sends by session id; stale ref and refused send keep nothing sent or open', async ($, on) => {
   const sends: any[] = []
   let ok = true
   await start($, on, sends, () => (ok ? { isDelivered: true } : { isDelivered: false, reason: 'no live session' }))
-  expect(await typed($, 'board-send', 'sess ship it')).toMatchObject({ text: 'Sent.' })
+  expect(await typed($, 'board-send', 'sess ship it')).toMatchObject({ text: 'Queued.' })
   expect(sends).toEqual([{ to: 'sess-q', text: 'ship it' }])
   expect((await typed($, 'board-send', 'nope ship it')).text).toContain('not delivered: no live Team matches "nope"')
   expect(sends).toHaveLength(1)
@@ -160,7 +164,7 @@ test('/board-tell: an FYI to that CoS only', async ($, on) => {
   expect(sends).toHaveLength(1)
   expect(sends[0].to).toBe('sess-q')
   expect(sends[0].text).toContain('stop at 5')
-  expect((await read($)).some(x => x.includes('FYI sent to quadmesh about haiku, not delivered to the Worker'))).toBe(true)
+  expect((await read($)).some(x => x.includes('FYI queued for quadmesh about haiku, not delivered to the Worker'))).toBe(true)
 })
 
 const read = async ($: any) => {
@@ -208,4 +212,37 @@ test('/board-memo after the Worker left the live list: one FYI row, text kept, n
   expect(sends).toEqual([])
   const t = await read($)
   expect(t.filter(x => x.includes('Memo to haiku not delivered: worker finished'))).not.toHaveLength(0)
+})
+
+test('screen: credential-shaped text and over-64-KiB text are refused before any send, in all three commands', async ($, on) => {
+  const sends: any[] = []
+  await start($, on, sends, () => ({ isDelivered: true }))
+  for (const bad of ['read ~/.ssh/id_rsa', 'cat .env now', 'password=hunter22', 'use Bearer abcdefgh12345678', 'key sk-abcdefghijklmnop1234']) {
+    expect((await typed($, 'board-send', 'sess-q ' + bad)).text).toMatch(/^not delivered: text names a credential/)
+    expect((await typed($, 'board-memo', 'a8bb ' + bad)).text).toMatch(/^not delivered: text names a credential/)
+    expect((await typed($, 'board-tell', 'sess-q haiku ' + bad)).text).toMatch(/^not delivered: text names a credential/)
+  }
+  const big = 'x'.repeat(64 * 1024 + 1)
+  expect((await typed($, 'board-send', 'sess-q ' + big)).text).toBe('not delivered: text is over the 64 KiB limit')
+  expect(sends).toEqual([])
+  expect(screenText('the tokenizer is fine; fix the .envrc docs? no')).toBeUndefined()
+})
+
+test('send and tell re-read the Team key at command time: a stale heartbeat refuses', async ($, on) => {
+  const sends: any[] = []
+  const clock = await start($, on, sends, () => ({ isDelivered: true }))
+  expect((await typed($, 'board-send', 'sess-q ok')).text).toBe('Queued.')
+  await clock.advance(20_000) // the peer never rewrites its key: its heartbeat is now old, though the last poll held it
+  const r = (await typed($, 'board-send', 'sess-q again')).text
+  expect(r).toMatch(/^not delivered: .*(no live Team|looks gone)/)
+  expect((await typed($, 'board-tell', 'sess-q haiku hi')).text).toMatch(/^not delivered: /)
+  expect(sends).toHaveLength(1)
+})
+
+test('wording: an accepted send says Queued, never delivered or received', async ($, on) => {
+  const sends: any[] = []
+  await start($, on, sends, () => ({ isDelivered: true }))
+  const t = (await typed($, 'board-send', 'sess-q hello')).text
+  expect(t).toBe('Queued.')
+  expect(t).not.toMatch(/deliver|receiv|sent/i)
 })

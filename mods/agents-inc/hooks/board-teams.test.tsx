@@ -123,3 +123,29 @@ test('T037: a delegate or a needs-you in another Team opens Board without focus;
   expect(opens).toHaveLength(1)
   expect(opens[0].focus).toBeUndefined()
 })
+
+test('a session never deletes another key; its own key goes at session.end; a second session.start replaces the poll', async ($, on) => {
+  const opens: any[] = []
+  const deletes: string[] = []
+  let writes = 0
+  on('session.end', (_$: any, e: any) => ({ sessionId: 'own' }) as any)
+  const seed: Record<string, any> = new Proxy({ [teamKey('s-old')]: rec('s-old', 'ancient', 1, 1, T0 - 100 * 3600_000), [teamKey('bad')]: { junk: true } } as Record<string, any>, {
+    deleteProperty: (t, k) => (deletes.push(String(k)), delete t[k as string]),
+    set: (t, k, v) => ((t[k as string] = v), writes++, true),
+  })
+  const clock = await start($, on, 'own', opens, seed, [])
+  await clock.advance(2100)
+  expect(seed[teamKey('own')]).toBeDefined()
+  expect(deletes).toEqual([]) // stale and malformed peers are ignored, not deleted
+  expect(seed[teamKey('s-old')]).toBeDefined()
+  // a second session.start in this process: one poll only (the first interval is cancelled)
+  await $.session.start({ cwd: '/work/ainc2', surface: 'desktop', isInteractive: true })
+  writes = 0
+  await clock.advance(2100)
+  expect(writes).toBe(1)
+  await $.session.end({ reason: 'exit' } as any)
+  expect(deletes).toEqual([teamKey('own')])
+  writes = 0
+  await clock.advance(6000)
+  expect(writes).toBe(0) // the poll is cancelled
+})

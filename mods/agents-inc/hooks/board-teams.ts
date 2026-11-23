@@ -11,8 +11,6 @@ export const TEAM_PREFIX = 'team.'
 // The Board polls every 2000 ms (board.tsx POLL_MS) and rewrites its key each poll. A reader ignores a key whose heartbeat
 // is older than three polls: one missed poll or a slow disk write does not flicker, a dead session leaves within 6 s.
 export const TEAM_STALE_MS = 6000
-// A key this old belongs to a session long gone; any reader may delete it (the owner rewrites on its next poll anyway).
-export const TEAM_DEAD_MS = 60 * 60 * 1000
 export const NAME_W = 12
 export const MEMO_PREFIX = 'Memo from the operator via Board: '
 export const FYI_PREFIX = 'FYI from the operator via Board: '
@@ -39,9 +37,6 @@ export function liveTeams(recs: Array<TeamRec | undefined>, ownId: string, now: 
     .filter((t): t is TeamRec => !!t && t.id !== ownId && now - t.at <= TEAM_STALE_MS && t.at - now <= TEAM_STALE_MS)
     .sort((a, b) => Number(b.flag) - Number(a.flag) || b.working - a.working || (a.name < b.name ? -1 : a.name > b.name ? 1 : a.id < b.id ? -1 : 1))
 }
-
-export const deadKeys = (all: Array<[string, TeamRec | undefined]>, now: number): string[] =>
-  all.filter(([, t]) => !t || now - t.at > TEAM_DEAD_MS).map(([k]) => k)
 
 export function teamNote(t: TeamRec): string {
   const parts = [...(t.needs ? [`${t.needs} needs you`] : []), ...(t.working ? [`${t.working} working`] : [])]
@@ -91,8 +86,8 @@ export function settle(p: Plan, text: string, result: unknown, items: ItemStore,
     else addFyi(items, `Memo to ${t.alias} not delivered: ${reason}`, text, now)
     return { delivered: ok, close: ok, line: ok ? undefined : `not delivered: ${reason}` }
   }
-  // FYI to another Team's CoS: accepted means FYI sent, never "delivered to the Worker".
-  if (ok) addFyi(items, `FYI sent to ${t.teamName} about ${t.alias}, not delivered to the Worker`, text, now)
+  // FYI to another Team's CoS: accepted means queued for its Chief. The plugin cannot observe receipt, and the Worker never gets it directly.
+  if (ok) addFyi(items, `FYI queued for ${t.teamName} about ${t.alias}, not delivered to the Worker`, text, now)
   else addFyi(items, `FYI to ${t.teamName} about ${t.alias} not delivered: ${reason}`, text, now)
   return { delivered: ok, close: ok, line: ok ? undefined : `not delivered: ${reason}` }
 }
@@ -104,8 +99,9 @@ export const SEND_CMD = 'board-send'
 export const MEMO_CMD = 'board-memo'
 export const TELL_CMD = 'board-tell'
 // What Board puts in the composer: the command, a short ref, a trailing space. The operator types the text and presses Enter.
-export const teamRef = (id: string): string => id.slice(0, REF_MIN)
-export const agentRef = (id: string): string => id.slice(0, 8)
+// Fills carry the full id, so a typed command never depends on a prefix being unique; a hand-typed prefix still works.
+export const teamRef = (id: string): string => id
+export const agentRef = (id: string): string => id
 export const fillSend = (t: { id: string }): string => `/${SEND_CMD} ${teamRef(t.id)} `
 export const fillMemo = (a: { id: string }): string => `/${MEMO_CMD} ${agentRef(a.id)} `
 
@@ -116,8 +112,10 @@ const split = (args: string): [string, string] => {
   return m ? [m[1]!, m[2]!.trim()] : ['', '']
 }
 function pick<T extends { id: string }>(ref: string, all: T[], what: string): T | string {
-  const hit = all.filter(x => x.id.startsWith(ref))
   if (!ref) return `no ${what} given`
+  const exact = all.filter(x => x.id === ref)
+  if (exact.length === 1) return exact[0]!
+  const hit = all.filter(x => x.id.startsWith(ref))
   if (!hit.length) return `no live ${what} matches "${ref}" ${what === 'Team' ? '(it may have gone; press Enter on the line again)' : '(it may have gone)'}`
   if (hit.length > 1) return `"${ref}" matches ${hit.length} ${what}s; type more of the ref`
   return hit[0]!
@@ -154,3 +152,32 @@ export function parseTell(args: string, teams: TeamRec[]): Parsed {
 export const memoRefText = (args: string): [string, string] => split(args)
 
 export const isPerson = (origin: unknown): boolean => (origin as { kind?: unknown } | undefined)?.kind === 'composer'
+
+// --- send text screen (D91: credential screen and 64 KiB limit) --------------------------------------------------------
+
+export const MAX_BYTES = 64 * 1024
+// A first filter in the spirit of D88, kept stricter and simpler: any mention of a secret location or a secret-shaped
+// assignment is refused. The repo's real credential screen is Python (agents_inc dispatch); no TypeScript copy exists to
+// reuse. Limit: prose that hides a request (encoded or indirect) is not seen.
+const SECRET = [
+  /(^|[\s/"'`=~])\.env(\.[\w-]+)?(?![\w-])/i,
+  /~\/\.(ssh|aws|gnupg|netrc|config\/(gh|gcloud)|claude\/\.?credentials|codex\/auth)/i,
+  /\bauth\.json\b|\.credentials\.json|\bid_(rsa|ed25519|ecdsa)\b/i,
+  /\.(pem|key)(?![\w-])/i,
+  /\b(password|passwd|token|secret|api[_-]?key|apikey|authorization|credentials?)\b\s*[=:]\s*\S/i,
+  /\bbearer\s+[\w.~+/-]{8,}/i,
+  /\b(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[\w-]{10,})/,
+]
+export function screenText(text: string): string | undefined {
+  if (new TextEncoder().encode(text).length > MAX_BYTES) return 'text is over the 64 KiB limit'
+  if (SECRET.some(r => r.test(text))) return 'text names a credential or secret location (credential screen)'
+  return undefined
+}
+
+// A Team's heartbeat checked at command time, from a fresh read of its key (not the last poll's copy).
+export function freshTeam(id: string, value: unknown, now: number): TeamRec | string {
+  const t = parseTeam(teamKey(id), value)
+  if (!t) return `no live Team ${id.slice(0, 8)}: its record is gone`
+  const age = now - t.at
+  return age > TEAM_STALE_MS || -age > TEAM_STALE_MS ? `Team ${t.name} looks gone: no heartbeat for ${Math.max(0, Math.round(age / 1000))}s` : t
+}

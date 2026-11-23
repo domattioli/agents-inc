@@ -7,7 +7,7 @@ import { extractMainTurnAnswer, ingestTurn, itemKey } from './board-items'
 import { keyAction, renderBoard } from './board-render'
 import { afterFill, closesOnSubmit, regionLines, replyText } from './board-reply'
 import type { Line } from './board-render'
-import { fillMemo, fillSend, isPerson, MEMO_CMD, memoRefText, parseMemo, parseSend, parseTell, planSend, SEND_CMD, settle, TELL_CMD } from './board-teams'
+import { fillMemo, fillSend, isPerson, freshTeam, MEMO_CMD, memoRefText, screenText, teamKey, parseMemo, parseSend, parseTell, planSend, SEND_CMD, settle, TELL_CMD } from './board-teams'
 
 export const PANE = 'Board'
 export const TITLE = 'Board'
@@ -75,7 +75,7 @@ export const register: Register = on => {
   const finish = (plan: ReturnType<typeof planSend>, text: string, result: unknown, now: number) => {
     const out = settle(plan, text, result, board.items, board.sent, now)
     board.board = buildBoard(board, now)
-    return { text: out.delivered ? (plan.how === 'fyi' ? "FYI sent to that Team's Chief." : 'Sent.') : (out.line ?? 'not delivered') }
+    return { text: out.delivered ? (plan.how === 'fyi' ? "FYI queued for that Team's Chief." : 'Queued.') : (out.line ?? 'not delivered') }
   }
   const failed = (err: unknown) => ({ isDelivered: false, reason: String((err as Error)?.message ?? 'send failed') })
   const NOT_PERSON = { text: 'not delivered: only the operator typing this in the chat sends from Board' }
@@ -83,6 +83,13 @@ export const register: Register = on => {
     if (!isPerson((e as any).origin)) return NOT_PERSON
     const p = parseSend(String((e as any).args ?? ''), board.teams)
     if (!p.ok) return { text: p.line }
+    const bad = screenText(p.text)
+    if (bad) return { text: `not delivered: ${bad}` }
+    // Re-read the target's key now: the last poll's copy may be old (spike S1: the store cannot tell live from dead).
+    if (p.target.kind === 'team') {
+      const fresh = freshTeam(p.target.id, await $.store.get(teamKey(p.target.id)), Number(await $.clock.now()))
+      if (typeof fresh === 'string') return { text: `not delivered: ${fresh}` }
+    }
     const plan = planSend(p.target, p.text, board.sessionId)
     let result: unknown
     try {
@@ -105,11 +112,15 @@ export const register: Register = on => {
       const [ref, text] = memoRefText(String((e as any).args ?? ''))
       const seen = ref ? Object.values(board.agents).filter(a => a.id.startsWith(ref)) : []
       if (seen.length !== 1 || !text) return { text: p.line }
+      const badText = screenText(text)
+      if (badText) return { text: `not delivered: ${badText}` }
       const gone = planSend({ kind: 'memo', agentId: seen[0]!.id, alias: alias(seen[0]!.type), teamId: board.sessionId, teamName: board.teamName }, text, board.sessionId)
       const g = finish(gone, text, { isDelivered: false, reason: 'worker finished' }, Number(await $.clock.now()))
       $.ui.invalidate('ui.render')
       return g
     }
+    const bad = screenText(p.text)
+    if (bad) return { text: `not delivered: ${bad}` }
     const plan = planSend(p.target, p.text, board.sessionId)
     // D91: a Memo never starts a resume. A `{ agentId }` send to a finished subagent makes the host resume it from its
     // transcript, so send only while the host lists the agent as running at this moment. Known limit: a Worker that
@@ -138,6 +149,12 @@ export const register: Register = on => {
     if (!isPerson((e as any).origin)) return NOT_PERSON
     const p = parseTell(String((e as any).args ?? ''), board.teams)
     if (!p.ok) return { text: p.line }
+    const bad = screenText(p.text)
+    if (bad) return { text: `not delivered: ${bad}` }
+    if (p.target.kind === 'memo') {
+      const fresh = freshTeam(p.target.teamId, await $.store.get(teamKey(p.target.teamId)), Number(await $.clock.now()))
+      if (typeof fresh === 'string') return { text: `not delivered: ${fresh}` }
+    }
     const plan = planSend(p.target, p.text, board.sessionId)
     let result: unknown
     try {

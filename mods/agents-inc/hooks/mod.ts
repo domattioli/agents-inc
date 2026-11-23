@@ -3,11 +3,21 @@ import { register as relay, registerRelay } from './relay'
 import { registerLunaAgent } from './luna'
 import { register as native, registerNativeAgents } from './native/registry'
 import { register as boardPane, PANE as BOARD_PANE, POLL_MS as BOARD_POLL_MS, TITLE as BOARD_TITLE } from './board'
-import { deadKeys, liveTeams, parseTeam, summary, teamKey, TEAM_PREFIX } from './board-teams'
+import { liveTeams, parseTeam, summary, teamKey, TEAM_PREFIX } from './board-teams'
 import { board, buildBoard, dirTime, hasActivity, ingestAgents, noteStep, resetMem, RUNS as BOARD_RUNS, runFrom, sessionRunNames, stepDue } from './board-model'
 
 // hooks.json allows one hooks module per plugin, and a module may register session.start once,
 // so this entry owns session.start and hands it to every feature.
+// The Board poll of this process: one at a time. A new session.start or the session's end cancels the previous interval,
+// and a callback already in flight sees a newer generation and does nothing more.
+let stopPoll: unknown
+let pollGen = 0
+// The host hands back a function; accept a { cancel } handle too. The generation check stops a callback either way.
+const cancelPoll = (h: unknown): void => {
+  if (typeof h === 'function') h()
+  else if (h && typeof (h as { cancel?: unknown }).cancel === 'function') (h as { cancel: () => void }).cancel()
+}
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await registerLunaAgent($, e)
@@ -31,8 +41,10 @@ export const register: Register = (on, options) => {
         // an unregistered command only means the operator cannot type it
       }
     }
-    $.clock.every(BOARD_POLL_MS, async () => {
-      if (board.busy) return
+    cancelPoll(stopPoll)
+    const mine = ++pollGen
+    stopPoll = $.clock.every(BOARD_POLL_MS, async () => {
+      if (mine !== pollGen || board.busy) return
       board.busy = true
       try {
         const now = Number(await $.clock.now())
@@ -43,6 +55,7 @@ export const register: Register = (on, options) => {
         } catch {
           listed = []
         }
+        if (mine !== pollGen) return
         ingestAgents(board, listed, now)
         for (const a of listed) {
           if (a.status !== 'running' || !stepDue(board, a.id, now)) continue
@@ -94,18 +107,22 @@ export const register: Register = (on, options) => {
         // Teams across sessions (spec 050 Phase 3): publish this session's own key, read the others, ignore stale heartbeats.
         // Never a shared counter: each key has one writer. Own Team is always the open one.
         try {
+          if (mine !== pollGen) return
           if (!board.sessionId) board.sessionId = String(await $.session.id())
           const prior = buildBoard(board, now)
           await $.store.set(teamKey(board.sessionId), summary(board.sessionId, board.teamName, prior.needs.length, prior.working.length, now))
+          if (mine !== pollGen) return
           const all: Array<[string, ReturnType<typeof parseTeam>]> = []
           for (const k of (await $.store.keys()) as string[]) {
             if (k.startsWith(TEAM_PREFIX) && k !== teamKey(board.sessionId)) all.push([k, parseTeam(k, await $.store.get(k))])
           }
+          if (mine !== pollGen) return
           board.teams = liveTeams(all.map(x => x[1]), board.sessionId, now)
-          for (const k of deadKeys(all, now)) await $.store.delete(k)
+          // Never delete another session's key: readers only ignore stale or malformed peers (S1: one writer per key).
         } catch {
           board.teams = [] // the store is unreadable: show no other Teams rather than stale ones
         }
+        if (mine !== pollGen) return
         const built = buildBoard(board, now)
         const sig = JSON.stringify(built)
         board.board = built
@@ -121,11 +138,25 @@ export const register: Register = (on, options) => {
       } catch {
         // one failed poll changes nothing: the next one runs
       } finally {
-        board.busy = false
+        if (mine === pollGen) board.busy = false
       }
     })
     const legacyRoutes = await registerNativeAgents($, e)
     await registerRelay($, e, legacyRoutes)
+    return next(e)
+  })
+  // The session ends: stop polling and remove this session's own Team key (the only key it may delete).
+  on('session.end', async ($, e, next) => {
+    cancelPoll(stopPoll)
+    stopPoll = undefined
+    pollGen++
+    if (board.sessionId) {
+      try {
+        await $.store.delete(teamKey(board.sessionId))
+      } catch {
+        // readers ignore the key once its heartbeat is stale
+      }
+    }
     return next(e)
   })
   relay(on, options)
