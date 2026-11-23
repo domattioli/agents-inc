@@ -20,6 +20,17 @@ export const register: Register = (on, options) => {
     } catch {
       // the command stays unregistered; the pane still opens on its first event
     }
+    for (const [name, description] of [
+      ['board-send', 'Send text to another Team\'s Chief: /board-send <teamRef> <text> (Board fills the ref)'],
+      ['board-memo', 'Send a Memo to one of your own delegates: /board-memo <agentRef> <text>'],
+      ['board-tell', 'Ask another Team\'s Chief to tell its delegate: /board-tell <teamRef> <delegate> <text>'],
+    ] as const) {
+      try {
+        await $.command.register({ name, description })
+      } catch {
+        // an unregistered command only means the operator cannot type it
+      }
+    }
     $.clock.every(BOARD_POLL_MS, async () => {
       if (board.busy) return
       board.busy = true

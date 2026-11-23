@@ -5,7 +5,7 @@ import { itemEntries, newItems } from './board-items'
 import type { ItemStore } from './board-items'
 import type { Reply } from './board-reply'
 import { teamEntries } from './board-teams'
-import type { Target, TeamRec } from './board-teams'
+import type { TeamRec } from './board-teams'
 
 export type Listed = { id: string; type?: string; name?: string; description?: string; status?: string; parentId?: string }
 export type AgentRec = { id: string; type: string; description: string; status: string; since: number }
@@ -66,13 +66,10 @@ export type Mem = {
   reply?: Reply
   // Replies the operator submitted, newest last, shown as the last messages sent to the target.
   sent: string[]
-  // Spec 050 Phase 3: this session's id and Team name, the other Teams read from the store at the last poll, and the open
-  // target region (a Team line reply or a Memo) that waits for text.
+  // Spec 050 Phase 3: this session's id and Team name, and the other Teams read from the store at the last poll.
   sessionId: string
   teamName: string
   teams: TeamRec[]
-  target?: Target
-  targetNote?: string
 }
 
 export const LOST_MS = 5 * 60 * 1000
@@ -87,7 +84,7 @@ export const emptyBoard = (): Board => ({ needs: [], fyi: [], trouble: [], worki
 export const newMem = (): Mem => ({
   start: 0, agents: {}, steps: {}, holds: {}, runs: {}, dismissed: {}, selected: undefined, opened: false, closedByPerson: false,
   busy: false, board: emptyBoard(), sig: '', notice: '', items: newItems(), reply: undefined, sent: [],
-  sessionId: '', teamName: '', teams: [], target: undefined, targetNote: undefined,
+  sessionId: '', teamName: '', teams: [],
 })
 export const board: Mem = newMem()
 // A session start clears everything Board remembers.

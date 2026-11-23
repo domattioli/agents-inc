@@ -4,7 +4,6 @@
 import type { Entry } from './board-model'
 import type { ItemStore } from './board-items'
 import { addFyi } from './board-items'
-import type { Line } from './board-render'
 
 export type TeamRec = { id: string; name: string; needs: number; working: number; flag: boolean; at: number }
 
@@ -98,12 +97,57 @@ export function settle(p: Plan, text: string, result: unknown, items: ItemStore,
   return { delivered: ok, close: ok, line: ok ? undefined : `not delivered: ${reason}` }
 }
 
-export function targetLines(t: Target, note: string | undefined, sent: string[], width: number): Line[] {
-  const dim = (s: string): Line => [{ t: clip(s, width), dim: true }]
-  const who = t.kind === 'team' ? `reply to ${t.name} (its Chief)` : `memo to ${t.alias}`
-  const lines: Line[] = [[], dim('SEND'), [{ t: clip(who, width), color: 'yellow' }]]
-  if (note) lines.push([{ t: clip(note, width), color: 'red' }])
-  lines.push(dim('type the text, then send; x close'))
-  for (const s of sent.slice(-3)) lines.push([{ t: clip('  ' + s, width) }])
-  return lines
+// --- chat commands: the operator types in the composer (Phase 2 pattern) ----------------------------------------------
+
+export const REF_MIN = 4
+export const SEND_CMD = 'board-send'
+export const MEMO_CMD = 'board-memo'
+export const TELL_CMD = 'board-tell'
+// What Board puts in the composer: the command, a short ref, a trailing space. The operator types the text and presses Enter.
+export const teamRef = (id: string): string => id.slice(0, REF_MIN)
+export const agentRef = (id: string): string => id.slice(0, 8)
+export const fillSend = (t: { id: string }): string => `/${SEND_CMD} ${teamRef(t.id)} `
+export const fillMemo = (a: { id: string }): string => `/${MEMO_CMD} ${agentRef(a.id)} `
+
+export type Parsed = { ok: true; target: Target; text: string } | { ok: false; line: string }
+const refuse = (why: string): Parsed => ({ ok: false, line: `not delivered: ${why}` })
+const split = (args: string): [string, string] => {
+  const m = /^\s*(\S+)\s*([\s\S]*)$/.exec(args)
+  return m ? [m[1]!, m[2]!.trim()] : ['', '']
 }
+function pick<T extends { id: string }>(ref: string, all: T[], what: string): T | string {
+  const hit = all.filter(x => x.id.startsWith(ref))
+  if (!ref) return `no ${what} given`
+  if (!hit.length) return `no live ${what} matches "${ref}" (it may have gone; press Enter on the line again)`
+  if (hit.length > 1) return `"${ref}" matches ${hit.length} ${what}s; type more of the ref`
+  return hit[0]!
+}
+
+// `/board-send <teamRef> <text>`: the ref must name exactly one live other Team.
+export function parseSend(args: string, teams: TeamRec[]): Parsed {
+  const [ref, text] = split(args)
+  const t = pick(ref, teams, 'Team')
+  if (typeof t === 'string') return refuse(t)
+  return text ? { ok: true, target: { kind: 'team', id: t.id, name: t.name }, text } : refuse('no text')
+}
+
+// `/board-memo <agentRef> <text>`: the ref must name exactly one live own delegate.
+export function parseMemo(args: string, agents: Array<{ id: string; alias: string }>, ownId: string, ownName: string): Parsed {
+  const [ref, text] = split(args)
+  const a = pick(ref, agents, 'delegate')
+  if (typeof a === 'string') return refuse(a)
+  return text ? { ok: true, target: { kind: 'memo', agentId: a.id, alias: a.alias, teamId: ownId, teamName: ownName }, text } : refuse('no text')
+}
+
+// `/board-tell <teamRef> <alias> <text>`: another Team's delegate is not listed here, so it is named by hand.
+export function parseTell(args: string, teams: TeamRec[]): Parsed {
+  const [ref, rest] = split(args)
+  const t = pick(ref, teams, 'Team')
+  if (typeof t === 'string') return refuse(t)
+  const [alias, text] = split(rest)
+  if (!alias || !text) return refuse('use /board-tell <teamRef> <delegate> <text>')
+  return { ok: true, target: { kind: 'memo', agentId: alias, alias, teamId: t.id, teamName: t.name }, text }
+}
+
+// Only the operator's own Enter in the composer is a deliberate send: a plugin, the model or the bridge never is.
+export const isPerson = (origin: unknown): boolean => (origin as { kind?: unknown } | undefined)?.kind === 'composer'
