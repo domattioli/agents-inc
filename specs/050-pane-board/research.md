@@ -84,6 +84,14 @@ Sources: `mods/agents-inc/.claude-plugin/types/claude-code/index.d.ts:3433`–`:
 
 **Alternatives.** Drafting with `prompt.fill` supports operator confirmation in the current chat and cannot establish remote delivery. Labeling a plugin envelope as a native operator message would misstate its origin. Direct injection into an active Worker bypasses the checkpoint and the D54 path. If the host cannot carry the operator's reply with its provenance intact, report the unmet Phase 3 behavior.
 
+**Operator rulings, 2026-11-23.**
+- A Memo only rides a resume that the supervisor or Lead already authorized. It never starts a resume, so the Board never starts work or spends quota. It counts once against the D54 cap (1 for a Grunt Worker, 2 for Workhorse and above).
+- When a Worker ends before delivery and no resume is available, the Board shows one FYI row, for example `Memo to sonnet not delivered: worker finished`. It ages out like other FYI rows. The Memo text stays in the item detail for resending to the Lead. It is not pending and not TROUBLE.
+- Evidence bar: one live run per supported delivery path, each showing the sender's identity and the Worker's receipt. A path with no passing run stays out of the Board. This and the different-vendor review remain the acceptance blockers. Sol reviewed once on 2026-11-23 (needs-fixes, then fixed); a second review is not required unless the text changes materially.
+- Only the operator can send a Memo through the Board. The CoS cannot, so it cannot steer a Worker around its Lead (D46).
+
+Spec FR-047 and FR-028 stay as written.
+
 Sources: `mods/agents-inc/.claude-plugin/types/claude-code/index.d.ts:12170`–`:12249`, `docs/DECISIONS.md:502`–`:503`, `docs/DECISIONS.md:590`–`:599`, `docs/DECISIONS.md:664`, `spec.md:92`–`:93`, `spec.md:175`, `spec.md:201`.
 
 ## Secretary and FR-046
