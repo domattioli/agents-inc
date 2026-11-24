@@ -1,7 +1,7 @@
 {
   "name": "agents-inc",
-  "version": "0.7.0",
-  "description": "agents-inc native agent types: luna and guest models as Claude Code subagent types. The relay route stays only with --legacy-routes.",
+  "version": "0.8.0",
+  "description": "agents-inc native agent types: luna and guest models as Claude Code subagent types, and the Board pane (what needs you, trouble, what each delegate is doing). The relay route stays only with --legacy-routes.",
   "mcpServers": {
     "delegate-agent": {
       "command": "sh",

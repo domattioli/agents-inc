@@ -4,6 +4,26 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.8.0] — 2026-11-23
+
+### Added
+
+- The Board pane (mod 0.8.0) shows what needs you, what is in trouble and what each Worker is doing. It has three sections: NEEDS YOU, TROUBLE and WORKING (phase 1).
+- The Chief of Staff can flag an ask, a decision or a blocker in its chat reply with a marker. The Board turns each marker into an Item and lets you reply inline (phase 2, D90).
+- The Board covers every Team on the machine, not only the current session. `/board-send` sends a message to another session's Chief of Staff, `/board-memo` leaves a Memo for a running Worker in your own session, and `/board-tell` tells another session's Chief of Staff about one of its Workers (phase 3, D91).
+
+### Fixed
+
+- The Board pane no longer sets `closeOnEscape` to false, because the host accepts only true (#224).
+- A Board hold now clears when the held tool finishes (#225).
+
+### Docs
+
+- D90 (chat markers, not a posting tool) and D91 (the Board Memo) are accepted.
+- The glossary defines Team: one session and the delegates it started.
+
 ## [0.7.0] — 2026-11-18
 
 ### Added

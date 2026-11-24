@@ -902,17 +902,17 @@ test('role column is dim on running, failed and finished rows; blank for an unkn
   await ui.unmount()
 })
 
-test('session.start opens the pane once', async ($, on) => {
+// Spec 050 T050: Board is the one registered pane, so the old pane no longer opens itself at session start.
+test('session.start does not open the old pane (Board registers the pane)', async ($, on) => {
   const world: World = { agents: [], dirs: [], files: {}, opens: [] }
   await start($, on, world)
-  expect(world.opens!.length).toBe(1)
-  expect(world.opens![0].id).toBe('agents-inc-delegates')
+  expect(world.opens!.length).toBe(0)
 })
 
-test('a ui.open that throws does not fail session.start', async ($, on) => {
+test('session.start with a refusing ui.open still starts', async ($, on) => {
   const world: World = { agents: [], dirs: [], files: {}, opens: [], openFails: true }
   await start($, on, world)
-  expect(world.opens!.length).toBe(1)
+  expect(world.opens!.length).toBe(0)
 })
 
 // --- 2026-11-15 prune: two duplicate displays leave the map ---
